@@ -128,6 +128,7 @@ ol.steps{padding-left:1.3em;margin:6px 0;font-size:14px}
 
   <section id="secRun" hidden>
     <h2><span class="no">3</span>読み取る</h2>
+    <label class="check"><input id="guessBubble" type="checkbox" checked><span>吹き出しの話者を前後の会話から推定する<br><small style="color:var(--muted)">推定した名前には「（推定）」が付きます。推定できない場合は「（吹き出し）」のままです。</small></span></label>
     <label class="check"><input id="trial" type="checkbox" checked><span>お試し：最初の3分だけ読み取る<br><small style="color:var(--muted)">範囲や設定が合っているか確認してから本番にすると、無料枠の回数を節約できます。</small></span></label>
     <details>
       <summary>検出の細かい設定</summary>
@@ -176,7 +177,7 @@ ol.steps{padding-left:1.3em;margin:6px 0;font-size:14px}
 
 <script>
 const $ = id => document.getElementById(id);
-const APP_VERSION = "2026-10-07d";
+const APP_VERSION = "2026-10-07e";
 let currentStep = "待機中";
 const video = $("video");
 const NARRATION = "ナレーション";
@@ -381,6 +382,7 @@ async function scanPhase(job, signal){
     if(i%40===0){ i++; persist(); i--; }
   }
   commit(cur);
+  job.lowCount = states.length < Math.max(3, dur/20); // 20秒に1場面より少ない＝範囲が合っていない可能性
   job.phase="read"; job.next=0; delete job.scan; persistNow=null; saveJob(job);
 }
 
@@ -411,10 +413,10 @@ async function readPhase(job, signal){
       batch.forEach(s=>s.tried=true);
     }finally{ batch.forEach(s=>delete s.b64); }
     job.next=b+1; saveJob(job);
-    rows=toRows(states); saveResult(); render();
+    rows=applyGuesses(toRows(states), job.guesses); saveResult(); render();
     setBar(0.5+0.5*(b+1)/nb);
   }
-  job.phase="done"; persistNow=null; saveJob(job);
+  job.phase = job.guess ? "guess" : "done"; job.gNext=0; persistNow=null; saveJob(job);
 }
 
 /* ---------- Geminiで読み取り ---------- */
@@ -424,7 +426,7 @@ ${bubble?"各画像は、ピンクの線より上が「吹き出しが出る場�
 ・名前を囲む記号（【】「」など）は除き、名前だけにする
 ・台詞は改行を除いて1行につなげ、画面の表記どおりに書き写す
 ・会話ウィンドウが表示されていない、または台詞が無い場合は text を空文字にする
-${bubble?"・吹き出しの中に台詞があれば bubble に書き写す（無ければ空文字）。キャラクターの顔や背景の文字は読まない\n":""}次の形式のJSON配列だけを返してください。
+${bubble?"・漫画のようなギザギザ・丸形の吹き出しの中に台詞があれば bubble に書き写す（無ければ空文字）。キャラクターの顔や背景の文字、選択肢画面で上部に出る横長の帯（直前の台詞の再表示）やボタンの文字は読まない\n":""}次の形式のJSON配列だけを返してください。
 [{"i":0,"name":"話者名","text":"台詞"${bubble?',"bubble":"吹き出しの台詞"':""}}]
 
 `;
@@ -544,6 +546,75 @@ function toRows(states){
   return out;
 }
 
+/* ---------- 3段階目：吹き出しの話者を推定 ---------- */
+const GUESS_BLOCK=120, GUESS_CONTEXT=15;
+function applyGuesses(list, guesses){
+  if(!guesses) return list;
+  for(const r of list) if(r.speaker===BUBBLE){ const g=guesses[norm(r.text)]; if(g) r.guess=g; }
+  return list;
+}
+async function callGeminiText(prompt, signal){
+  const key=store.get("serifu:key"), model=$("model").value;
+  const gen={temperature:0,responseMimeType:"application/json"};
+  if(/2\.5-flash/.test(model)) gen.thinkingConfig={thinkingBudget:0};
+  const ctl=new AbortController(); let timedOut=false;
+  const onAbort=()=>ctl.abort(); signal.addEventListener("abort",onAbort,{once:true});
+  const timer=setTimeout(()=>{ timedOut=true; ctl.abort(); }, REQUEST_TIMEOUT);
+  try{
+    const res=await fetch(`${API}/${model}:generateContent`,{method:"POST",signal:ctl.signal,
+      headers:{"Content-Type":"application/json","x-goog-api-key":key},
+      body:JSON.stringify({contents:[{role:"user",parts:[{text:prompt}]}],generationConfig:gen})});
+    const j=await res.json().catch(()=>({}));
+    if(res.status===429){ const msg=j?.error?.message||""; const e=new QuotaError(msg); e.daily=/per.?day|daily|PerDay/i.test(msg); throw e; }
+    if(!res.ok) throw new Error(j?.error?.message||`HTTP ${res.status}`);
+    const text=(j.candidates?.[0]?.content?.parts||[]).map(p=>p.text||"").join("");
+    return parseJsonArray(text)||[];
+  }catch(e){ if(timedOut && !signal.aborted) throw new Error("Geminiから2分以上応答がありませんでした"); throw e; }
+  finally{ clearTimeout(timer); signal.removeEventListener("abort",onAbort); }
+}
+const GUESS_PROMPT=(names, lines)=>`次はゲームの会話を書き起こしたものです。「？」の行は、名前欄のない吹き出しで表示された台詞です。
+前後の会話の流れ（呼びかけ、返事、口調、一人称、話題）から、「？」の行を誰が言ったかを推定してください。
+登場人物の候補: ${names.join("、")}
+・候補の中から選ぶ。根拠が弱く判断できない場合は name を空文字にする
+・説明は不要。次の形式のJSON配列だけを返す
+[{"n":行番号,"name":"話者名"}]
+
+${lines}`;
+async function guessPhase(job, signal){
+  job.guesses=job.guesses||{}; finishGuesses=job.guesses;
+  const list=toRows(job.states);
+  const names=[...new Set(list.filter(r=>r.speaker!==NARRATION&&r.speaker!==BUBBLE).map(r=>r.speaker))];
+  const targets=list.map((r,i)=>i).filter(i=>list[i].speaker===BUBBLE && !(norm(list[i].text) in job.guesses));
+  if(!names.length || !targets.length){ job.phase="done"; saveJob(job); return; }
+  const blocks=[]; for(let i=0;i<targets.length;){ const startIdx=targets[i]; const ts=[]; while(i<targets.length && targets[i]<startIdx+GUESS_BLOCK) ts.push(targets[i++]); blocks.push(ts); }
+  persistNow=()=>saveJob(job);
+  for(let b=job.gNext||0;b<blocks.length;b++){
+    const ts=blocks[b], from=Math.max(0,ts[0]-GUESS_CONTEXT), to=Math.min(list.length,ts[ts.length-1]+GUESS_CONTEXT+1);
+    const lines=list.slice(from,to).map((r,k)=>{ const n=from+k;
+      return r.speaker===BUBBLE ? `${n}: ？「${r.text}」` : r.speaker===NARRATION ? `${n}: （地の文）${r.text}` : `${n}: ${r.speaker}「${r.text}」`; }).join("\n");
+    setStatus(`吹き出しの話者を推定しています… ${b+1}/${blocks.length}`);
+    for(let attempt=0;;attempt++){
+      const wait=lastCall+MIN_INTERVAL-Date.now(); if(wait>0) await sleep(wait,signal); lastCall=Date.now();
+      try{
+        const arr=await callGeminiText(GUESS_PROMPT(names, lines), signal);
+        for(const it of arr){ const n=Number(it?.n); const nm=String(it?.name??"").trim();
+          if(ts.includes(n)) job.guesses[norm(list[n].text)] = names.includes(nm) ? nm : ""; }
+        break;
+      }catch(e){
+        if(e?.name==="AbortError"||e?.code==="cancelled") throw {code:"cancelled"};
+        if(e instanceof QuotaError){ if(e.daily||attempt>=3) throw e; setStatus("回数制限に達したので、1分待ってから続けます…"); await sleep(60000,signal); continue; }
+        lastError=e?.message||String(e);
+        if(!navigator.onLine){ setStatus("インターネットにつながっていません。つながると自動で続けます…"); await waitOnline(signal); attempt--; continue; }
+        if(attempt>=2) break; // 推定できなかった分は「（吹き出し）」のまま
+        await sleep(3000,signal);
+      }
+    }
+    job.gNext=b+1; saveJob(job);
+    rows=applyGuesses(toRows(job.states), job.guesses); saveResult(); render();
+  }
+  job.phase="done"; persistNow=null; saveJob(job);
+}
+
 /* ---------- 実行と再開 ---------- */
 function blockReason(){
   if(!store.get("serifu:key")) return "先に「0 準備」でAPIキーを保存してください。";
@@ -554,6 +625,7 @@ function blockReason(){
 }
 function jobProgress(job){
   if(job.phase==="scan") return `台詞の場面探し ${fmt((job.scan?.i||0)*job.step)} / ${fmt(job.dur)}`;
+  if(job.phase==="guess") return "吹き出しの話者推定";
   return `読み取り ${job.next||0} / ${Math.ceil(job.states.length/BATCH)}組（全${job.states.length}場面）`;
 }
 function refreshResume(){
@@ -576,7 +648,7 @@ function applyJobSettings(job){
 }
 async function run(job){
   const why=blockReason(); if(why){ setStatus(why,true); return; }
-  lastError=""; $("errBox").hidden=true;
+  lastError=""; $("errBox").hidden=true; finishGuesses=job.guesses||null;
   abortCtl=new AbortController(); const signal=abortCtl.signal;
   $("start").hidden=true; $("resumeBox").hidden=true; $("stop").hidden=false;
   try{ wakeLock=await navigator.wakeLock?.request("screen"); }catch{}
@@ -587,7 +659,10 @@ async function run(job){
     currentStep="切り出しと読み取り";
     if(!job.states.length){ clearJob(); setStatus("台詞の表示が見つかりませんでした。範囲と場面を確認するか、感度を下げてみてください。",true); return; }
     if(job.phase==="read") await readPhase(job, signal);
+    currentStep="吹き出しの話者推定";
+    if(job.phase==="guess") await guessPhase(job, signal);
     finish(job.states, "");
+    if(job.lowCount) setStatus($("status").textContent+" 見つかった場面が少なめです。範囲が広すぎる（キャラクターの顔などが入っている）と、画面が止まらず台詞を見逃すことがあります。範囲を会話ウィンドウに絞ってやり直してみてください。");
     clearJob();
   }catch(e){
     saveJob(job);
@@ -604,16 +679,17 @@ async function run(job){
 $("start").addEventListener("click", ()=>{
   if(blockReason()){ setStatus(blockReason(),true); return; }
   const trial=$("trial").checked;
-  run({key:currentKey, fileName, box:box(), box2:box2(), step:+$("step").value, stable:+$("stable").value, thresh:+$("thresh").value,
+  run({key:currentKey, fileName, box:box(), box2:box2(), guess:$("guessBubble").checked && !!box2(), guesses:{}, step:+$("step").value, stable:+$("stable").value, thresh:+$("thresh").value,
        trial, dur: trial?Math.min(180,video.duration):video.duration, phase:"scan",
        scan:{i:0,prev:null,cur:null,stable:0,changeStart:0,lastSig:null}, states:[], next:0});
 });
 $("resume").addEventListener("click", ()=>{ const job=loadJob(); if(job){ applyJobSettings(job); run(job); } });
 $("restart").addEventListener("click", ()=>{ clearJob(); refreshResume(); setStatus("途中経過を消しました。設定を確認して「読み取りを始める」を押してください。"); });
 $("stop").addEventListener("click",()=>abortCtl?.abort());
+let finishGuesses=null;
 function finish(states, prefix, err){
   const readable=states.filter(s=>s.ok);
-  if(readable.length){ rows=toRows(states); saveResult(); render(); }
+  if(readable.length){ rows=applyGuesses(toRows(states), finishGuesses); saveResult(); render(); }
   const failed=states.filter(s=>s.tried && !s.ok).length;
   const tried=states.filter(s=>s.tried).length;
   const why = lastError ? `理由：${lastError}` : (tried && !readable.some(s=>s.text||s.bubble) ? "読み取った画面に台詞が見つかりませんでした。" : "");
@@ -631,17 +707,18 @@ function render(){
   const ol=$("lines"); ol.replaceChildren();
   for(const r of rows){
     const li=document.createElement("li"); if(r.speaker===NARRATION||r.speaker===BUBBLE) li.className="narr";
-    const p=document.createElement("span"); p.className="plate"; p.textContent=r.speaker;
+    const p=document.createElement("span"); p.className="plate"; p.textContent=speakerLabel(r);
     const x=document.createElement("div"); x.className="txt"; x.textContent=r.text;
     li.append(p,x); ol.append(li);
   }
 }
-const line = r => r.speaker===NARRATION ? `（ナレーション）${r.text}` : r.speaker===BUBBLE ? `（吹き出し）${r.text}` : `${r.speaker}「${r.text}」`;
+const speakerLabel = r => r.speaker===BUBBLE && r.guess ? `${r.guess}（推定）` : r.speaker;
+const line = r => r.speaker===NARRATION ? `（ナレーション）${r.text}` : r.speaker===BUBBLE ? (r.guess ? `${r.guess}（推定）「${r.text}」` : `（吹き出し）${r.text}`) : `${r.speaker}「${r.text}」`;
 const csvCell = v => `"${String(v).replace(/"/g,'""')}"`;
 const builders = {
   txt: () => rows.map(line).join("\n")+"\n",
-  srt: () => rows.map((r,i)=>`${i+1}\n${ts(r.start,true)} --> ${ts(Math.max(r.end,r.start+1),true)}\n${r.speaker===NARRATION?r.text:r.speaker===BUBBLE?`（吹き出し）${r.text}`:`【${r.speaker}】${r.text}`}\n`).join("\n"),
-  csv: () => "\uFEFF"+[["話者","台詞"],...rows.map(r=>[r.speaker,r.text])].map(a=>a.map(csvCell).join(",")).join("\r\n")+"\r\n",
+  srt: () => rows.map((r,i)=>`${i+1}\n${ts(r.start,true)} --> ${ts(Math.max(r.end,r.start+1),true)}\n${r.speaker===NARRATION?r.text:r.speaker===BUBBLE?(r.guess?`【${r.guess}（推定）】${r.text}`:`（吹き出し）${r.text}`):`【${r.speaker}】${r.text}`}\n`).join("\n"),
+  csv: () => "\uFEFF"+[["話者","台詞"],...rows.map(r=>[speakerLabel(r),r.text])].map(a=>a.map(csvCell).join(",")).join("\r\n")+"\r\n",
 };
 const MIME={txt:"text/plain",srt:"application/x-subrip",csv:"text/csv"};
 function showFallback(text){ const ta=$("fallback"); ta.hidden=false; ta.value=text; ta.focus(); ta.select(); }

@@ -1,0 +1,542 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="robots" content="noindex">
+<title>セリフ起こし</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Zen+Maru+Gothic:wght@500;700&display=swap" rel="stylesheet">
+<style>
+:root{
+  --bg:#E9EDF3; --ink:#18202F; --muted:#5B6478; --line:#C9D0DC; --panel:#F6F8FB;
+  --window:#232B45; --window-ink:#F3F5FA; --plate:#F2B544; --plate-ink:#2A1D00;
+  --accent:#2E7F7A; --accent-ink:#FFFFFF; --warn:#B4442F;
+  --round:"Zen Maru Gothic","Hiragino Maru Gothic ProN","Hiragino Sans",sans-serif;
+  --body:-apple-system,BlinkMacSystemFont,"Hiragino Sans","Noto Sans JP","Yu Gothic",sans-serif;
+  box-sizing:border-box;
+  padding-top:env(safe-area-inset-top,0px);
+  padding-bottom:env(safe-area-inset-bottom,0px);
+}
+@media (prefers-color-scheme:dark){
+  :root:not([data-theme="light"]){
+    --bg:#12151D; --ink:#E6E9F0; --muted:#9AA3B5; --line:#2C3346; --panel:#191D28;
+    --window:#1E2640; --window-ink:#EEF1F8; --plate:#E6A93A; --plate-ink:#241800;
+    --accent:#4FB0A8; --accent-ink:#0B1A19; --warn:#E07A63;
+  }
+}
+:root[data-theme="dark"]{
+  --bg:#12151D; --ink:#E6E9F0; --muted:#9AA3B5; --line:#2C3346; --panel:#191D28;
+  --window:#1E2640; --window-ink:#EEF1F8; --plate:#E6A93A; --plate-ink:#241800;
+  --accent:#4FB0A8; --accent-ink:#0B1A19; --warn:#E07A63;
+}
+*,*::before,*::after{box-sizing:inherit}
+html{scroll-padding-top:env(safe-area-inset-top,0px)}
+body{margin:0;background:var(--bg);color:var(--ink);font:15px/1.7 var(--body);-webkit-text-size-adjust:100%}
+main{max-width:640px;margin:0 auto;padding:20px 16px 48px}
+h1{font:700 30px/1.2 var(--round);margin:8px 0 6px;letter-spacing:.02em}
+.lead{color:var(--muted);margin:0 0 20px}
+section{border-top:1px solid var(--line);padding:18px 0 20px}
+h2{font:700 18px/1.4 var(--round);margin:0 0 10px;display:flex;align-items:center;gap:10px}
+h2 .no{display:inline-grid;place-items:center;width:26px;height:26px;border-radius:50%;background:var(--ink);color:var(--bg);font-size:14px}
+p.hint{color:var(--muted);font-size:13px;margin:6px 0 10px}
+button,.filebtn{font:700 16px/1 var(--round);border:0;border-radius:12px;padding:15px 18px;cursor:pointer;
+  background:var(--accent);color:var(--accent-ink);width:100%;display:block;text-align:center;-webkit-tap-highlight-color:transparent}
+button.sub{background:transparent;color:var(--ink);border:1.5px solid var(--line);font-weight:500}
+button:disabled{opacity:.45;cursor:default}
+button:focus-visible,.filebtn:focus-within,input:focus-visible{outline:3px solid var(--plate);outline-offset:2px}
+.filebtn input{position:absolute;opacity:0;width:1px;height:1px}
+.row{display:flex;gap:10px}.row>*{flex:1}
+.fileinfo{font-size:13px;color:var(--muted);margin-top:8px;word-break:break-all}
+.stage{position:relative;background:#000;border-radius:10px;overflow:hidden;margin:10px 0;touch-action:none}
+.stage canvas{display:block;width:100%;height:auto}
+label.sl{display:grid;grid-template-columns:4.5em 1fr 3em;align-items:center;gap:8px;font-size:14px;margin:4px 0}
+label.sl output{text-align:right;color:var(--muted);font-variant-numeric:tabular-nums}
+input[type=range]{width:100%;accent-color:var(--accent)}
+.check{display:flex;gap:10px;align-items:flex-start;font-size:14px;margin:10px 0}
+.check input{width:20px;height:20px;margin-top:2px;accent-color:var(--accent)}
+.seg{display:flex;border:1.5px solid var(--line);border-radius:12px;overflow:hidden;margin:8px 0}
+.seg label{flex:1;text-align:center;padding:10px 4px;font-size:14px;cursor:pointer}
+.seg input{position:absolute;opacity:0}
+.seg label:has(input:checked){background:var(--ink);color:var(--bg);font-weight:700}
+details{margin-top:10px;font-size:14px}
+summary{cursor:pointer;color:var(--muted);padding:6px 0}
+.bar{height:8px;background:var(--line);border-radius:4px;overflow:hidden;margin:12px 0 6px}
+.bar i{display:block;height:100%;width:0;background:var(--accent);transition:width .2s}
+#status{font-size:14px;min-height:1.7em}
+#status.err{color:var(--warn)}
+.notice{background:var(--panel);border-left:4px solid var(--plate);padding:10px 12px;border-radius:6px;font-size:13px;margin:10px 0}
+.notice.err{border-left-color:var(--warn)}
+#lines{list-style:none;padding:0;margin:14px 0 0;display:grid;gap:14px}
+#lines li{position:relative;background:var(--window);color:var(--window-ink);border-radius:10px;padding:16px 14px 12px;margin-top:10px}
+#lines li .plate{position:absolute;top:-12px;left:12px;background:var(--plate);color:var(--plate-ink);
+  font:700 13px/1 var(--round);padding:6px 12px;border-radius:999px}
+#lines li.narr{background:transparent;color:var(--ink);border:1.5px dashed var(--line)}
+#lines li.narr .plate{background:var(--bg);color:var(--muted);border:1.5px dashed var(--line)}
+#lines li .t{font-size:12px;opacity:.6;font-variant-numeric:tabular-nums;float:right;margin-left:8px}
+#lines li .txt{white-space:pre-wrap;word-break:break-word}
+.exports{display:grid;grid-template-columns:repeat(2,1fr);gap:10px;margin-top:16px}
+textarea{width:100%;min-height:160px;font:13px/1.6 var(--body);background:var(--panel);color:var(--ink);border:1px solid var(--line);border-radius:8px;padding:10px;margin-top:10px}
+video{position:absolute;width:1px;height:1px;opacity:0;pointer-events:none}
+[hidden]{display:none!important}
+input[type=password],input[type=text],select{width:100%;font:15px/1.4 var(--body);padding:12px;border-radius:10px;border:1.5px solid var(--line);background:var(--panel);color:var(--ink);margin:6px 0}
+a{color:var(--accent)}
+ol.steps{padding-left:1.3em;margin:6px 0;font-size:14px}
+@media (prefers-reduced-motion:reduce){.bar i{transition:none}}
+</style>
+</head>
+<body>
+<main>
+  <h1>セリフ起こし</h1>
+  <p class="lead">ゲームの画面録画から、キャラクター名つきの台詞一覧を作ります。ボイスの有無は関係なく、画面に表示された名前欄と台詞を読み取ります。</p>
+
+  <section id="secKey">
+    <h2><span class="no">0</span>準備（最初の1回だけ）</h2>
+    <p class="hint">台詞の読み取りにGoogleのGemini API（無料枠）を使います。<a href="https://aistudio.google.com/apikey" target="_blank" rel="noopener">Google AI Studio</a>でAPIキーを作成し、下に貼り付けてください。キーはこのiPhoneのブラウザ内にだけ保存されます。</p>
+    <input id="apiKey" type="password" autocomplete="off" placeholder="APIキーを貼り付け">
+    <button id="saveKey">キーを保存して確認する</button>
+    <label for="model" class="hint" style="display:block;margin-top:12px">使うモデル</label>
+    <select id="model"><option value="">キーを保存すると選べます</option></select>
+    <div id="keyStatus" class="hint" aria-live="polite"></div>
+  </section>
+
+  <section>
+    <h2><span class="no">1</span>録画を選ぶ</h2>
+    <label class="filebtn">録画ファイルを選ぶ<input id="file" type="file" accept="video/*"></label>
+    <div id="fileInfo" class="fileinfo"></div>
+    <p class="hint">横向き・全画面で録画したものがおすすめです。長い録画は30分程度ずつに分けると安定します。</p>
+  </section>
+
+  <section id="secRange" hidden>
+    <h2><span class="no">2</span>会話ウィンドウの範囲を合わせる</h2>
+    <p class="hint">台詞が表示されている場面を選び、明るい枠の中に名前欄と台詞の両方が入るように調整してください。</p>
+    <label class="sl">場面<input id="seek" type="range" min="0" max="1" step="0.1" value="0"><output id="seekOut">0:00</output></label>
+    <div class="stage"><canvas id="preview" width="640" height="360"></canvas></div>
+    <label class="sl">上端<input id="top" type="range" min="0" max="100" value="60"><output></output></label>
+    <label class="sl">下端<input id="bottom" type="range" min="0" max="100" value="100"><output></output></label>
+    <label class="sl">左端<input id="left" type="range" min="0" max="100" value="0"><output></output></label>
+    <label class="sl">右端<input id="right" type="range" min="0" max="100" value="100"><output></output></label>
+  </section>
+
+  <section id="secRun" hidden>
+    <h2><span class="no">3</span>読み取る</h2>
+    <label class="check"><input id="trial" type="checkbox" checked><span>お試し：最初の3分だけ読み取る<br><small style="color:var(--muted)">範囲や設定が合っているか確認してから本番にすると、無料枠の回数を節約できます。</small></span></label>
+    <details>
+      <summary>検出の細かい設定</summary>
+      <label class="sl">間隔<input id="step" type="range" min="0.15" max="1" step="0.05" value="0.3"><output></output></label>
+      <p class="hint">画面を確認する間隔（秒）。短いほど取りこぼしが減りますが、時間がかかります。</p>
+      <label class="sl">静止<input id="stable" type="range" min="0.2" max="2" step="0.1" value="0.6"><output></output></label>
+      <p class="hint">文字送りが止まってから台詞を確定するまでの時間（秒）。文字送りが遅いゲームは長めにしてください。</p>
+      <label class="sl">感度<input id="thresh" type="range" min="0.05" max="3" step="0.05" value="0.4"><output></output></label>
+      <p class="hint">変化とみなすしきい値（%）。取りこぼしがあれば下げ、同じ台詞が重複するなら上げてください。</p>
+    </details>
+    <div id="resumeBox" class="notice" hidden>
+      <div id="resumeText"></div>
+      <div class="row" style="margin-top:10px">
+        <button id="resume">続きから再開</button>
+        <button id="restart" class="sub">最初からやり直す</button>
+      </div>
+    </div>
+    <div class="row" style="margin-top:14px">
+      <button id="start">読み取りを始める</button>
+      <button id="stop" class="sub" hidden>中止</button>
+    </div>
+    <div class="bar"><i id="barFill"></i></div>
+    <div id="status" aria-live="polite"></div>
+    <p class="hint">処理中は画面を開いたままにしてください。止まっても途中経過は自動で保存され、同じ録画を選び直すと続きから再開できます。</p>
+  </section>
+
+  <section id="secResult" hidden>
+    <h2><span class="no">4</span>台詞一覧</h2>
+    <div id="resultInfo" class="hint"></div>
+    <div class="exports">
+      <button class="sub" data-fmt="txt">テキストを保存</button>
+      <button class="sub" data-fmt="csv">CSVを保存</button>
+      <button class="sub" data-fmt="srt">字幕(SRT)を保存</button>
+      <button class="sub" id="copy">テキストをコピー</button>
+    </div>
+    <textarea id="fallback" readonly hidden></textarea>
+    <ol id="lines"></ol>
+  </section>
+</main>
+<video id="video" muted playsinline preload="auto"></video>
+
+<script>
+const $ = id => document.getElementById(id);
+const video = $("video");
+const NARRATION = "ナレーション";
+const API = "https://generativelanguage.googleapis.com/v1beta";
+const BATCH = 8;            // 1回に送る画像数
+const MIN_INTERVAL = 7000;  // 無料枠の毎分制限に合わせた送信間隔（ミリ秒）
+let fileName = "recording", rows = [], abortCtl = null, wakeLock = null;
+
+/* ---------- 保存 ---------- */
+const store = {
+  get(k){ try{ return localStorage.getItem(k); }catch{ return null; } },
+  set(k,v){ try{ localStorage.setItem(k,v); }catch{} },
+};
+
+/* ---------- ユーティリティ ---------- */
+const sleep = (ms, signal) => new Promise((res, rej) => {
+  const t = setTimeout(res, ms);
+  signal?.addEventListener("abort", () => { clearTimeout(t); rej({code:"cancelled"}); }, {once:true});
+});
+const fmt = s => { s=Math.max(0,s); const m=Math.floor(s/60), x=Math.floor(s%60); return `${m}:${String(x).padStart(2,"0")}`; };
+function ts(t, srt){ let ms=Math.round(t*1000); const h=Math.floor(ms/3600000); ms-=h*3600000; const m=Math.floor(ms/60000); ms-=m*60000; const s=Math.floor(ms/1000); ms-=s*1000;
+  const p=(n,l=2)=>String(n).padStart(l,"0"); return srt?`${p(h)}:${p(m)}:${p(s)},${p(ms,3)}`:`${p(h)}:${p(m)}:${p(s)}`; }
+function once(el, ev, timeout=8000){ return new Promise(res=>{ let done=false; const f=()=>{ if(done)return; done=true; el.removeEventListener(ev,f); res(); }; el.addEventListener(ev,f); setTimeout(f,timeout); }); }
+function seekTo(t){ return new Promise(res=>{ let done=false; const f=()=>{ if(done)return; done=true; video.removeEventListener("seeked",f); res(); };
+  video.addEventListener("seeked",f); setTimeout(f,4000); video.currentTime=Math.min(t, Math.max(0,video.duration-0.05)); }); }
+function setStatus(msg, err){ const s=$("status"); s.textContent=msg; s.classList.toggle("err",!!err); }
+function setBar(p){ $("barFill").style.width=`${Math.round(Math.min(1,Math.max(0,p))*100)}%`; }
+
+/* ---------- APIキーとモデル ---------- */
+function keyStatus(msg, err){ const s=$("keyStatus"); s.textContent=msg; s.style.color=err?"var(--warn)":""; }
+async function loadModels(key){
+  const res = await fetch(`${API}/models?pageSize=200`, {headers:{"x-goog-api-key":key}});
+  if(!res.ok){ const j=await res.json().catch(()=>({})); throw new Error(j?.error?.message || `HTTP ${res.status}`); }
+  const j = await res.json();
+  const list = (j.models||[]).filter(m =>
+    (m.supportedGenerationMethods||[]).includes("generateContent") &&
+    /gemini/i.test(m.name) && /flash/i.test(m.name) &&
+    !/image|tts|audio|live|embed|native|thinking/i.test(m.name));
+  const ver = n => parseFloat((n.match(/gemini-(\d+(?:\.\d+)?)/)||[])[1]||0);
+  const score = m => ver(m.name)*10 - (/lite/i.test(m.name)?3:0) - (/preview|exp/i.test(m.name)?1:0);
+  list.sort((a,b)=>score(b)-score(a));
+  return list;
+}
+async function setupKey(key, quiet){
+  keyStatus("確認しています…");
+  try{
+    const models = await loadModels(key);
+    if(!models.length) throw new Error("使えるFlashモデルが見つかりませんでした");
+    const sel=$("model"), saved=store.get("serifu:model");
+    sel.replaceChildren(...models.map(m=>{ const o=document.createElement("option"); o.value=m.name; o.textContent=`${m.displayName||m.name}（${m.name.replace("models/","")}）`; return o; }));
+    if(saved && models.some(m=>m.name===saved)) sel.value=saved;
+    store.set("serifu:model", sel.value);
+    keyStatus("準備できました。キーはこのブラウザに保存されています。");
+    return true;
+  }catch(e){
+    keyStatus(`キーを確認できませんでした：${e.message}`, true);
+    return false;
+  }
+}
+$("saveKey").addEventListener("click", async ()=>{
+  const key=$("apiKey").value.trim();
+  if(!key){ keyStatus("APIキーを貼り付けてください。", true); return; }
+  store.set("serifu:key", key);
+  await setupKey(key);
+});
+$("model").addEventListener("change", ()=>store.set("serifu:model",$("model").value));
+(() => { const k=store.get("serifu:key"); if(k){ $("apiKey").value=k; setupKey(k,true); } })();
+
+/* ---------- 範囲スライダー ---------- */
+const box = () => { const v=id=>+$(id).value/100; return {x1:v("left"),y1:v("top"),x2:v("right"),y2:v("bottom")}; };
+const RANGE_IDS=["top","bottom","left","right"];
+document.querySelectorAll("label.sl").forEach(l=>{
+  const inp=l.querySelector("input"), out=l.querySelector("output");
+  if(inp.id==="seek") return;
+  const saved=store.get("serifu:"+inp.id); if(saved!==null) inp.value=saved;
+  const upd=()=>{ out.textContent = RANGE_IDS.includes(inp.id) ? `${inp.value}%` : inp.value; };
+  inp.addEventListener("input",()=>{ upd(); store.set("serifu:"+inp.id, inp.value); if(RANGE_IDS.includes(inp.id)) drawPreview(); }); upd();
+});
+function boxOk(){ const b=box(); return b.y2-b.y1>=0.05 && b.x2-b.x1>=0.05; }
+
+/* ---------- 動画読み込み ---------- */
+let objUrl=null;
+$("file").addEventListener("change", async () => {
+  const f=$("file").files[0]; if(!f) return;
+  fileName=f.name.replace(/\.[^.]+$/,"") || "recording";
+  if(objUrl) URL.revokeObjectURL(objUrl);
+  objUrl=URL.createObjectURL(f); video.src=objUrl; video.load();
+  $("fileInfo").textContent="読み込み中…";
+  await once(video,"loadedmetadata"); await once(video,"loadeddata",4000);
+  if(!video.videoWidth){ $("fileInfo").textContent="この動画は読み込めませんでした。別の形式で録画し直してください。"; return; }
+  $("fileInfo").textContent=`${f.name}（${fmt(video.duration)}・${video.videoWidth}×${video.videoHeight}）`;
+  const s=$("seek"); s.max=String(video.duration); s.value=String(Math.min(5,video.duration/2));
+  $("secRange").hidden=false; $("secRun").hidden=false;
+  currentKey=`${f.name}|${f.size}`;
+  const job=loadJob(); if(job && job.key===currentKey && job.phase!=="done") applyJobSettings(job);
+  refreshResume();
+  await seekTo(+s.value); $("seekOut").textContent=fmt(+s.value); drawPreview();
+});
+let seekBusy=false, seekWant=null;
+$("seek").addEventListener("input", async e=>{
+  seekWant=+e.target.value; $("seekOut").textContent=fmt(seekWant);
+  if(seekBusy) return; seekBusy=true;
+  while(seekWant!==null){ const t=seekWant; seekWant=null; await seekTo(t); drawPreview(); }
+  seekBusy=false;
+});
+function drawPreview(){
+  const c=$("preview"); if(!video.videoWidth) return;
+  const w=c.clientWidth||640, dpr=window.devicePixelRatio||1;
+  c.width=Math.round(w*dpr); c.height=Math.round(w*dpr*video.videoHeight/video.videoWidth);
+  const g=c.getContext("2d"); g.drawImage(video,0,0,c.width,c.height);
+  const b=box(), x=b.x1*c.width, y=b.y1*c.height, bw=(b.x2-b.x1)*c.width, bh=(b.y2-b.y1)*c.height;
+  g.fillStyle="rgba(0,0,0,.55)";
+  g.fillRect(0,0,c.width,y); g.fillRect(0,y+bh,c.width,c.height-y-bh); g.fillRect(0,y,x,bh); g.fillRect(x+bw,y,c.width-x-bw,bh);
+  g.strokeStyle="#F2B544"; g.lineWidth=3*dpr; g.strokeRect(x,y,bw,bh);
+}
+window.addEventListener("resize",()=>drawPreview());
+
+/* ---------- 画面の変化検出 ---------- */
+const SW=256, SH=64;
+const sigCanvas=document.createElement("canvas"); sigCanvas.width=SW; sigCanvas.height=SH;
+const sigCtx=sigCanvas.getContext("2d",{willReadFrequently:true});
+function srcRect(){ const b=box(), W=video.videoWidth, H=video.videoHeight;
+  return [Math.round(b.x1*W), Math.round(b.y1*H), Math.max(1,Math.round((b.x2-b.x1)*W)), Math.max(1,Math.round((b.y2-b.y1)*H))]; }
+function signature(){
+  const [sx,sy,sw,sh]=srcRect(); sigCtx.drawImage(video,sx,sy,sw,sh,0,0,SW,SH);
+  const d=sigCtx.getImageData(0,0,SW,SH).data, g=new Uint8Array(SW*SH);
+  for(let i=0,j=0;i<g.length;i++,j+=4) g[i]=(d[j]*299+d[j+1]*587+d[j+2]*114)/1000;
+  return g;
+}
+function changed(a,b){ let n=0; for(let i=0;i<a.length;i++) if(Math.abs(a[i]-b[i])>28) n++; return n/a.length*100; }
+function stdev(a){ let s=0,s2=0; for(const v of a){s+=v;s2+=v*v;} const m=s/a.length; return Math.sqrt(Math.max(0,s2/a.length-m*m)); }
+
+/* ---------- 途中経過の保存（再開用） ---------- */
+const JOB="serifu:job";
+let currentKey="", persistNow=null;
+function loadJob(){ try{ return JSON.parse(localStorage.getItem(JOB)||"null"); }catch{ return null; } }
+function saveJob(job){ try{ localStorage.setItem(JOB, JSON.stringify(job, (k,v)=>k==="b64"?undefined:v)); }catch{} }
+function clearJob(){ try{ localStorage.removeItem(JOB); }catch{} }
+const enc=a=>{ if(!a) return null; let s=""; for(let i=0;i<a.length;i+=8192) s+=String.fromCharCode.apply(null,a.subarray(i,i+8192)); return btoa(s); };
+const dec=b=>{ if(!b) return null; const s=atob(b), a=new Uint8Array(s.length); for(let i=0;i<s.length;i++) a[i]=s.charCodeAt(i); return a; };
+document.addEventListener("visibilitychange",()=>{ if(document.hidden) persistNow?.(); else if(abortCtl) navigator.wakeLock?.request("screen").then(w=>wakeLock=w).catch(()=>{}); });
+window.addEventListener("pagehide",()=>persistNow?.());
+
+/* ---------- 1段階目：台詞の場面を探す ---------- */
+async function scanPhase(job, signal){
+  const {step, thresh:th, dur}=job, need=Math.max(1,Math.round(job.stable/step)), total=Math.floor(dur/step);
+  const st=job.scan, states=job.states;
+  let prev=dec(st.prev), cur=st.cur?{start:st.cur.start,end:st.cur.end,sig:dec(st.cur.sig)}:null;
+  let stable=st.stable, changeStart=st.changeStart, lastSig=dec(st.lastSig), i=st.i;
+  const commit=c=>{ if(!c||stdev(c.sig)<4) return; const last=states[states.length-1];
+    if(last && lastSig && changed(lastSig,c.sig)<th) last.end=c.end; else states.push({start:c.start,end:c.end});
+    lastSig=c.sig; };
+  const persist=()=>{ job.scan={i, prev:enc(prev), cur:cur&&{start:cur.start,end:cur.end,sig:enc(cur.sig)}, stable, changeStart, lastSig:enc(lastSig)}; saveJob(job); };
+  persistNow=persist;
+  for(;i<=total;i++){
+    if(signal.aborted){ persist(); throw {code:"cancelled"}; }
+    const t=i*step; await seekTo(t); const sig=signature();
+    if(prev && changed(sig,prev)<th) stable++; else { commit(cur); cur=null; stable=0; changeStart=t; }
+    if(stable>=need){ if(!cur) cur={start:changeStart,end:t,sig}; else { cur.end=t; cur.sig=sig; } }
+    prev=sig;
+    if(i%10===0){ setBar(0.5*i/total); setStatus(`台詞の場面を探しています… ${fmt(t)} / ${fmt(dur)}（${states.length}件）`); }
+    if(i%40===0){ i++; persist(); i--; }
+  }
+  commit(cur);
+  job.phase="read"; job.next=0; delete job.scan; persistNow=null; saveJob(job);
+}
+
+/* ---------- 2段階目：切り出して読み取る ---------- */
+const cropCanvas=document.createElement("canvas");
+async function readPhase(job, signal){
+  const states=job.states, nb=Math.ceil(states.length/BATCH);
+  const [sx,sy,sw,sh]=srcRect(), r=Math.min(1,1024/sw);
+  cropCanvas.width=Math.round(sw*r); cropCanvas.height=Math.round(sh*r);
+  const g=cropCanvas.getContext("2d");
+  persistNow=()=>saveJob(job);
+  for(let b=job.next||0;b<nb;b++){
+    const batch=states.slice(b*BATCH,(b+1)*BATCH);
+    setStatus(`名前欄と台詞を読み取っています… ${b}/${nb}組`);
+    try{
+      for(const s of batch){
+        if(signal.aborted) throw {code:"cancelled"};
+        await seekTo(s.end); g.drawImage(video,sx,sy,sw,sh,0,0,cropCanvas.width,cropCanvas.height);
+        s.b64=cropCanvas.toDataURL("image/jpeg",0.85).split(",")[1];
+      }
+      await readBatch(batch, signal);
+      batch.forEach(s=>s.tried=true);
+    }finally{ batch.forEach(s=>delete s.b64); }
+    job.next=b+1; saveJob(job);
+    rows=toRows(states); saveResult(); render();
+    setBar(0.5+0.5*(b+1)/nb);
+  }
+  job.phase="done"; persistNow=null; saveJob(job);
+}
+
+/* ---------- Geminiで読み取り ---------- */
+const PROMPT = n => `渡した画像${n}枚は、ゲームの画面録画から切り出した会話ウィンドウ付近の画面です。渡した順に0から番号を振ってください。
+各画像について、名前欄に表示されている話者名と、表示されている台詞を読み取ってください。
+・名前欄が無い、または空欄の場合は name を空文字にする（ナレーション・地の文として扱います）
+・名前を囲む記号（【】「」など）は除き、名前だけにする
+・台詞は改行を除いて1行につなげ、画面の表記どおりに書き写す
+・会話ウィンドウ自体が表示されていない、または台詞が無い場合は text を空文字にする
+次の形式のJSON配列だけを返してください。
+[{"i":0,"name":"話者名","text":"台詞"}]`;
+
+function parseJsonArray(text){
+  try{ const v=JSON.parse(text); if(Array.isArray(v)) return v; }catch{}
+  const m=text.match(/\[[\s\S]*\]/); if(m){ try{ return JSON.parse(m[0]); }catch{} }
+  return null;
+}
+class QuotaError extends Error {}
+async function callGemini(batch, signal){
+  const key=store.get("serifu:key"), model=$("model").value;
+  const parts=[];
+  batch.forEach((s,k)=>{ parts.push({text:`画像${k}`}); parts.push({inline_data:{mime_type:"image/jpeg",data:s.b64}}); });
+  parts.push({text:PROMPT(batch.length)});
+  const res=await fetch(`${API}/${model}:generateContent`,{
+    method:"POST", signal,
+    headers:{"Content-Type":"application/json","x-goog-api-key":key},
+    body:JSON.stringify({contents:[{role:"user",parts}],generationConfig:{temperature:0,responseMimeType:"application/json"}}),
+  });
+  const j=await res.json().catch(()=>({}));
+  if(res.status===429){ const msg=j?.error?.message||""; const e=new QuotaError(msg); e.daily=/per.?day|daily|PerDay/i.test(msg); throw e; }
+  if(!res.ok) throw new Error(j?.error?.message||`HTTP ${res.status}`);
+  const text=(j.candidates?.[0]?.content?.parts||[]).map(p=>p.text||"").join("");
+  return parseJsonArray(text);
+}
+let lastCall=0;
+async function readBatch(batch, signal){
+  for(let attempt=0;attempt<4;attempt++){
+    const wait=lastCall+MIN_INTERVAL-Date.now(); if(wait>0) await sleep(wait,signal);
+    lastCall=Date.now();
+    try{
+      const arr=await callGemini(batch, signal);
+      if(!arr){ if(attempt<1) continue; return; }
+      for(const it of arr){ const k=it?.i; if(Number.isInteger(k)&&k>=0&&k<batch.length){
+        batch[k].name=String(it.name??"").trim(); batch[k].text=String(it.text??"").trim(); batch[k].ok=true; } }
+      return;
+    }catch(e){
+      if(e?.name==="AbortError"||e?.code==="cancelled") throw {code:"cancelled"};
+      if(e instanceof QuotaError){
+        if(e.daily || attempt>=3) throw e;
+        setStatus("無料枠の回数制限に達したので、1分待ってから続けます…");
+        await sleep(60000,signal); continue;
+      }
+      if(attempt>=2) return; // この組は読み取り失敗として扱う
+      await sleep(3000,signal);
+    }
+  }
+}
+
+/* ---------- 台詞一覧にまとめる ---------- */
+const norm = s => s.replace(/\s+/g,"");
+function toRows(states){
+  const out=[];
+  for(const s of states){
+    if(!s.text) continue;
+    const speaker=s.name||NARRATION, last=out[out.length-1];
+    if(last && last.speaker===speaker && norm(s.text).startsWith(norm(last.text))){ last.end=s.end; last.text=s.text; continue; }
+    out.push({start:s.start,end:s.end,speaker,text:s.text});
+  }
+  return out;
+}
+
+/* ---------- 実行と再開 ---------- */
+function blockReason(){
+  if(!store.get("serifu:key")) return "先に「0 準備」でAPIキーを保存してください。";
+  if(!$("model").value) return "モデルが選ばれていません。「0 準備」でキーを保存し直してください。";
+  if(!video.videoWidth) return "録画ファイルが読み込めていません。もう一度ファイルを選んでください。";
+  if(!boxOk()) return "範囲が狭すぎます。上端が下端より上、左端が右端より左になっているか確認してください。";
+  return "";
+}
+function jobProgress(job){
+  if(job.phase==="scan") return `台詞の場面探し ${fmt((job.scan?.i||0)*job.step)} / ${fmt(job.dur)}`;
+  return `読み取り ${job.next||0} / ${Math.ceil(job.states.length/BATCH)}組（全${job.states.length}場面）`;
+}
+function refreshResume(){
+  const job=loadJob(), boxEl=$("resumeBox");
+  const mine = job && job.phase!=="done" && job.key===currentKey;
+  const other = job && job.phase!=="done" && job.key!==currentKey;
+  boxEl.hidden = !(mine || other);
+  $("resume").hidden = !mine; $("restart").hidden = !mine;
+  $("start").hidden = !!mine || !!abortCtl;
+  if(mine) $("resumeText").textContent=`この録画の途中経過があります（${jobProgress(job)}${job.trial?"・お試し":""}）。続きから再開できます。`;
+  else if(other) $("resumeText").textContent=`別の録画「${job.fileName}」の途中経過があります。その録画を選び直すと続きから再開できます。この録画で新しく始めると、その途中経過は消えます。`;
+}
+function applyJobSettings(job){
+  const b=job.box, set=(id,v)=>{ const el=$(id); el.value=String(v); el.dispatchEvent(new Event("input")); };
+  set("top",Math.round(b.y1*100)); set("bottom",Math.round(b.y2*100)); set("left",Math.round(b.x1*100)); set("right",Math.round(b.x2*100));
+  set("step",job.step); set("stable",job.stable); set("thresh",job.thresh);
+}
+async function run(job){
+  const why=blockReason(); if(why){ setStatus(why,true); return; }
+  abortCtl=new AbortController(); const signal=abortCtl.signal;
+  $("start").hidden=true; $("resumeBox").hidden=true; $("stop").hidden=false;
+  try{ wakeLock=await navigator.wakeLock?.request("screen"); }catch{}
+  try{
+    try{ await video.play(); video.pause(); }catch{}
+    if(job.phase==="scan") await scanPhase(job, signal);
+    if(!job.states.length){ clearJob(); setStatus("台詞の表示が見つかりませんでした。範囲と場面を確認するか、感度を下げてみてください。",true); return; }
+    if(job.phase==="read") await readPhase(job, signal);
+    finish(job.states, "");
+    clearJob();
+  }catch(e){
+    saveJob(job);
+    const tail="「続きから再開」で止まった地点から続けられます。";
+    if(e?.code==="cancelled") finish(job.states, `中止しました。${tail}`);
+    else if(e instanceof QuotaError) finish(job.states, e.daily ? `今日の無料枠を使い切ったため止めました。明日、${tail}` : `回数制限が続いたため止めました。少し時間をおいてから${tail}`, true);
+    else setStatus(`エラーで止まりました：${e?.message||e}。${tail}`,true);
+  }finally{
+    persistNow=null; $("stop").hidden=true; abortCtl=null;
+    try{ await wakeLock?.release(); }catch{} wakeLock=null;
+    refreshResume();
+  }
+}
+$("start").addEventListener("click", ()=>{
+  if(blockReason()){ setStatus(blockReason(),true); return; }
+  const trial=$("trial").checked;
+  run({key:currentKey, fileName, box:box(), step:+$("step").value, stable:+$("stable").value, thresh:+$("thresh").value,
+       trial, dur: trial?Math.min(180,video.duration):video.duration, phase:"scan",
+       scan:{i:0,prev:null,cur:null,stable:0,changeStart:0,lastSig:null}, states:[], next:0});
+});
+$("resume").addEventListener("click", ()=>{ const job=loadJob(); if(job){ applyJobSettings(job); run(job); } });
+$("restart").addEventListener("click", ()=>{ clearJob(); refreshResume(); setStatus("途中経過を消しました。設定を確認して「読み取りを始める」を押してください。"); });
+$("stop").addEventListener("click",()=>abortCtl?.abort());
+function finish(states, prefix, err){
+  const readable=states.filter(s=>s.ok);
+  if(readable.length){ rows=toRows(states); saveResult(); render(); }
+  const failed=states.filter(s=>s.tried && !s.ok).length;
+  const body = readable.length ? `${rows.length}行の台詞を読み取りました。${failed?`（${failed}場面は読み取れていません）`:""}`
+           : (prefix ? "" : "台詞を読み取れませんでした。範囲に名前欄と台詞が入っているか確認してください。");
+  if(!prefix) setBar(1);
+  setStatus(`${prefix}${body}`, err || (!readable.length && !prefix));
+}
+
+/* ---------- 表示と書き出し ---------- */
+function render(){
+  $("secResult").hidden=!rows.length;
+  const narr=rows.filter(r=>r.speaker===NARRATION).length;
+  $("resultInfo").textContent=`${fileName}：${rows.length}行（うちナレーション${narr}行）`;
+  const ol=$("lines"); ol.replaceChildren();
+  for(const r of rows){
+    const li=document.createElement("li"); if(r.speaker===NARRATION) li.className="narr";
+    const p=document.createElement("span"); p.className="plate"; p.textContent=r.speaker;
+    const x=document.createElement("div"); x.className="txt"; x.textContent=r.text;
+    li.append(p,x); ol.append(li);
+  }
+}
+const line = r => r.speaker===NARRATION ? `（ナレーション）${r.text}` : `${r.speaker}「${r.text}」`;
+const csvCell = v => `"${String(v).replace(/"/g,'""')}"`;
+const builders = {
+  txt: () => rows.map(line).join("\n")+"\n",
+  srt: () => rows.map((r,i)=>`${i+1}\n${ts(r.start,true)} --> ${ts(Math.max(r.end,r.start+1),true)}\n${r.speaker===NARRATION?r.text:`【${r.speaker}】${r.text}`}\n`).join("\n"),
+  csv: () => "\uFEFF"+[["話者","台詞"],...rows.map(r=>[r.speaker,r.text])].map(a=>a.map(csvCell).join(",")).join("\r\n")+"\r\n",
+};
+const MIME={txt:"text/plain",srt:"application/x-subrip",csv:"text/csv"};
+function showFallback(text){ const ta=$("fallback"); ta.hidden=false; ta.value=text; ta.focus(); ta.select(); }
+document.querySelectorAll("[data-fmt]").forEach(b=>b.addEventListener("click", async ()=>{
+  const f=b.dataset.fmt, data=builders[f]();
+  const file=new File([data],`${fileName}.${f}`,{type:MIME[f]+";charset=utf-8"});
+  try{
+    if(navigator.canShare?.({files:[file]})){ await navigator.share({files:[file]}); return; } // iPhone：共有シートから「ファイルに保存」
+    const a=document.createElement("a"); a.href=URL.createObjectURL(file); a.download=file.name;
+    document.body.append(a); a.click(); a.remove(); setTimeout(()=>URL.revokeObjectURL(a.href),10000);
+  }catch(e){ if(e?.name!=="AbortError") showFallback(data); }
+}));
+$("copy").addEventListener("click", async ()=>{
+  const data=builders.txt();
+  try{ await navigator.clipboard.writeText(data); $("copy").textContent="コピーしました"; setTimeout(()=>$("copy").textContent="テキストをコピー",2000); }
+  catch{ showFallback(data); }
+});
+
+/* ---------- 前回の結果を保持 ---------- */
+function saveResult(){ store.set("serifu:last",JSON.stringify({fileName,rows})); }
+(() => { try{ const d=JSON.parse(store.get("serifu:last")||"null"); if(d?.rows?.length){ fileName=d.fileName; rows=d.rows; render(); $("resultInfo").textContent+="（前回の結果）"; } }catch{} })();
+</script>
+</body>
+</html>

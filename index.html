@@ -176,7 +176,7 @@ ol.steps{padding-left:1.3em;margin:6px 0;font-size:14px}
 
 <script>
 const $ = id => document.getElementById(id);
-const APP_VERSION = "2026-10-07c";
+const APP_VERSION = "2026-10-07d";
 let currentStep = "待機中";
 const video = $("video");
 const NARRATION = "ナレーション";
@@ -241,10 +241,11 @@ async function loadModels(key){
   const j = await res.json();
   const list = (j.models||[]).filter(m =>
     (m.supportedGenerationMethods||[]).includes("generateContent") &&
-    /gemini/i.test(m.name) && /flash/i.test(m.name) &&
+    /gemini/i.test(m.name) && /flash|pro/i.test(m.name) &&
     !/image|tts|audio|live|embed|native|thinking/i.test(m.name));
   const ver = n => parseFloat((n.match(/gemini-(\d+(?:\.\d+)?)/)||[])[1]||0);
-  const score = m => ver(m.name)*10 - (/lite/i.test(m.name)?3:0) - (/preview|exp/i.test(m.name)?1:0);
+  // Flash（速くて安い）を先頭に、Pro（高精度・遅い・高い）は後ろに並べる
+  const score = m => ver(m.name)*10 - (/lite/i.test(m.name)?3:0) - (/preview|exp/i.test(m.name)?1:0) - (/pro/i.test(m.name)?100:0);
   list.sort((a,b)=>score(b)-score(a));
   return list;
 }
@@ -254,7 +255,7 @@ async function setupKey(key, quiet){
     const models = await loadModels(key);
     if(!models.length) throw new Error("使えるFlashモデルが見つかりませんでした");
     const sel=$("model"), saved=store.get("serifu:model");
-    sel.replaceChildren(...models.map(m=>{ const o=document.createElement("option"); o.value=m.name; o.textContent=`${m.displayName||m.name}（${m.name.replace("models/","")}）`; return o; }));
+    sel.replaceChildren(...models.map(m=>{ const o=document.createElement("option"); o.value=m.name; o.textContent=`${/pro/i.test(m.name)?"【高精度・有料のみ】":""}${m.displayName||m.name}（${m.name.replace("models/","")}）`; return o; }));
     if(saved && models.some(m=>m.name===saved)) sel.value=saved;
     store.set("serifu:model", sel.value);
     keyStatus("準備できました。キーはこのブラウザに保存されています。");

@@ -151,6 +151,11 @@ ol.steps{padding-left:1.3em;margin:6px 0;font-size:14px}
     </div>
     <div class="bar"><i id="barFill"></i></div>
     <div id="status" aria-live="polite"></div>
+    <div id="errBox" class="notice err" hidden>
+      <div>エラーの詳細です。下のボタンでコピーして、そのままClaudeに貼り付けて送ってください。</div>
+      <textarea id="errText" readonly style="min-height:120px"></textarea>
+      <button id="errCopy" class="sub">エラー内容をコピー</button>
+    </div>
     <p class="hint">処理中は画面を開いたままにしてください。止まっても途中経過は自動で保存され、同じ録画を選び直すと続きから再開できます。</p>
   </section>
 
@@ -171,6 +176,8 @@ ol.steps{padding-left:1.3em;margin:6px 0;font-size:14px}
 
 <script>
 const $ = id => document.getElementById(id);
+const APP_VERSION = "2026-10-07c";
+let currentStep = "待機中";
 const video = $("video");
 const NARRATION = "ナレーション";
 const API = "https://generativelanguage.googleapis.com/v1beta";
@@ -197,6 +204,34 @@ function seekTo(t){ return new Promise(res=>{ let done=false; const f=()=>{ if(d
   video.addEventListener("seeked",f); setTimeout(f,4000); video.currentTime=Math.min(t, Math.max(0,video.duration-0.05)); }); }
 function setStatus(msg, err){ const s=$("status"); s.textContent=msg; s.classList.toggle("err",!!err); }
 function setBar(p){ $("barFill").style.width=`${Math.round(Math.min(1,Math.max(0,p))*100)}%`; }
+
+/* ---------- エラー報告（Claudeに送る用） ---------- */
+function reportError(e, where){
+  let job=null; try{ job=JSON.parse(localStorage.getItem("serifu:job")||"null"); }catch{}
+  const lines=[
+    "【セリフ起こし エラー報告】",
+    `版: ${APP_VERSION}`,
+    `日時: ${new Date().toLocaleString("ja-JP")}`,
+    `発生場所: ${where||"不明"} / 作業: ${currentStep}`,
+    `内容: ${e?.message||e?.code||String(e)}`,
+    e?.name ? `種類: ${e.name}` : "",
+    e?.stack ? `詳細:\n${String(e.stack).split("\n").slice(0,6).join("\n")}` : "",
+    `最後のAPIエラー: ${typeof lastError!=="undefined"&&lastError?lastError:"なし"}`,
+    `モデル: ${$("model")?.value||"未選択"}`,
+    `動画: ${video?.videoWidth||0}x${video?.videoHeight||0}, ${video?.duration?Math.round(video.duration):0}秒`,
+    `範囲: ${JSON.stringify(typeof box==="function"?box():null)} 吹き出し: ${JSON.stringify(typeof box2==="function"?box2():null)}`,
+    job ? `途中経過: 段階=${job.phase}, 場面=${job.states?.length}, 次の組=${job.next}, お試し=${job.trial}` : "途中経過: なし",
+    `オンライン: ${navigator.onLine}`,
+    `端末: ${navigator.userAgent}`,
+  ].filter(Boolean);
+  $("errText").value=lines.join("\n"); $("errBox").hidden=false;
+}
+$("errCopy").addEventListener("click", async ()=>{
+  try{ await navigator.clipboard.writeText($("errText").value); $("errCopy").textContent="コピーしました"; setTimeout(()=>$("errCopy").textContent="エラー内容をコピー",2000); }
+  catch{ const t=$("errText"); t.focus(); t.select(); }
+});
+window.addEventListener("error", ev=>reportError(ev.error||{message:ev.message, stack:`${ev.filename}:${ev.lineno}:${ev.colno}`}, "画面の処理"));
+window.addEventListener("unhandledrejection", ev=>{ if(ev.reason?.code!=="cancelled") reportError(ev.reason, "画面の処理（非同期）"); });
 
 /* ---------- APIキーとモデル ---------- */
 function keyStatus(msg, err){ const s=$("keyStatus"); s.textContent=msg; s.style.color=err?"var(--warn)":""; }
@@ -226,6 +261,7 @@ async function setupKey(key, quiet){
     return true;
   }catch(e){
     keyStatus(`キーを確認できませんでした：${e.message}`, true);
+    currentStep="APIキーの確認"; reportError(e, "APIキーの確認");
     return false;
   }
 }
@@ -437,6 +473,15 @@ async function callGemini(batch, signal){
     clearTimeout(timer); clearInterval(tick); signal.removeEventListener("abort",onAbort);
   }
 }
+let lastCall=0;
+function waitOnline(signal){
+  return new Promise((res,rej)=>{
+    const done=()=>{ clearInterval(t); window.removeEventListener("online",check); res(); };
+    const check=()=>{ if(navigator.onLine) setTimeout(done,2000); };
+    const t=setInterval(()=>{ if(signal.aborted){ clearInterval(t); window.removeEventListener("online",check); rej({code:"cancelled"}); } else check(); },5000);
+    window.addEventListener("online",check);
+  });
+}
 async function readBatch(batch, signal){
   for(let attempt=0;attempt<4;attempt++){
     const wait=lastCall+MIN_INTERVAL-Date.now(); if(wait>0) await sleep(wait,signal);
@@ -530,13 +575,15 @@ function applyJobSettings(job){
 }
 async function run(job){
   const why=blockReason(); if(why){ setStatus(why,true); return; }
-  lastError="";
+  lastError=""; $("errBox").hidden=true;
   abortCtl=new AbortController(); const signal=abortCtl.signal;
   $("start").hidden=true; $("resumeBox").hidden=true; $("stop").hidden=false;
   try{ wakeLock=await navigator.wakeLock?.request("screen"); }catch{}
   try{
     try{ await video.play(); video.pause(); }catch{}
+    currentStep="台詞の場面探し";
     if(job.phase==="scan") await scanPhase(job, signal);
+    currentStep="切り出しと読み取り";
     if(!job.states.length){ clearJob(); setStatus("台詞の表示が見つかりませんでした。範囲と場面を確認するか、感度を下げてみてください。",true); return; }
     if(job.phase==="read") await readPhase(job, signal);
     finish(job.states, "");
@@ -546,7 +593,7 @@ async function run(job){
     const tail="「続きから再開」で止まった地点から続けられます。";
     if(e?.code==="cancelled") finish(job.states, `中止しました。${tail}`);
     else if(e instanceof QuotaError) finish(job.states, e.daily ? `今日の無料枠を使い切ったため止めました。明日、${tail}` : `回数制限が続いたため止めました。少し時間をおいてから${tail}`, true);
-    else setStatus(`エラーで止まりました：${e?.message||e}。${tail}`,true);
+    else { setStatus(`エラーで止まりました：${e?.message||e}。${tail}`,true); reportError(e, "読み取り処理"); }
   }finally{
     persistNow=null; $("stop").hidden=true; abortCtl=null;
     try{ await wakeLock?.release(); }catch{} wakeLock=null;

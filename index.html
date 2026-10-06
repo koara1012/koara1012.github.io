@@ -78,16 +78,18 @@ summary{cursor:pointer;color:var(--muted);padding:6px 0}
 #lines li .txt{white-space:pre-wrap;word-break:break-word}
 .exports{display:grid;grid-template-columns:repeat(2,1fr);gap:10px;margin-top:16px}
 textarea{width:100%;min-height:160px;font:13px/1.6 var(--body);background:var(--panel);color:var(--ink);border:1px solid var(--line);border-radius:8px;padding:10px;margin-top:10px}
-video{position:absolute;width:1px;height:1px;opacity:0;pointer-events:none}
+video{position:fixed;left:0;bottom:0;width:64px;height:36px;opacity:.02;pointer-events:none;z-index:-1}
 [hidden]{display:none!important}
 input[type=password],input[type=text],select{width:100%;font:15px/1.4 var(--body);padding:12px;border-radius:10px;border:1.5px solid var(--line);background:var(--panel);color:var(--ink);margin:6px 0}
 a{color:var(--accent)}
+.build{display:inline-block;font:700 13px/1 var(--round);background:var(--plate);color:var(--plate-ink);padding:6px 12px;border-radius:999px;margin-top:4px}
 ol.steps{padding-left:1.3em;margin:6px 0;font-size:14px}
 @media (prefers-reduced-motion:reduce){.bar i{transition:none}}
 </style>
 </head>
 <body>
 <main>
+  <div id="build" class="build"></div>
   <h1>セリフ起こし</h1>
   <p class="lead">ゲームの画面録画から、キャラクター名つきの台詞一覧を作ります。ボイスの有無は関係なく、画面に表示された名前欄と台詞を読み取ります。</p>
 
@@ -177,8 +179,10 @@ ol.steps{padding-left:1.3em;margin:6px 0;font-size:14px}
 
 <script>
 const $ = id => document.getElementById(id);
-const APP_VERSION = "2026-10-07e";
+const APP_BUILD = 12; // アップデートの回数（更新のたびに1つ増やす）
+const APP_VERSION = `第${APP_BUILD}版（2026-10-07）`;
 let currentStep = "待機中";
+$("build").textContent = APP_VERSION;
 const video = $("video");
 const NARRATION = "ナレーション";
 const API = "https://generativelanguage.googleapis.com/v1beta";
@@ -201,14 +205,25 @@ const fmt = s => { s=Math.max(0,s); const m=Math.floor(s/60), x=Math.floor(s%60)
 function ts(t, srt){ let ms=Math.round(t*1000); const h=Math.floor(ms/3600000); ms-=h*3600000; const m=Math.floor(ms/60000); ms-=m*60000; const s=Math.floor(ms/1000); ms-=s*1000;
   const p=(n,l=2)=>String(n).padStart(l,"0"); return srt?`${p(h)}:${p(m)}:${p(s)},${p(ms,3)}`:`${p(h)}:${p(m)}:${p(s)}`; }
 function once(el, ev, timeout=8000){ return new Promise(res=>{ let done=false; const f=()=>{ if(done)return; done=true; el.removeEventListener(ev,f); res(); }; el.addEventListener(ev,f); setTimeout(f,timeout); }); }
-function seekTo(t){ return new Promise(res=>{ let done=false; const f=()=>{ if(done)return; done=true; video.removeEventListener("seeked",f); res(); };
-  video.addEventListener("seeked",f); setTimeout(f,4000); video.currentTime=Math.min(t, Math.max(0,video.duration-0.05)); }); }
+function seekTo(t){
+  // seeked のあと、新しいフレームが実際に描画されるまで待つ（iPhoneでは描画が遅れて古い画面のまま読まれることがあるため）
+  return new Promise(res=>{
+    let done=false;
+    const finish=()=>{ if(done) return; done=true; video.removeEventListener("seeked",onSeeked); res(); };
+    const onSeeked=()=>{
+      if(video.requestVideoFrameCallback){ video.requestVideoFrameCallback(()=>finish()); setTimeout(finish,300); }
+      else setTimeout(finish,60);
+    };
+    video.addEventListener("seeked",onSeeked); setTimeout(finish,4000);
+    video.currentTime=Math.min(t, Math.max(0,video.duration-0.05));
+  });
+}
 function setStatus(msg, err){ const s=$("status"); s.textContent=msg; s.classList.toggle("err",!!err); }
 function setBar(p){ $("barFill").style.width=`${Math.round(Math.min(1,Math.max(0,p))*100)}%`; }
 
 /* ---------- エラー報告（Claudeに送る用） ---------- */
-function reportError(e, where){
-  let job=null; try{ job=JSON.parse(localStorage.getItem("serifu:job")||"null"); }catch{}
+function reportError(e, where, jobArg){
+  let job=jobArg||null; if(!job){ try{ job=JSON.parse(localStorage.getItem("serifu:job")||"null"); }catch{} }
   const lines=[
     "【セリフ起こし エラー報告】",
     `版: ${APP_VERSION}`,
@@ -221,7 +236,9 @@ function reportError(e, where){
     `モデル: ${$("model")?.value||"未選択"}`,
     `動画: ${video?.videoWidth||0}x${video?.videoHeight||0}, ${video?.duration?Math.round(video.duration):0}秒`,
     `範囲: ${JSON.stringify(typeof box==="function"?box():null)} 吹き出し: ${JSON.stringify(typeof box2==="function"?box2():null)}`,
-    job ? `途中経過: 段階=${job.phase}, 場面=${job.states?.length}, 次の組=${job.next}, お試し=${job.trial}` : "途中経過: なし",
+    job ? `途中経過: 段階=${job.phase}, 場面=${job.states?.length}, 次の組=${job.next}, お試し=${job.trial}, 長さ=${Math.round(job.dur||0)}秒` : "途中経過: なし",
+    job?.diag ? `場面探しの診断: 確認${job.diag.samples}回, 全く同じ画面${job.diag.same}回, 変化あり${job.diag.changes}回` : "",
+    job ? `その時の範囲: ${JSON.stringify(job.box)} 吹き出し: ${JSON.stringify(job.box2||null)} 間隔${job.step} 静止${job.stable} 感度${job.thresh}` : "",
     `オンライン: ${navigator.onLine}`,
     `端末: ${navigator.userAgent}`,
   ].filter(Boolean);
@@ -372,9 +389,11 @@ async function scanPhase(job, signal){
     lastSig=c.sig; };
   const persist=()=>{ job.scan={i, prev:enc(prev), cur:cur&&{start:cur.start,end:cur.end,sig:enc(cur.sig)}, stable, changeStart, lastSig:enc(lastSig)}; saveJob(job); };
   persistNow=persist;
+  const diag=job.diag=job.diag||{samples:0,same:0,changes:0};
   for(;i<=total;i++){
     if(signal.aborted){ persist(); throw {code:"cancelled"}; }
     const t=i*step; await seekTo(t); const sig=signature();
+    if(prev){ const d=changed(sig,prev); diag.samples++; if(d===0) diag.same++; if(d>=th) diag.changes++; }
     if(prev && changed(sig,prev)<th) stable++; else { commit(cur); cur=null; stable=0; changeStart=t; }
     if(stable>=need){ if(!cur) cur={start:changeStart,end:t,sig}; else { cur.end=t; cur.sig=sig; } }
     prev=sig;
@@ -383,6 +402,7 @@ async function scanPhase(job, signal){
   }
   commit(cur);
   job.lowCount = states.length < Math.max(3, dur/20); // 20秒に1場面より少ない＝範囲が合っていない可能性
+  diag.scenes=states.length;
   job.phase="read"; job.next=0; delete job.scan; persistNow=null; saveJob(job);
 }
 
@@ -635,7 +655,12 @@ function refreshResume(){
   boxEl.hidden = !(mine || other);
   $("resume").hidden = !mine; $("restart").hidden = !mine;
   $("start").hidden = !!mine || !!abortCtl;
-  if(mine) $("resumeText").textContent=`この録画の途中経過があります（${jobProgress(job)}${job.trial?"・お試し":""}）。続きから再開できます。`;
+  if(mine){
+    const b=job.box, pct=v=>Math.round(v*100);
+    const range=`範囲：上端${pct(b.y1)}%・下端${pct(b.y2)}%・左端${pct(b.x1)}%・右端${pct(b.x2)}%${job.box2?"・吹き出しあり":""}`;
+    const warn=job.lowCount?" ※見つかった場面が少ないため、範囲を直して「最初からやり直す」ことをおすすめします。":"";
+    $("resumeText").textContent=`この録画の途中経過があります（${jobProgress(job)}${job.trial?"・お試し":""}／${range}）。「続きから再開」はこの範囲のまま続けます。範囲を変えた場合は「最初からやり直す」を押してください。${warn}`;
+  }
   else if(other) $("resumeText").textContent=`別の録画「${job.fileName}」の途中経過があります。その録画を選び直すと続きから再開できます。この録画で新しく始めると、その途中経過は消えます。`;
 }
 function applyJobSettings(job){
@@ -662,7 +687,10 @@ async function run(job){
     currentStep="吹き出しの話者推定";
     if(job.phase==="guess") await guessPhase(job, signal);
     finish(job.states, "");
-    if(job.lowCount) setStatus($("status").textContent+" 見つかった場面が少なめです。範囲が広すぎる（キャラクターの顔などが入っている）と、画面が止まらず台詞を見逃すことがあります。範囲を会話ウィンドウに絞ってやり直してみてください。");
+    if(job.lowCount){
+      setStatus($("status").textContent+" 見つかった場面が少なめです。範囲を会話ウィンドウに絞ってやり直してみてください。それでも少ない場合は、下の診断内容をコピーしてClaudeに送ってください。");
+      reportError({message:"見つかった場面が少ない（診断）", name:"診断"}, "場面探しの結果", job);
+    }
     clearJob();
   }catch(e){
     saveJob(job);

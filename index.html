@@ -340,13 +340,14 @@ async function readPhase(job, signal){
   persistNow=()=>saveJob(job);
   for(let b=job.next||0;b<nb;b++){
     const batch=states.slice(b*BATCH,(b+1)*BATCH);
-    setStatus(`名前欄と台詞を読み取っています… ${b}/${nb}組`);
+    setStatus(`台詞の画像を準備しています… ${b+1}/${nb}組目`);
     try{
       for(const s of batch){
         if(signal.aborted) throw {code:"cancelled"};
         await seekTo(s.end); g.drawImage(video,sx,sy,sw,sh,0,0,cropCanvas.width,cropCanvas.height);
         s.b64=cropCanvas.toDataURL("image/jpeg",0.85).split(",")[1];
       }
+      setStatus(`名前欄と台詞を読み取っています… ${b+1}/${nb}組目`);
       await readBatch(batch, signal);
       batch.forEach(s=>s.tried=true);
     }finally{ batch.forEach(s=>delete s.b64); }
@@ -373,23 +374,40 @@ function parseJsonArray(text){
   return null;
 }
 class QuotaError extends Error {}
+const REQUEST_TIMEOUT=120000; // 応答が2分ない場合は送り直す
+let lastError="";
 async function callGemini(batch, signal){
   const key=store.get("serifu:key"), model=$("model").value;
   const parts=[];
   batch.forEach((s,k)=>{ parts.push({text:`画像${k}`}); parts.push({inline_data:{mime_type:"image/jpeg",data:s.b64}}); });
   parts.push({text:PROMPT(batch.length)});
-  const res=await fetch(`${API}/${model}:generateContent`,{
-    method:"POST", signal,
-    headers:{"Content-Type":"application/json","x-goog-api-key":key},
-    body:JSON.stringify({contents:[{role:"user",parts}],generationConfig:{temperature:0,responseMimeType:"application/json"}}),
-  });
-  const j=await res.json().catch(()=>({}));
-  if(res.status===429){ const msg=j?.error?.message||""; const e=new QuotaError(msg); e.daily=/per.?day|daily|PerDay/i.test(msg); throw e; }
-  if(!res.ok) throw new Error(j?.error?.message||`HTTP ${res.status}`);
-  const text=(j.candidates?.[0]?.content?.parts||[]).map(p=>p.text||"").join("");
-  return parseJsonArray(text);
+  const gen={temperature:0,responseMimeType:"application/json"};
+  if(/2\.5-flash/.test(model)) gen.thinkingConfig={thinkingBudget:0}; // 考える時間を省いて速くする
+  const ctl=new AbortController(); let timedOut=false;
+  const onAbort=()=>ctl.abort(); signal.addEventListener("abort",onAbort,{once:true});
+  const timer=setTimeout(()=>{ timedOut=true; ctl.abort(); }, REQUEST_TIMEOUT);
+  const t0=Date.now(), base=$("status").textContent.replace(/（.*$/,"");
+  const tick=setInterval(()=>setStatus(`${base}（Geminiの応答待ち ${Math.round((Date.now()-t0)/1000)}秒）`),1000);
+  try{
+    const res=await fetch(`${API}/${model}:generateContent`,{
+      method:"POST", signal:ctl.signal,
+      headers:{"Content-Type":"application/json","x-goog-api-key":key},
+      body:JSON.stringify({contents:[{role:"user",parts}],generationConfig:gen}),
+    });
+    const j=await res.json().catch(()=>({}));
+    if(res.status===429){ const msg=j?.error?.message||""; const e=new QuotaError(msg); e.daily=/per.?day|daily|PerDay/i.test(msg); throw e; }
+    if(!res.ok) throw new Error(j?.error?.message||`HTTP ${res.status}`);
+    const cand=j.candidates?.[0];
+    const text=(cand?.content?.parts||[]).map(p=>p.text||"").join("");
+    if(!text) throw new Error(`空の応答（${cand?.finishReason||j?.promptFeedback?.blockReason||"理由不明"}）`);
+    return parseJsonArray(text);
+  }catch(e){
+    if(timedOut && !signal.aborted) throw new Error("Geminiから2分以上応答がありませんでした");
+    throw e;
+  }finally{
+    clearTimeout(timer); clearInterval(tick); signal.removeEventListener("abort",onAbort);
+  }
 }
-let lastCall=0;
 async function readBatch(batch, signal){
   for(let attempt=0;attempt<4;attempt++){
     const wait=lastCall+MIN_INTERVAL-Date.now(); if(wait>0) await sleep(wait,signal);
@@ -407,7 +425,14 @@ async function readBatch(batch, signal){
         setStatus("無料枠の回数制限に達したので、1分待ってから続けます…");
         await sleep(60000,signal); continue;
       }
+      lastError=e?.message||String(e);
+      // 通信が切れている場合は、つながるまで待ってから同じ組をやり直す（失敗扱いにしない）
+      if(!navigator.onLine){
+        setStatus("インターネットにつながっていません。つながると自動で続きを読み取ります…");
+        await waitOnline(signal); attempt--; continue;
+      }
       if(attempt>=2) return; // この組は読み取り失敗として扱う
+      setStatus(`うまく読み取れなかったので送り直します…（${lastError}）`);
       await sleep(3000,signal);
     }
   }
@@ -455,6 +480,7 @@ function applyJobSettings(job){
 }
 async function run(job){
   const why=blockReason(); if(why){ setStatus(why,true); return; }
+  lastError="";
   abortCtl=new AbortController(); const signal=abortCtl.signal;
   $("start").hidden=true; $("resumeBox").hidden=true; $("stop").hidden=false;
   try{ wakeLock=await navigator.wakeLock?.request("screen"); }catch{}
@@ -491,8 +517,9 @@ function finish(states, prefix, err){
   const readable=states.filter(s=>s.ok);
   if(readable.length){ rows=toRows(states); saveResult(); render(); }
   const failed=states.filter(s=>s.tried && !s.ok).length;
-  const body = readable.length ? `${rows.length}行の台詞を読み取りました。${failed?`（${failed}場面は読み取れていません）`:""}`
-           : (prefix ? "" : "台詞を読み取れませんでした。範囲に名前欄と台詞が入っているか確認してください。");
+  const why = lastError ? `理由：${lastError}` : "";
+  const body = readable.length ? `${rows.length}行の台詞を読み取りました。${failed?`（${failed}場面は読み取れていません。${why}）`:""}`
+           : (prefix ? "" : `台詞を読み取れませんでした。${why || "範囲に名前欄と台詞が入っているか確認してください。"}`);
   if(!prefix) setBar(1);
   setStatus(`${prefix}${body}`, err || (!readable.length && !prefix));
 }

@@ -117,6 +117,13 @@ ol.steps{padding-left:1.3em;margin:6px 0;font-size:14px}
     <label class="sl">下端<input id="bottom" type="range" min="0" max="100" value="100"><output></output></label>
     <label class="sl">左端<input id="left" type="range" min="0" max="100" value="0"><output></output></label>
     <label class="sl">右端<input id="right" type="range" min="0" max="100" value="100"><output></output></label>
+    <label class="check"><input id="useBubble" type="checkbox"><span>吹き出しの範囲も読み取る<br><small style="color:var(--muted)">名前欄とは別の場所に吹き出しの台詞が出るゲーム向けです。水色の枠を吹き出しが出る場所に合わせてください。</small></span></label>
+    <div id="bubbleBox" hidden>
+      <label class="sl">上端<input id="top2" type="range" min="0" max="100" value="0"><output></output></label>
+      <label class="sl">下端<input id="bottom2" type="range" min="0" max="100" value="32"><output></output></label>
+      <label class="sl">左端<input id="left2" type="range" min="0" max="100" value="35"><output></output></label>
+      <label class="sl">右端<input id="right2" type="range" min="0" max="100" value="100"><output></output></label>
+    </div>
   </section>
 
   <section id="secRun" hidden>
@@ -233,7 +240,11 @@ $("model").addEventListener("change", ()=>store.set("serifu:model",$("model").va
 
 /* ---------- 範囲スライダー ---------- */
 const box = () => { const v=id=>+$(id).value/100; return {x1:v("left"),y1:v("top"),x2:v("right"),y2:v("bottom")}; };
-const RANGE_IDS=["top","bottom","left","right"];
+const RANGE_IDS=["top","bottom","left","right","top2","bottom2","left2","right2"];
+const box2 = () => { if(!$("useBubble").checked) return null; const v=id=>+$(id).value/100; return {x1:v("left2"),y1:v("top2"),x2:v("right2"),y2:v("bottom2")}; };
+function syncBubbleUI(){ $("bubbleBox").hidden=!$("useBubble").checked; }
+$("useBubble").checked = store.get("serifu:useBubble")==="1"; syncBubbleUI();
+$("useBubble").addEventListener("change",()=>{ store.set("serifu:useBubble",$("useBubble").checked?"1":"0"); syncBubbleUI(); drawPreview(); });
 document.querySelectorAll("label.sl").forEach(l=>{
   const inp=l.querySelector("input"), out=l.querySelector("output");
   if(inp.id==="seek") return;
@@ -241,7 +252,7 @@ document.querySelectorAll("label.sl").forEach(l=>{
   const upd=()=>{ out.textContent = RANGE_IDS.includes(inp.id) ? `${inp.value}%` : inp.value; };
   inp.addEventListener("input",()=>{ upd(); store.set("serifu:"+inp.id, inp.value); if(RANGE_IDS.includes(inp.id)) drawPreview(); }); upd();
 });
-function boxOk(){ const b=box(); return b.y2-b.y1>=0.05 && b.x2-b.x1>=0.05; }
+function boxOk(){ const ok=b=>!b || (b.y2-b.y1>=0.05 && b.x2-b.x1>=0.05); return ok(box()) && ok(box2()); }
 
 /* ---------- 動画読み込み ---------- */
 let objUrl=null;
@@ -273,10 +284,13 @@ function drawPreview(){
   const w=c.clientWidth||640, dpr=window.devicePixelRatio||1;
   c.width=Math.round(w*dpr); c.height=Math.round(w*dpr*video.videoHeight/video.videoWidth);
   const g=c.getContext("2d"); g.drawImage(video,0,0,c.width,c.height);
-  const b=box(), x=b.x1*c.width, y=b.y1*c.height, bw=(b.x2-b.x1)*c.width, bh=(b.y2-b.y1)*c.height;
-  g.fillStyle="rgba(0,0,0,.55)";
-  g.fillRect(0,0,c.width,y); g.fillRect(0,y+bh,c.width,c.height-y-bh); g.fillRect(0,y,x,bh); g.fillRect(x+bw,y,c.width-x-bw,bh);
-  g.strokeStyle="#F2B544"; g.lineWidth=3*dpr; g.strokeRect(x,y,bw,bh);
+  const rects=[[box(),"#F2B544"]]; const b2=box2(); if(b2) rects.push([b2,"#5ED0E6"]);
+  // 枠の外を暗くする
+  g.save(); g.beginPath(); g.rect(0,0,c.width,c.height);
+  for(const [b] of rects) g.rect(b.x2*c.width,b.y1*c.height,-(b.x2-b.x1)*c.width,(b.y2-b.y1)*c.height);
+  g.fillStyle="rgba(0,0,0,.55)"; g.fill("evenodd"); g.restore();
+  g.lineWidth=3*dpr;
+  for(const [b,col] of rects){ g.strokeStyle=col; g.strokeRect(b.x1*c.width,b.y1*c.height,(b.x2-b.x1)*c.width,(b.y2-b.y1)*c.height); }
 }
 window.addEventListener("resize",()=>drawPreview());
 
@@ -284,11 +298,14 @@ window.addEventListener("resize",()=>drawPreview());
 const SW=256, SH=64;
 const sigCanvas=document.createElement("canvas"); sigCanvas.width=SW; sigCanvas.height=SH;
 const sigCtx=sigCanvas.getContext("2d",{willReadFrequently:true});
-function srcRect(){ const b=box(), W=video.videoWidth, H=video.videoHeight;
+function rectOf(b){ const W=video.videoWidth, H=video.videoHeight;
   return [Math.round(b.x1*W), Math.round(b.y1*H), Math.max(1,Math.round((b.x2-b.x1)*W)), Math.max(1,Math.round((b.y2-b.y1)*H))]; }
+function srcRect(){ return rectOf(box()); }
+function regions(){ const b2=box2(); return b2 ? [box(), b2] : [box()]; }
 function signature(){
-  const [sx,sy,sw,sh]=srcRect(); sigCtx.drawImage(video,sx,sy,sw,sh,0,0,SW,SH);
-  const d=sigCtx.getImageData(0,0,SW,SH).data, g=new Uint8Array(SW*SH);
+  const regs=regions(); sigCanvas.height=SH*regs.length;
+  regs.forEach((b,k)=>{ const [sx,sy,sw,sh]=rectOf(b); sigCtx.drawImage(video,sx,sy,sw,sh,0,SH*k,SW,SH); });
+  const d=sigCtx.getImageData(0,0,SW,SH*regs.length).data, g=new Uint8Array(SW*SH*regs.length);
   for(let i=0,j=0;i<g.length;i++,j+=4) g[i]=(d[j]*299+d[j+1]*587+d[j+2]*114)/1000;
   return g;
 }
@@ -334,9 +351,14 @@ async function scanPhase(job, signal){
 const cropCanvas=document.createElement("canvas");
 async function readPhase(job, signal){
   const states=job.states, nb=Math.ceil(states.length/BATCH);
-  const [sx,sy,sw,sh]=srcRect(), r=Math.min(1,1024/sw);
-  cropCanvas.width=Math.round(sw*r); cropCanvas.height=Math.round(sh*r);
+  // 吹き出し範囲がある場合は「上：吹き出し／下：会話ウィンドウ」の順に縦に並べて1枚にする
+  const parts=(box2()?[box2(),box()]:[box()]).map(rectOf);
+  const CW=Math.min(1024, Math.max(...parts.map(p=>p[2])));
+  const hs=parts.map(p=>Math.round(p[3]*CW/p[2])), GAP=parts.length>1?12:0;
+  cropCanvas.width=CW; cropCanvas.height=hs.reduce((a,b)=>a+b,0)+GAP;
   const g=cropCanvas.getContext("2d");
+  const drawCrop=()=>{ g.fillStyle="#ff00ff"; g.fillRect(0,0,CW,cropCanvas.height); let y=0;
+    parts.forEach(([sx,sy,sw,sh],k)=>{ g.drawImage(video,sx,sy,sw,sh,0,y,CW,hs[k]); y+=hs[k]+GAP; }); };
   persistNow=()=>saveJob(job);
   for(let b=job.next||0;b<nb;b++){
     const batch=states.slice(b*BATCH,(b+1)*BATCH);
@@ -344,7 +366,7 @@ async function readPhase(job, signal){
     try{
       for(const s of batch){
         if(signal.aborted) throw {code:"cancelled"};
-        await seekTo(s.end); g.drawImage(video,sx,sy,sw,sh,0,0,cropCanvas.width,cropCanvas.height);
+        await seekTo(s.end); drawCrop();
         s.b64=cropCanvas.toDataURL("image/jpeg",0.85).split(",")[1];
       }
       setStatus(`名前欄と台詞を読み取っています… ${b+1}/${nb}組目`);
@@ -359,18 +381,25 @@ async function readPhase(job, signal){
 }
 
 /* ---------- Geminiで読み取り ---------- */
-const PROMPT = n => `渡した画像${n}枚は、ゲームの画面録画から切り出した会話ウィンドウ付近の画面です。渡した順に0から番号を振ってください。
-各画像について、名前欄に表示されている話者名と、表示されている台詞を読み取ってください。
+const PROMPT = (n, bubble) => `渡した画像${n}枚は、ゲームの画面録画から切り出した会話部分の画面です。渡した順に0から番号を振ってください。
+${bubble?"各画像は、ピンクの線より上が「吹き出しが出る場所」、下が「会話ウィンドウ（名前欄つき）」です。\n":""}各画像について、会話ウィンドウの名前欄に表示されている話者名と、表示されている台詞を読み取ってください。
 ・名前欄が無い、または空欄の場合は name を空文字にする（ナレーション・地の文として扱います）
 ・名前を囲む記号（【】「」など）は除き、名前だけにする
 ・台詞は改行を除いて1行につなげ、画面の表記どおりに書き写す
-・会話ウィンドウ自体が表示されていない、または台詞が無い場合は text を空文字にする
-次の形式のJSON配列だけを返してください。
-[{"i":0,"name":"話者名","text":"台詞"}]`;
+・会話ウィンドウが表示されていない、または台詞が無い場合は text を空文字にする
+${bubble?"・吹き出しの中に台詞があれば bubble に書き写す（無ければ空文字）。キャラクターの顔や背景の文字は読まない\n":""}次の形式のJSON配列だけを返してください。
+[{"i":0,"name":"話者名","text":"台詞"${bubble?',"bubble":"吹き出しの台詞"':""}}]
 
+`;
 function parseJsonArray(text){
-  try{ const v=JSON.parse(text); if(Array.isArray(v)) return v; }catch{}
+  const pick=v=>{
+    if(Array.isArray(v)) return v;
+    if(v && typeof v==="object"){ for(const x of Object.values(v)) if(Array.isArray(x)) return x; if("text" in v||"name" in v) return [v]; }
+    return null;
+  };
+  try{ const r=pick(JSON.parse(text)); if(r) return r; }catch{}
   const m=text.match(/\[[\s\S]*\]/); if(m){ try{ return JSON.parse(m[0]); }catch{} }
+  const o=text.match(/\{[\s\S]*\}/); if(o){ try{ return pick(JSON.parse(o[0])); }catch{} }
   return null;
 }
 class QuotaError extends Error {}
@@ -380,7 +409,7 @@ async function callGemini(batch, signal){
   const key=store.get("serifu:key"), model=$("model").value;
   const parts=[];
   batch.forEach((s,k)=>{ parts.push({text:`画像${k}`}); parts.push({inline_data:{mime_type:"image/jpeg",data:s.b64}}); });
-  parts.push({text:PROMPT(batch.length)});
+  parts.push({text:PROMPT(batch.length, !!box2())});
   const gen={temperature:0,responseMimeType:"application/json"};
   if(/2\.5-flash/.test(model)) gen.thinkingConfig={thinkingBudget:0}; // 考える時間を省いて速くする
   const ctl=new AbortController(); let timedOut=false;
@@ -400,7 +429,7 @@ async function callGemini(batch, signal){
     const cand=j.candidates?.[0];
     const text=(cand?.content?.parts||[]).map(p=>p.text||"").join("");
     if(!text) throw new Error(`空の応答（${cand?.finishReason||j?.promptFeedback?.blockReason||"理由不明"}）`);
-    return parseJsonArray(text);
+    return {arr:parseJsonArray(text), raw:text};
   }catch(e){
     if(timedOut && !signal.aborted) throw new Error("Geminiから2分以上応答がありませんでした");
     throw e;
@@ -413,10 +442,19 @@ async function readBatch(batch, signal){
     const wait=lastCall+MIN_INTERVAL-Date.now(); if(wait>0) await sleep(wait,signal);
     lastCall=Date.now();
     try{
-      const arr=await callGemini(batch, signal);
-      if(!arr){ if(attempt<1) continue; return; }
-      for(const it of arr){ const k=it?.i; if(Number.isInteger(k)&&k>=0&&k<batch.length){
-        batch[k].name=String(it.name??"").trim(); batch[k].text=String(it.text??"").trim(); batch[k].ok=true; } }
+      const {arr, raw}=await callGemini(batch, signal);
+      if(!arr){ lastError=`応答の形式を読み取れませんでした（${raw.slice(0,60)}）`; if(attempt<1) continue; return; }
+      arr.forEach((it,pos)=>{
+        if(!it || typeof it!=="object") return;
+        let k=Number(it.i ?? it.index ?? it.id);
+        if(!Number.isInteger(k) || k<0 || k>=batch.length) k=pos; // 番号が無い・ずれている場合は並び順で対応
+        if(k>=batch.length) return;
+        const name=it.name ?? it.speaker ?? it["話者"] ?? "";
+        const text=it.text ?? it.line ?? it.dialogue ?? it["台詞"] ?? "";
+        batch[k].name=String(name).trim(); batch[k].text=String(text).trim(); batch[k].ok=true;
+        const bub=it.bubble ?? it["吹き出し"] ?? ""; if(bub) batch[k].bubble=String(bub).trim();
+      });
+      if(!batch.some(s=>s.ok)) lastError=`応答に台詞が含まれていませんでした（${raw.slice(0,60)}）`;
       return;
     }catch(e){
       if(e?.name==="AbortError"||e?.code==="cancelled") throw {code:"cancelled"};
@@ -440,13 +478,22 @@ async function readBatch(batch, signal){
 
 /* ---------- 台詞一覧にまとめる ---------- */
 const norm = s => s.replace(/\s+/g,"");
+const BUBBLE="吹き出し";
 function toRows(states){
-  const out=[];
+  const out=[]; let lastMain=null, lastBubble="";
   for(const s of states){
-    if(!s.text) continue;
-    const speaker=s.name||NARRATION, last=out[out.length-1];
-    if(last && last.speaker===speaker && norm(s.text).startsWith(norm(last.text))){ last.end=s.end; last.text=s.text; continue; }
-    out.push({start:s.start,end:s.end,speaker,text:s.text});
+    if(s.text){
+      const speaker=s.name||NARRATION;
+      if(lastMain && lastMain.speaker===speaker && norm(s.text).startsWith(norm(lastMain.text))){ lastMain.end=s.end; lastMain.text=s.text; }
+      else { lastMain={start:s.start,end:s.end,speaker,text:s.text}; out.push(lastMain); }
+    }
+    const bub=s.bubble||"";
+    if(bub && norm(bub)!==norm(lastBubble)){
+      const prev=out[out.length-1];
+      if(prev && prev.speaker===BUBBLE && norm(bub).startsWith(norm(prev.text))){ prev.text=bub; prev.end=s.end; }
+      else out.push({start:s.start,end:s.end,speaker:BUBBLE,text:bub});
+    }
+    lastBubble=bub;
   }
   return out;
 }
@@ -477,6 +524,9 @@ function applyJobSettings(job){
   const b=job.box, set=(id,v)=>{ const el=$(id); el.value=String(v); el.dispatchEvent(new Event("input")); };
   set("top",Math.round(b.y1*100)); set("bottom",Math.round(b.y2*100)); set("left",Math.round(b.x1*100)); set("right",Math.round(b.x2*100));
   set("step",job.step); set("stable",job.stable); set("thresh",job.thresh);
+  $("useBubble").checked=!!job.box2; store.set("serifu:useBubble",job.box2?"1":"0"); syncBubbleUI();
+  if(job.box2){ const c=job.box2; set("top2",Math.round(c.y1*100)); set("bottom2",Math.round(c.y2*100)); set("left2",Math.round(c.x1*100)); set("right2",Math.round(c.x2*100)); }
+  drawPreview();
 }
 async function run(job){
   const why=blockReason(); if(why){ setStatus(why,true); return; }
@@ -506,7 +556,7 @@ async function run(job){
 $("start").addEventListener("click", ()=>{
   if(blockReason()){ setStatus(blockReason(),true); return; }
   const trial=$("trial").checked;
-  run({key:currentKey, fileName, box:box(), step:+$("step").value, stable:+$("stable").value, thresh:+$("thresh").value,
+  run({key:currentKey, fileName, box:box(), box2:box2(), step:+$("step").value, stable:+$("stable").value, thresh:+$("thresh").value,
        trial, dur: trial?Math.min(180,video.duration):video.duration, phase:"scan",
        scan:{i:0,prev:null,cur:null,stable:0,changeStart:0,lastSig:null}, states:[], next:0});
 });
@@ -517,7 +567,8 @@ function finish(states, prefix, err){
   const readable=states.filter(s=>s.ok);
   if(readable.length){ rows=toRows(states); saveResult(); render(); }
   const failed=states.filter(s=>s.tried && !s.ok).length;
-  const why = lastError ? `理由：${lastError}` : "";
+  const tried=states.filter(s=>s.tried).length;
+  const why = lastError ? `理由：${lastError}` : (tried && !readable.some(s=>s.text||s.bubble) ? "読み取った画面に台詞が見つかりませんでした。" : "");
   const body = readable.length ? `${rows.length}行の台詞を読み取りました。${failed?`（${failed}場面は読み取れていません。${why}）`:""}`
            : (prefix ? "" : `台詞を読み取れませんでした。${why || "範囲に名前欄と台詞が入っているか確認してください。"}`);
   if(!prefix) setBar(1);
@@ -531,17 +582,17 @@ function render(){
   $("resultInfo").textContent=`${fileName}：${rows.length}行（うちナレーション${narr}行）`;
   const ol=$("lines"); ol.replaceChildren();
   for(const r of rows){
-    const li=document.createElement("li"); if(r.speaker===NARRATION) li.className="narr";
+    const li=document.createElement("li"); if(r.speaker===NARRATION||r.speaker===BUBBLE) li.className="narr";
     const p=document.createElement("span"); p.className="plate"; p.textContent=r.speaker;
     const x=document.createElement("div"); x.className="txt"; x.textContent=r.text;
     li.append(p,x); ol.append(li);
   }
 }
-const line = r => r.speaker===NARRATION ? `（ナレーション）${r.text}` : `${r.speaker}「${r.text}」`;
+const line = r => r.speaker===NARRATION ? `（ナレーション）${r.text}` : r.speaker===BUBBLE ? `（吹き出し）${r.text}` : `${r.speaker}「${r.text}」`;
 const csvCell = v => `"${String(v).replace(/"/g,'""')}"`;
 const builders = {
   txt: () => rows.map(line).join("\n")+"\n",
-  srt: () => rows.map((r,i)=>`${i+1}\n${ts(r.start,true)} --> ${ts(Math.max(r.end,r.start+1),true)}\n${r.speaker===NARRATION?r.text:`【${r.speaker}】${r.text}`}\n`).join("\n"),
+  srt: () => rows.map((r,i)=>`${i+1}\n${ts(r.start,true)} --> ${ts(Math.max(r.end,r.start+1),true)}\n${r.speaker===NARRATION?r.text:r.speaker===BUBBLE?`（吹き出し）${r.text}`:`【${r.speaker}】${r.text}`}\n`).join("\n"),
   csv: () => "\uFEFF"+[["話者","台詞"],...rows.map(r=>[r.speaker,r.text])].map(a=>a.map(csvCell).join(",")).join("\r\n")+"\r\n",
 };
 const MIME={txt:"text/plain",srt:"application/x-subrip",csv:"text/csv"};

@@ -103,10 +103,10 @@ ol.steps{padding-left:1.3em;margin:6px 0;font-size:14px}
     <select id="model"><option value="">キーを保存すると選べます</option></select>
     <div id="keyStatus" class="hint" aria-live="polite"></div>
     <details>
-      <summary>料金の目安の設定</summary>
-      <p class="hint">Geminiが返す実際の使用量（トークン数）に、下の単価をかけて目安を出します。単価はモデルや時期で変わるので、Googleの料金ページで確認して直してください。無料枠で使っている場合、実際の請求は0円です。</p>
-      <label class="hint" for="priceIn">入力の単価（ドル／100万トークン）</label><input id="priceIn" type="text" inputmode="decimal">
-      <label class="hint" for="priceOut">出力の単価（ドル／100万トークン）</label><input id="priceOut" type="text" inputmode="decimal">
+      <summary>料金の目安について</summary>
+      <p class="hint">料金の目安は、どのモデルを選んでいても <b>Gemini 3.8 Flash（gemini-3.8-flash）</b> の通常料金で計算します。Geminiが毎回返す実際の使用量（トークン数）に、次の単価をかけています。</p>
+      <p class="hint" id="priceInfo"></p>
+      <p class="hint">無料枠で使っている場合、実際の請求は0円です。</p>
       <label class="hint" for="fx">為替（円／1ドル）</label><input id="fx" type="text" inputmode="decimal">
       <button id="costReset" class="sub" style="margin-top:8px">累計をリセット</button>
     </details>
@@ -140,7 +140,7 @@ ol.steps{padding-left:1.3em;margin:6px 0;font-size:14px}
   <section id="secRun" hidden>
     <h2><span class="no">3</span>読み取る</h2>
     <label class="check"><input id="guessBubble" type="checkbox" checked><span>吹き出しの話者を前後の会話から推定する<br><small style="color:var(--muted)">推定した名前には「（推定）」が付きます。推定できない場合は「（吹き出し）」のままです。</small></span></label>
-    <label class="check"><input id="trial" type="checkbox" checked><span>お試し：最初の3分だけ読み取る<br><small style="color:var(--muted)">範囲や設定が合っているか確認してから本番にすると、無料枠の回数を節約できます。</small></span></label>
+    <label class="check"><input id="trial" type="checkbox"><span>お試し：最初の3分だけ読み取る<br><small style="color:var(--muted)">範囲や設定が合っているか確認してから本番にすると、無料枠の回数を節約できます。</small></span></label>
     <details>
       <summary>検出の細かい設定</summary>
       <label class="sl">間隔<input id="step" type="range" min="0.15" max="1" step="0.05" value="0.3"><output></output></label>
@@ -200,8 +200,8 @@ ol.steps{padding-left:1.3em;margin:6px 0;font-size:14px}
 
 <script>
 const $ = id => document.getElementById(id);
-const APP_BUILD = 17; // アップデートの回数（更新のたびに1つ増やす）
-const APP_UPDATED = "2026-10-07 12:16:58"; // 更新した日時（日本時間）
+const APP_BUILD = 18; // アップデートの回数（更新のたびに1つ増やす）
+const APP_UPDATED = "2026-10-07 12:48:53"; // 更新した日時（日本時間）
 const APP_VERSION = `第${APP_BUILD}版（${APP_UPDATED} 更新）`;
 let currentStep = "待機中";
 $("build").textContent = APP_VERSION;
@@ -255,13 +255,17 @@ let seekTimeouts=0, lastSentImages=[];
 function setBar(p){ $("barFill").style.width=`${Math.round(Math.min(1,Math.max(0,p))*100)}%`; }
 
 /* ---------- Geminiの推定利用料金 ---------- */
-const PRICE_DEFAULT={in:0.375, out:1.88, fx:150};
-const num=(v,d)=>{ const n=parseFloat(String(v??"").replace(/[^0-9.]/g,"")); return isFinite(n)&&n>=0?n:d; };
-const price=()=>({in:num(store.get("serifu:priceIn"),PRICE_DEFAULT.in), out:num(store.get("serifu:priceOut"),PRICE_DEFAULT.out), fx:num(store.get("serifu:fx"),PRICE_DEFAULT.fx)});
+// Gemini 3.8 Flash の通常（Standard）料金・100万トークンあたりのドル（Google公式の料金ページより）
+// 2026年12月31日までは入力0.75・出力3.75、2027年1月1日からは入力1.50・出力7.50。考える処理（thinking）のトークンも出力として計算
+const PRICE_MODEL="Gemini 3.8 Flash（gemini-3.8-flash）";
+const PRICE_TABLE=[{until:new Date("2027-01-01T00:00:00Z"), in:0.75, out:3.75},{until:null, in:1.50, out:7.50}];
+const FX_DEFAULT=150;
+const num=(v,d)=>{ const n=parseFloat(String(v??"").replace(/[^0-9.]/g,"")); return isFinite(n)&&n>0?n:d; };
+const price=()=>{ const now=new Date(); const p=PRICE_TABLE.find(x=>!x.until||now<x.until); return {in:p.in, out:p.out, fx:num(store.get("serifu:fx"),FX_DEFAULT)}; };
 let curUsage=null; // 今回の処理の使用量（途中経過と一緒に保存される）
 function loadTotal(){ try{ return JSON.parse(localStorage.getItem("serifu:usageTotal")||"null")||{in:0,out:0,calls:0}; }catch{ return {in:0,out:0,calls:0}; } }
 function yen(u){ const p=price(); return (u.in*p.in + u.out*p.out)/1e6*p.fx; }
-const fmtYen=v=> v<1 ? `約${v.toFixed(2)}円` : `約${Math.round(v).toLocaleString("ja-JP")}円`;
+const fmtYen=v=> v<10 ? `約${v.toFixed(2)}円` : `約${Math.round(v).toLocaleString("ja-JP")}円`;
 function addUsage(j, kind){
   const m=j?.usageMetadata; if(!m) return;
   const inT=m.promptTokenCount||0, outT=(m.candidatesTokenCount||0)+(m.thoughtsTokenCount||0);
@@ -271,13 +275,13 @@ function addUsage(j, kind){
 }
 function showCost(){
   const tot=loadTotal(), el=$("cost"); if(!el) return;
-  const cur=curUsage ? `今回の推定料金：${fmtYen(yen(curUsage))}（入力${curUsage.in.toLocaleString("ja-JP")}・出力${curUsage.out.toLocaleString("ja-JP")}トークン／${curUsage.calls}回）　` : "";
+  const cur=curUsage ? `今回の推定料金（${PRICE_MODEL}で計算）：${fmtYen(yen(curUsage))}（入力${curUsage.in.toLocaleString("ja-JP")}・出力${curUsage.out.toLocaleString("ja-JP")}トークン／${curUsage.calls}回）　` : "";
   el.textContent = (curUsage||tot.calls) ? `${cur}累計：${fmtYen(yen(tot))}（${tot.calls}回）` : "";
 }
-[["priceIn","in"],["priceOut","out"],["fx","fx"]].forEach(([id,k])=>{
-  const el=$(id); el.value=String(price()[k]);
-  el.addEventListener("change",()=>{ store.set("serifu:"+id, String(num(el.value,PRICE_DEFAULT[k]))); el.value=String(price()[k]); showCost(); });
-});
+function showPriceInfo(){ const p=price(); $("priceInfo").textContent=`現在の単価：入力 ${p.in}ドル・出力 ${p.out}ドル（100万トークンあたり）／為替 ${p.fx}円`; }
+$("fx").value=String(price().fx);
+$("fx").addEventListener("change",()=>{ store.set("serifu:fx", String(num($("fx").value,FX_DEFAULT))); $("fx").value=String(price().fx); showPriceInfo(); showCost(); });
+showPriceInfo();
 $("costReset").addEventListener("click",()=>{ try{ localStorage.removeItem("serifu:usageTotal"); }catch{} showCost(); $("costReset").textContent="リセットしました"; setTimeout(()=>$("costReset").textContent="累計をリセット",2000); });
 showCost();
 
@@ -932,7 +936,7 @@ function finish(states, prefix, err){
 function render(){
   $("secResult").hidden=!rows.length;
   const narr=rows.filter(r=>r.speaker===NARRATION).length;
-  $("resultInfo").textContent=`${fileName}：${rows.length}行（うちナレーション${narr}行）`;
+  $("resultInfo").textContent=`${fileName}：${rows.length}行（うちナレーション${narr}行）${resultMadeAt?`　作成：${resultMadeAt}`:""}`;
   const ol=$("lines"); ol.replaceChildren();
   for(const r of rows){
     const li=document.createElement("li"); if(r.speaker===NARRATION||r.speaker===BUBBLE) li.className="narr";
@@ -981,8 +985,10 @@ $("copy").addEventListener("click", async ()=>{
 })();
 
 /* ---------- 前回の結果を保持 ---------- */
-function saveResult(){ store.set("serifu:last",JSON.stringify({fileName,rows})); }
-(() => { try{ const d=JSON.parse(store.get("serifu:last")||"null"); if(d?.rows?.length){ fileName=d.fileName; rows=d.rows; render(); $("resultInfo").textContent+="（前回の結果）"; } }catch{} })();
+let resultMadeAt="";
+function stamp(d=new Date()){ const p=n=>String(n).padStart(2,"0"); return `${d.getFullYear()}-${p(d.getMonth()+1)}-${p(d.getDate())} ${p(d.getHours())}:${p(d.getMinutes())}:${p(d.getSeconds())}`; }
+function saveResult(){ resultMadeAt=stamp(); store.set("serifu:last",JSON.stringify({fileName,rows,madeAt:resultMadeAt})); }
+(() => { try{ const d=JSON.parse(store.get("serifu:last")||"null"); if(d?.rows?.length){ fileName=d.fileName; rows=d.rows; resultMadeAt=d.madeAt||""; render(); $("resultInfo").textContent+=`（前回の結果${resultMadeAt?`・${resultMadeAt} 作成`:""}）`; } }catch{} })();
 </script>
 </body>
 </html>

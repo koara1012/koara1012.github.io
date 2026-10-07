@@ -102,6 +102,14 @@ ol.steps{padding-left:1.3em;margin:6px 0;font-size:14px}
     <label for="model" class="hint" style="display:block;margin-top:12px">使うモデル</label>
     <select id="model"><option value="">キーを保存すると選べます</option></select>
     <div id="keyStatus" class="hint" aria-live="polite"></div>
+    <details>
+      <summary>料金の目安の設定</summary>
+      <p class="hint">Geminiが返す実際の使用量（トークン数）に、下の単価をかけて目安を出します。単価はモデルや時期で変わるので、Googleの料金ページで確認して直してください。無料枠で使っている場合、実際の請求は0円です。</p>
+      <label class="hint" for="priceIn">入力の単価（ドル／100万トークン）</label><input id="priceIn" type="text" inputmode="decimal">
+      <label class="hint" for="priceOut">出力の単価（ドル／100万トークン）</label><input id="priceOut" type="text" inputmode="decimal">
+      <label class="hint" for="fx">為替（円／1ドル）</label><input id="fx" type="text" inputmode="decimal">
+      <button id="costReset" class="sub" style="margin-top:8px">累計をリセット</button>
+    </details>
   </section>
 
   <section>
@@ -154,6 +162,7 @@ ol.steps{padding-left:1.3em;margin:6px 0;font-size:14px}
       <button id="stop" class="sub" hidden>中止</button>
     </div>
     <div class="bar"><i id="barFill"></i></div>
+    <div id="cost" class="hint" aria-live="polite"></div>
     <div id="status" aria-live="polite"></div>
     <div id="errBox" class="notice err" hidden>
       <div>エラーの詳細です。下のボタンでコピーして、そのままClaudeに貼り付けて送ってください。</div>
@@ -191,8 +200,9 @@ ol.steps{padding-left:1.3em;margin:6px 0;font-size:14px}
 
 <script>
 const $ = id => document.getElementById(id);
-const APP_BUILD = 16; // アップデートの回数（更新のたびに1つ増やす）
-const APP_VERSION = `第${APP_BUILD}版（2026-10-07）`;
+const APP_BUILD = 17; // アップデートの回数（更新のたびに1つ増やす）
+const APP_UPDATED = "2026-10-07 12:16:58"; // 更新した日時（日本時間）
+const APP_VERSION = `第${APP_BUILD}版（${APP_UPDATED} 更新）`;
 let currentStep = "待機中";
 $("build").textContent = APP_VERSION;
 const video = $("video");
@@ -244,6 +254,33 @@ function logApi(o){ apiLog.push(o); if(apiLog.length>6) apiLog.shift(); log(`API
 let seekTimeouts=0, lastSentImages=[];
 function setBar(p){ $("barFill").style.width=`${Math.round(Math.min(1,Math.max(0,p))*100)}%`; }
 
+/* ---------- Geminiの推定利用料金 ---------- */
+const PRICE_DEFAULT={in:0.375, out:1.88, fx:150};
+const num=(v,d)=>{ const n=parseFloat(String(v??"").replace(/[^0-9.]/g,"")); return isFinite(n)&&n>=0?n:d; };
+const price=()=>({in:num(store.get("serifu:priceIn"),PRICE_DEFAULT.in), out:num(store.get("serifu:priceOut"),PRICE_DEFAULT.out), fx:num(store.get("serifu:fx"),PRICE_DEFAULT.fx)});
+let curUsage=null; // 今回の処理の使用量（途中経過と一緒に保存される）
+function loadTotal(){ try{ return JSON.parse(localStorage.getItem("serifu:usageTotal")||"null")||{in:0,out:0,calls:0}; }catch{ return {in:0,out:0,calls:0}; } }
+function yen(u){ const p=price(); return (u.in*p.in + u.out*p.out)/1e6*p.fx; }
+const fmtYen=v=> v<1 ? `約${v.toFixed(2)}円` : `約${Math.round(v).toLocaleString("ja-JP")}円`;
+function addUsage(j, kind){
+  const m=j?.usageMetadata; if(!m) return;
+  const inT=m.promptTokenCount||0, outT=(m.candidatesTokenCount||0)+(m.thoughtsTokenCount||0);
+  const tot=loadTotal(); tot.in+=inT; tot.out+=outT; tot.calls++; store.set("serifu:usageTotal",JSON.stringify(tot));
+  if(curUsage){ curUsage.in+=inT; curUsage.out+=outT; curUsage.calls++; }
+  showCost();
+}
+function showCost(){
+  const tot=loadTotal(), el=$("cost"); if(!el) return;
+  const cur=curUsage ? `今回の推定料金：${fmtYen(yen(curUsage))}（入力${curUsage.in.toLocaleString("ja-JP")}・出力${curUsage.out.toLocaleString("ja-JP")}トークン／${curUsage.calls}回）　` : "";
+  el.textContent = (curUsage||tot.calls) ? `${cur}累計：${fmtYen(yen(tot))}（${tot.calls}回）` : "";
+}
+[["priceIn","in"],["priceOut","out"],["fx","fx"]].forEach(([id,k])=>{
+  const el=$(id); el.value=String(price()[k]);
+  el.addEventListener("change",()=>{ store.set("serifu:"+id, String(num(el.value,PRICE_DEFAULT[k]))); el.value=String(price()[k]); showCost(); });
+});
+$("costReset").addEventListener("click",()=>{ try{ localStorage.removeItem("serifu:usageTotal"); }catch{} showCost(); $("costReset").textContent="リセットしました"; setTimeout(()=>$("costReset").textContent="累計をリセット",2000); });
+showCost();
+
 /* ---------- エラー報告（Claudeに送る用） ---------- */
 function reportError(e, where, jobArg){
   let job=jobArg||null; if(!job){ try{ job=JSON.parse(localStorage.getItem("serifu:job")||"null"); }catch{} }
@@ -263,6 +300,7 @@ function reportError(e, where, jobArg){
     job?.diag ? `場面探しの診断: 確認${job.diag.samples}回, 全く同じ画面${job.diag.same}回, 変化あり${job.diag.changes}回` : "",
     job ? `その時の範囲: ${JSON.stringify(job.box)} 吹き出し: ${JSON.stringify(job.box2||null)} 間隔${job.step} 静止${job.stable} 感度${job.thresh}` : "",
     `オンライン: ${navigator.onLine}`,
+    `使用量: 今回=${JSON.stringify(curUsage)} 累計=${JSON.stringify(loadTotal())} 単価=${JSON.stringify(price())}`,
     `保存データ: ${(()=>{ try{ let n=0; for(let k=0;k<localStorage.length;k++){ const key=localStorage.key(k); n+=(localStorage.getItem(key)||"").length; } return Math.round(n/1024)+"KB"; }catch{ return "不明"; } })()} / 途中経過=${localStorage.getItem("serifu:job")?"あり":"なし"} / 録画の識別=${JSON.stringify(typeof currentRec!=="undefined"?currentRec:null)}`,
     `端末: ${navigator.userAgent}`,
     `画面: ${window.screen?.width}x${window.screen?.height} 倍率${window.devicePixelRatio} / シーク待ち超過: ${seekTimeouts}回`,
@@ -427,7 +465,7 @@ function stdev(a){ let s=0,s2=0; for(const v of a){s+=v;s2+=v*v;} const m=s/a.le
 // iPhoneのSafariは、動画の位置移動を何千回もくり返すとメモリがたまり、ページごと落ちることがある。
 // 一定回数ごとに動画を読み込み直して、たまったメモリを解放する。
 let seeksSinceReload=0;
-const RELOAD_EVERY=300;
+const RELOAD_EVERY=60;
 async function maybeReloadVideo(){
   if(++seeksSinceReload<RELOAD_EVERY || !objUrl) return;
   seeksSinceReload=0;
@@ -438,6 +476,38 @@ async function maybeReloadVideo(){
     await once(video,"loadedmetadata",8000); await once(video,"loadeddata",4000);
     log("動画を読み込み直した（メモリ対策）");
   }catch(e){ log(`動画の読み込み直しに失敗：${e?.message||e}`); }
+}
+
+/* ---------- 再生しながら調べる ---------- */
+const PLAY_RATE=2; // 2倍速で再生しながら調べる
+function scanByPlayback(fromT, dur, step, onSample, signal, persist){
+  return new Promise(async (resolve, reject)=>{
+    if(!video.requestVideoFrameCallback || fromT>dur){ resolve(fromT>dur); return; }
+    try{ await seekTo(Math.max(0,fromT)); video.muted=true; video.playbackRate=PLAY_RATE; await video.play(); }
+    catch(e){ log(`再生できないため位置移動の方式に切り替え：${e?.message||e}`); try{ video.pause(); }catch{} resolve(false); return; }
+    log(`再生しながら調べる方式で開始（${fmt(fromT)}から・${PLAY_RATE}倍速）`);
+    let done=false, next=fromT, lastMedia=-1, lastProgress=Date.now();
+    const stop=(fn)=>{ if(done) return; done=true; clearInterval(watch); try{ video.pause(); video.playbackRate=1; }catch{} fn(); };
+    const cb=(now, meta)=>{
+      if(done) return;
+      if(signal.aborted){ persist(); stop(()=>reject({code:"cancelled"})); return; }
+      const mt=Math.min(meta?.mediaTime ?? video.currentTime, dur);
+      if(mt!==lastMedia){ lastMedia=mt; lastProgress=Date.now(); }
+      try{ if(mt>=next-1e-4){ onSample(+mt.toFixed(3)); while(next<=mt+1e-4) next+=step; } }
+      catch(e){ stop(()=>reject(e)); return; }
+      if(mt>=dur-0.02){ stop(()=>resolve(true)); return; }
+      video.requestVideoFrameCallback(cb);
+    };
+    video.requestVideoFrameCallback(cb);
+    const watch=setInterval(()=>{
+      if(done) return;
+      if(signal.aborted){ persist(); stop(()=>reject({code:"cancelled"})); return; }
+      if(video.ended || video.currentTime>=dur-0.05){ stop(()=>resolve(true)); return; }
+      if(document.hidden){ lastProgress=Date.now(); return; }          // 裏に回っている間は待つ
+      if(video.paused) video.play().catch(()=>{});                       // 戻ってきたら再生を続ける
+      if(Date.now()-lastProgress>15000){ log("再生が15秒以上止まったため、位置移動の方式に切り替え"); stop(()=>resolve(false)); }
+    },1000);
+  });
 }
 
 /* ---------- 途中経過の保存（再開用） ---------- */
@@ -479,13 +549,13 @@ async function scanPhase(job, signal){
     if(S.lastSig && changed(S.lastSig,c.sig)<thrOf(S,r)){ for(let k=states.length-1;k>=0;k--) if((states[k].r||0)===r){ states[k].end=c.end; break; } }
     else states.push({start:c.start,end:c.end,firm:c.firm??c.end,r});
     S.lastSig=c.sig; };
-  const persist=()=>{ job.scan={i, regs:R.map(S=>({prev:enc(S.prev), cur:S.cur&&{start:S.cur.start,firm:S.cur.firm,end:S.cur.end,sig:enc(S.cur.sig)},
+  const persist=()=>{ job.scan={i, t:lastT, regs:R.map(S=>({prev:enc(S.prev), cur:S.cur&&{start:S.cur.start,firm:S.cur.firm,end:S.cur.end,sig:enc(S.cur.sig)},
       stable:S.stable, changeStart:S.changeStart, lastSig:enc(S.lastSig), hist:S.hist.slice(-40)}))}; saveJob(job); };
   persistNow=persist;
   const diag=job.diag=job.diag||{samples:0,same:0,changes:0};
-  for(;i<=total;i++){
-    if(signal.aborted){ persist(); throw {code:"cancelled"}; }
-    const t=i*step; await maybeReloadVideo(); await seekTo(t);
+  let lastT = sc.t ?? (i>0 ? (i-1)*step : -1); // 最後に調べた時刻
+  let count=0;
+  const sample=(t)=>{
     regs.forEach((b,r)=>{
       const S=R[r], sig=sigOf(b);
       if(S.prev){
@@ -496,8 +566,19 @@ async function scanPhase(job, signal){
       if(S.stable>=need){ if(!S.cur) S.cur={start:S.changeStart,firm:Math.max(S.changeStart,t-need*step),end:t,sig}; /* firm＝同じ画面が続いていると確かめられた最初の時刻 */ else { S.cur.end=t; S.cur.sig=sig; } }
       S.prev=sig;
     });
-    if(i%10===0){ setBar(0.5*i/total); setStatus(`台詞の場面を探しています… ${fmt(t)} / ${fmt(dur)}（${states.length}件）`); }
-    if(i%20===0){ i++; persist(); i--; }
+    lastT=t; i=Math.round(t/step)+1; count++;
+    if(count%10===0){ setBar(0.5*Math.min(1,t/dur)); setStatus(`台詞の場面を探しています… ${fmt(t)} / ${fmt(dur)}（${states.length}件）`); }
+    if(count%20===0) persist();
+  };
+  // まずは「動画を再生しながら一定間隔で調べる」方式（位置の移動を何千回もくり返さないので、iPhoneでも軽くて速い）
+  const played = await scanByPlayback(lastT+step, dur, step, sample, signal, persist);
+  // 再生できない・途中で止まった場合は、これまでの「位置を移動して調べる」方式で残りを調べる
+  if(!played){
+    log(`位置を移動して調べる方式で続行（${fmt(Math.max(0,lastT))}から）`);
+    for(let k=Math.round((lastT+step)/step); k*step<=dur+1e-9; k++){
+      if(signal.aborted){ persist(); throw {code:"cancelled"}; }
+      const t=+(k*step).toFixed(4); await maybeReloadVideo(); await seekTo(t); sample(t);
+    }
   }
   R.forEach((S,r)=>commit(r,S.cur));
   // 切り出す瞬間は「表示が止まっている時間の真ん中」にする。
@@ -594,6 +675,7 @@ async function callGemini(batch, signal){
       body:JSON.stringify({contents:[{role:"user",parts}],generationConfig:gen}),
     });
     const j=await res.json().catch(()=>({}));
+    addUsage(j,"読み取り");
     if(!res.ok) logApi({kind:"読み取り", status:res.status, ms:Date.now()-t0, images:batch.length, model, note:(j?.error?.message||"").slice(0,160), snippet:JSON.stringify(j).slice(0,400)});
     if(res.status===429){ const msg=j?.error?.message||""; const e=new QuotaError(msg); e.daily=/per.?day|daily|PerDay/i.test(msg); throw e; }
     if(!res.ok) throw new Error(j?.error?.message||`HTTP ${res.status}`);
@@ -699,6 +781,7 @@ async function callGeminiText(prompt, signal){
       headers:{"Content-Type":"application/json","x-goog-api-key":key},
       body:JSON.stringify({contents:[{role:"user",parts:[{text:prompt}]}],generationConfig:gen})});
     const j=await res.json().catch(()=>({}));
+    addUsage(j,"話者推定");
     logApi({kind:"話者推定", status:res.status, ms:0, images:0, model, note:res.ok?"":(j?.error?.message||"").slice(0,160), snippet:JSON.stringify(j?.candidates?.[0]?.content?.parts?.[0]?.text??j).slice(0,300)});
     if(res.status===429){ const msg=j?.error?.message||""; const e=new QuotaError(msg); e.daily=/per.?day|daily|PerDay/i.test(msg); throw e; }
     if(!res.ok) throw new Error(j?.error?.message||`HTTP ${res.status}`);
@@ -759,7 +842,7 @@ function blockReason(){
   return "";
 }
 function jobProgress(job){
-  if(job.phase==="scan") return `台詞の場面探し ${fmt((job.scan?.i||0)*job.step)} / ${fmt(job.dur)}`;
+  if(job.phase==="scan") return `台詞の場面探し ${fmt(Math.max(0, job.scan?.t ?? (job.scan?.i||0)*job.step))} / ${fmt(job.dur)}`;
   if(job.phase==="guess") return "吹き出しの話者推定";
   return `読み取り ${job.next||0} / ${Math.ceil(job.states.length/BATCH)}組（全${job.states.length}場面）`;
 }
@@ -789,6 +872,7 @@ function applyJobSettings(job){
 async function run(job){
   const why=blockReason(); if(why){ setStatus(why,true); return; }
   lastError=""; $("errBox").hidden=true; lastJobRef=job; finishGuesses=job.guesses||null;
+  job.usage=job.usage||{in:0,out:0,calls:0}; curUsage=job.usage; showCost();
   abortCtl=new AbortController(); const signal=abortCtl.signal;
   $("start").hidden=true; $("resumeBox").hidden=true; $("stop").hidden=false;
   try{ wakeLock=await navigator.wakeLock?.request("screen"); }catch{}

@@ -18,7 +18,7 @@ h1{font-size:22px;margin:4px 0 0}
 section{background:var(--card);border:1px solid var(--line);border-radius:14px;padding:16px;margin:14px 0}
 h2{font-size:18px;margin:0 0 8px}
 p.note{color:var(--sub);font-size:14px;margin:6px 0}
-label{display:block;font-size:14px;color:var(--sub);margin:10px 0 4px}
+label.lb{display:block;font-size:14px;color:var(--sub);margin:10px 0 4px}
 input[type=text],input[type=password],input[type=number]{width:100%;padding:10px 12px;border-radius:10px;border:1px solid var(--line);background:#0e1017;color:var(--text);font-size:16px}
 input[type=file]{width:100%;color:var(--sub);font-size:14px}
 button{appearance:none;-webkit-appearance:none;border:1px solid var(--line);background:#0e1017;color:var(--text);border-radius:12px;padding:12px 10px;font-size:15px;line-height:1.35;cursor:pointer;width:100%}
@@ -27,15 +27,24 @@ button:disabled{opacity:.4}
 .row{display:flex;gap:10px;margin-top:10px}
 .row>*{flex:1}
 .grid2{display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-top:12px}
-video{width:100%;border-radius:10px;background:#000;max-height:260px}
-canvas#regionCanvas{width:100%;border-radius:10px;background:#000;touch-action:none;display:block;margin-top:10px}
+/* 動画は画面には出さず、下の確認画面に描いて使う（前回のセリフ起こしと同じ方式） */
+video{position:fixed;left:0;bottom:0;width:64px;height:36px;opacity:.02;pointer-events:none;z-index:-1}
+.fileinfo{font-size:13px;color:var(--sub);margin-top:8px;word-break:break-all}
+/* 範囲選択（前回のセリフ起こしと同じ形式） */
+.stage{position:relative;background:#000;border-radius:10px;overflow:hidden;margin:10px 0;touch-action:none}
+.stage canvas{display:block;width:100%;height:auto}
+label.sl{display:grid;grid-template-columns:4.5em 1fr 3em;align-items:center;gap:8px;font-size:14px;margin:4px 0}
+label.sl output{text-align:right;color:var(--sub);font-variant-numeric:tabular-nums}
+input[type=range]{width:100%;accent-color:var(--accent)}
+.check{display:flex;gap:10px;align-items:flex-start;font-size:14px;margin:10px 0}
+.check input{width:20px;height:20px;margin-top:2px;accent-color:var(--accent);flex:none}
+[hidden]{display:none!important}
 .status{font-size:15px;margin-top:10px;white-space:pre-wrap}
 .bar{height:8px;background:#0e1017;border-radius:4px;overflow:hidden;margin-top:8px}
 .bar>div{height:100%;width:0;background:var(--accent);transition:width .3s}
 .warn{color:var(--warn)} .err{color:var(--err)} .ok{color:var(--ok)}
 details summary{cursor:pointer;color:var(--sub);font-size:15px}
 .set2{display:grid;grid-template-columns:1fr 1fr;gap:0 10px}
-.chk{display:flex;align-items:center;gap:8px;margin-top:10px;color:var(--sub);font-size:14px}
 #list{margin-top:10px;max-height:420px;overflow-y:auto;-webkit-overflow-scrolling:touch}
 .item{display:flex;gap:8px;align-items:center;border-top:1px solid var(--line);padding:8px 0}
 .item .play{width:44px;flex:none;padding:8px 0}
@@ -54,25 +63,34 @@ details summary{cursor:pointer;color:var(--sub);font-size:15px}
 
 <section>
   <h2>① APIキー</h2>
-  <label for="apiKey">Gemini APIキー（この端末にだけ保存されます）</label>
+  <label class="lb" for="apiKey">Gemini APIキー（この端末にだけ保存されます）</label>
   <input type="password" id="apiKey" autocomplete="off" placeholder="AIza...">
-  <div class="chk"><input type="checkbox" id="showKey"><span>キーを表示</span></div>
+  <div class="check"><input type="checkbox" id="showKey"><span>キーを表示</span></div>
 </section>
 
 <section>
   <h2>② 動画を選ぶ</h2>
   <input type="file" id="file" accept="video/*">
+  <div id="fileInfo" class="fileinfo"></div>
   <p class="note">BGM・効果音をオフにして録画した動画を選んでください。目安は1本15〜20分です。</p>
-  <video id="video" playsinline webkit-playsinline controls preload="auto"></video>
 </section>
 
-<section>
-  <h2>③ 名前欄の範囲を決める</h2>
-  <p class="note">上の動画でセリフが表示されている場面まで進めてから下のボタンを押し、<b>名前欄とセリフの文章が両方入るように</b>指でなぞって囲んでください。</p>
-  <button id="snapBtn">この画面で範囲を決める</button>
-  <canvas id="regionCanvas" width="640" height="360"></canvas>
-  <p class="note" id="regionInfo">範囲：未設定</p>
-  <p class="note">画面が真っ黒なときは、動画を一度再生して止めてから押し直してください。</p>
+<section id="secRange" hidden>
+  <h2>③ 会話ウィンドウの範囲を合わせる</h2>
+  <p class="note">台詞が表示されている場面を選び、明るい枠の中に名前欄と台詞の両方が入るように調整してください。</p>
+  <label class="sl">場面<input id="seek" type="range" min="0" max="1" step="0.1" value="0"><output id="seekOut">0:00</output></label>
+  <div class="stage"><canvas id="preview" width="640" height="360"></canvas></div>
+  <label class="sl">上端<input id="top" type="range" min="0" max="100" value="60"><output></output></label>
+  <label class="sl">下端<input id="bottom" type="range" min="0" max="100" value="100"><output></output></label>
+  <label class="sl">左端<input id="left" type="range" min="0" max="100" value="0"><output></output></label>
+  <label class="sl">右端<input id="right" type="range" min="0" max="100" value="100"><output></output></label>
+  <label class="check"><input id="useBubble" type="checkbox"><span>吹き出しの範囲も見る<br><small style="color:var(--sub)">名前欄とは別の場所に吹き出しの台詞が出るゲーム向けです。水色の枠を吹き出しが出る場所に合わせてください。吹き出しが出ている間のボイスは、すべて「吹き出し」フォルダに入ります。</small></span></label>
+  <div id="bubbleBox" hidden>
+    <label class="sl">上端<input id="top2" type="range" min="0" max="100" value="0"><output></output></label>
+    <label class="sl">下端<input id="bottom2" type="range" min="0" max="100" value="32"><output></output></label>
+    <label class="sl">左端<input id="left2" type="range" min="0" max="100" value="35"><output></output></label>
+    <label class="sl">右端<input id="right2" type="range" min="0" max="100" value="100"><output></output></label>
+  </div>
 </section>
 
 <section>
@@ -80,16 +98,16 @@ details summary{cursor:pointer;color:var(--sub);font-size:15px}
   <details>
     <summary>開く（通常は変更不要）</summary>
     <div class="set2">
-      <div><label>声とみなす音量（dB）</label><input type="number" id="sThr" step="1"></div>
-      <div><label>区切りとみなす無音（ミリ秒）</label><input type="number" id="sSil" step="50"></div>
-      <div><label>前後の余白（ミリ秒）</label><input type="number" id="sPad" step="10"></div>
-      <div><label>最短のセリフ（ミリ秒）</label><input type="number" id="sMin" step="50"></div>
-      <div><label>1回に送るセリフ数</label><input type="number" id="sBatch" step="1"></div>
-      <div><label>結合する間隔の上限（秒）</label><input type="number" id="sMerge" step="0.5"></div>
+      <div><label class="lb">声とみなす音量（dB）</label><input type="number" id="sThr" step="1"></div>
+      <div><label class="lb">区切りとみなす無音（ミリ秒）</label><input type="number" id="sSil" step="50"></div>
+      <div><label class="lb">前後の余白（ミリ秒）</label><input type="number" id="sPad" step="10"></div>
+      <div><label class="lb">最短のセリフ（ミリ秒）</label><input type="number" id="sMin" step="50"></div>
+      <div><label class="lb">1回に送るセリフ数</label><input type="number" id="sBatch" step="1"></div>
+      <div><label class="lb">結合する間隔の上限（秒）</label><input type="number" id="sMerge" step="0.5"></div>
     </div>
-    <label>Geminiのモデル名</label>
+    <label class="lb">Geminiのモデル名</label>
     <input type="text" id="sModel" autocapitalize="off" autocorrect="off">
-    <div class="chk"><input type="checkbox" id="sListen"><span>処理中に音を鳴らす</span></div>
+    <div class="check"><input type="checkbox" id="sListen"><span>処理中に音を鳴らす</span></div>
     <div class="row"><button id="resetSet">初期値に戻す</button></div>
     <p class="note">セリフが途中で割れる → 「区切りとみなす無音」を大きく。2つのセリフがくっつく → 小さく。声が拾えない → 「声とみなす音量」を小さく（例 -55）。</p>
   </details>
@@ -98,6 +116,7 @@ details summary{cursor:pointer;color:var(--sub);font-size:15px}
 <section>
   <h2>⑤ 収集する</h2>
   <p class="note">動画は等速で再生しながら処理するため、動画と同じ時間がかかります。処理中はSafariを開いたままにしてください。</p>
+  <p class="note">話者は推定しません。セリフの最初から最後まで同じ名前が確実に読めたものだけをキャラ名のフォルダに入れ、少しでも確実でないものは「不明」、吹き出しは「吹き出し」に入れます。</p>
   <button class="primary" id="startBtn">開始</button>
   <div class="row"><button id="resumeBtn" disabled>再開</button><button id="stopBtn" disabled>ここで終了</button></div>
   <div class="bar"><div id="prog"></div></div>
@@ -112,7 +131,7 @@ details summary{cursor:pointer;color:var(--sub);font-size:15px}
   <div class="row"><button id="retryBtn" disabled>読み取り失敗分を再送</button></div>
   <div class="row"><button class="primary" id="zipBtn" disabled>zipを作成</button></div>
   <div class="row"><button class="primary" id="saveZipBtn" disabled>zipを保存</button></div>
-  <p class="note">保存したzipは「ファイル」アプリに入ります。タップすると展開されてキャラ別のフォルダが見られます。</p>
+  <p class="note">保存したzipは「ファイル」アプリに入ります。タップすると展開されてキャラ別のフォルダが見られます。「不明」に入った理由はlist.csvの「判定」に書かれます。</p>
 </section>
 
 <section>
@@ -128,17 +147,23 @@ details summary{cursor:pointer;color:var(--sub);font-size:15px}
   <p class="note">「診断情報をコピー」はテキストなのでそのまま貼り付けて、画像の3つは保存してから画像として送ってください。波形は、結果の一覧でタップしたセリフ（なければ最後のエラー地点）の前後30秒を描きます。</p>
 </section>
 </main>
+<video id="video" playsinline webkit-playsinline preload="auto"></video>
 
 <script>
 'use strict';
-const VERSION = '第1版（2026年10月7日 17時16分36秒 更新）';
+const VERSION = '第2版（2026年10月7日 17時35分27秒 更新）';
 const $ = id => document.getElementById(id);
 $('ver').textContent = VERSION;
+const store = {
+  get(k){ try{ return localStorage.getItem(k); }catch(e){ return null; } },
+  set(k,v){ try{ localStorage.setItem(k,v); }catch(e){} },
+  del(k){ try{ localStorage.removeItem(k); }catch(e){} },
+};
 
 /* ---------- 設定 ---------- */
 const DEFAULTS = {thrDb:-45, silMs:500, padMs:120, minMs:250, batch:6, mergeSec:4, model:'gemini-flash-latest', listen:false};
 let S = Object.assign({}, DEFAULTS);
-try { Object.assign(S, JSON.parse(localStorage.getItem('voice_settings')||'{}')); } catch(e){}
+try { Object.assign(S, JSON.parse(store.get('voice_settings')||'{}')); } catch(e){}
 const setMap = {sThr:'thrDb', sSil:'silMs', sPad:'padMs', sMin:'minMs', sBatch:'batch', sMerge:'mergeSec', sModel:'model'};
 function loadSetUI(){ for (const [id,k] of Object.entries(setMap)) $(id).value = S[k]; $('sListen').checked = !!S.listen; }
 function saveSet(){
@@ -146,29 +171,29 @@ function saveSet(){
   S.listen = $('sListen').checked;
   if (!S.model) S.model = DEFAULTS.model;
   if (!(S.batch>=1)) S.batch = DEFAULTS.batch;
-  try { localStorage.setItem('voice_settings', JSON.stringify(S)); } catch(e){}
+  store.set('voice_settings', JSON.stringify(S));
 }
 loadSetUI();
 Object.keys(setMap).forEach(id => $(id).addEventListener('change', saveSet));
 $('sListen').addEventListener('change', () => { saveSet(); applyListen(); });
 $('resetSet').onclick = () => { S = Object.assign({}, DEFAULTS); loadSetUI(); saveSet(); };
 
-$('apiKey').value = localStorage.getItem('voice_api_key') || '';
-$('apiKey').addEventListener('change', () => { try{ localStorage.setItem('voice_api_key', $('apiKey').value.trim()); }catch(e){} });
+$('apiKey').value = store.get('voice_api_key') || '';
+$('apiKey').addEventListener('change', () => store.set('voice_api_key', $('apiKey').value.trim()));
 $('showKey').onchange = () => { $('apiKey').type = $('showKey').checked ? 'text' : 'password'; };
 const getKey = () => $('apiKey').value.trim();
 function hideKey(str){ const k = getKey(); str = String(str); return k ? str.split(k).join('***') : str; }
 
 /* ---------- 記録 ---------- */
 let logs = [];
-try { const old = JSON.parse(localStorage.getItem('voice_logs')||'[]'); if (old.length) logs = old.concat(['--- ここから今回の記録 ---']); } catch(e){}
+try { const old = JSON.parse(store.get('voice_logs')||'[]'); if (old.length) logs = old.concat(['--- ここから今回の記録 ---']); } catch(e){}
 let prevSnap = null;
-try { prevSnap = JSON.parse(localStorage.getItem('voice_snap')||'null'); } catch(e){}
+try { prevSnap = JSON.parse(store.get('voice_snap')||'null'); } catch(e){}
 function ts(d=new Date()){ return d.toTimeString().slice(0,8); }
 function log(level, msg){
   logs.push(`${ts()} [${level}] ${hideKey(msg)}`);
   if (logs.length > 400) logs.splice(0, logs.length-400);
-  try { localStorage.setItem('voice_logs', JSON.stringify(logs.slice(-150))); } catch(e){}
+  store.set('voice_logs', JSON.stringify(logs.slice(-150)));
 }
 let lastError = null;
 function recordError(msg, stack){
@@ -184,78 +209,93 @@ function setStatus(t, cls){ const el = $('status'); el.textContent = t; el.class
 
 /* ---------- 動画 ---------- */
 const video = $('video');
-let fileInfo = null;
-$('file').addEventListener('change', () => {
+let fileInfo = null, objUrl = null;
+function once(el, ev, timeout=8000){ return new Promise(res=>{ let done=false; const f=()=>{ if(done)return; done=true; el.removeEventListener(ev,f); res(); }; el.addEventListener(ev,f); setTimeout(f,timeout); }); }
+function seekTo(t){
+  // seeked のあと、新しいフレームが実際に描画されるまで待つ（iPhoneでは描画が遅れることがあるため）
+  return new Promise(res=>{
+    let done=false;
+    const finish=()=>{ if(done) return; done=true; video.removeEventListener('seeked',onSeeked); res(); };
+    const onSeeked=()=>{
+      if (video.requestVideoFrameCallback){ video.requestVideoFrameCallback(()=>finish()); setTimeout(finish,300); }
+      else setTimeout(finish,60);
+    };
+    video.addEventListener('seeked',onSeeked); setTimeout(finish,4000);
+    video.currentTime=Math.min(t, Math.max(0,video.duration-0.05));
+  });
+}
+$('file').addEventListener('change', async () => {
   const f = $('file').files[0]; if (!f) return;
-  if (video.src) URL.revokeObjectURL(video.src);
-  video.src = URL.createObjectURL(f);
+  if (running){ setStatus('処理中は動画を変えられません。', 'warn'); return; }
+  if (objUrl) URL.revokeObjectURL(objUrl);
+  objUrl = URL.createObjectURL(f); video.src = objUrl; video.load();
   fileInfo = {name:f.name, sizeMB:(f.size/1048576).toFixed(1), type:f.type||'(不明)'};
   stage = '読み込み';
+  $('fileInfo').textContent = '読み込み中…';
   log('情報', `動画選択 ${f.name} ${fileInfo.sizeMB}MB ${fileInfo.type}`);
-  setStatus('動画を読み込みました。③で範囲を決めてください。');
+  await once(video,'loadedmetadata'); await once(video,'loadeddata',4000);
+  if (!video.videoWidth){ $('fileInfo').textContent = 'この動画は読み込めませんでした。'; recordError('動画の映像を読み込めません'); return; }
+  $('fileInfo').textContent = `${f.name}（${fmt(video.duration)}・${video.videoWidth}×${video.videoHeight}）`;
+  log('情報', `動画情報 長さ${fmt(video.duration)} ${video.videoWidth}x${video.videoHeight}`);
+  const s = $('seek'); s.max = String(video.duration); s.value = String(Math.min(5, video.duration/2));
+  $('secRange').hidden = false;
+  stage = '範囲設定';
+  await seekTo(+s.value); $('seekOut').textContent = fmt(+s.value); drawPreview();
+  setStatus('動画を読み込みました。③で範囲を合わせてください。');
 });
-video.addEventListener('loadedmetadata', () => { log('情報', `動画情報 長さ${fmt(video.duration)} ${video.videoWidth}x${video.videoHeight}`); });
 video.addEventListener('error', () => { const e = video.error; recordError(`動画を読み込めません（コード${e?e.code:'?'} ${e&&e.message||''}）`); });
 
-/* ---------- 範囲 ---------- */
-let region = null;
-try { region = JSON.parse(localStorage.getItem('voice_region')||'null'); } catch(e){}
-const rc = $('regionCanvas'), rctx = rc.getContext('2d');
-const snap = document.createElement('canvas');
-let hasSnap = false, dragStart = null, dragRect = null;
-function showRegionInfo(){
-  $('regionInfo').textContent = region ? `範囲：左${(region.x*100).toFixed(0)}% 上${(region.y*100).toFixed(0)}% 幅${(region.w*100).toFixed(0)}% 高さ${(region.h*100).toFixed(0)}%` : '範囲：未設定';
-}
-showRegionInfo();
-function drawRegionCanvas(){
-  if (!hasSnap){ rctx.fillStyle='#000'; rctx.fillRect(0,0,rc.width,rc.height); return; }
-  rctx.drawImage(snap, 0, 0, rc.width, rc.height);
-  const r = dragRect || region;
-  if (r){
-    rctx.fillStyle='rgba(0,0,0,.45)';
-    rctx.fillRect(0,0,rc.width,rc.height);
-    const x=r.x*rc.width, y=r.y*rc.height, w=r.w*rc.width, h=r.h*rc.height;
-    rctx.drawImage(snap, r.x*snap.width, r.y*snap.height, r.w*snap.width, r.h*snap.height, x, y, w, h);
-    rctx.strokeStyle='#6ea8ff'; rctx.lineWidth=Math.max(3, rc.width/200); rctx.strokeRect(x,y,w,h);
-  }
-}
-$('snapBtn').onclick = () => {
-  if (!video.videoWidth){ setStatus('先に②で動画を選んでください。', 'warn'); return; }
-  snap.width = video.videoWidth; snap.height = video.videoHeight;
-  snap.getContext('2d').drawImage(video, 0, 0);
-  rc.width = 1000; rc.height = Math.round(1000 * video.videoHeight / video.videoWidth);
-  hasSnap = true; stage = '範囲設定';
-  log('情報', `範囲用の画面を取得 ${fmt(video.currentTime)}`);
-  drawRegionCanvas();
-};
-function canvasPos(ev){
-  const b = rc.getBoundingClientRect();
-  return {x:Math.min(1,Math.max(0,(ev.clientX-b.left)/b.width)), y:Math.min(1,Math.max(0,(ev.clientY-b.top)/b.height))};
-}
-rc.addEventListener('pointerdown', ev => { if (!hasSnap) return; rc.setPointerCapture(ev.pointerId); dragStart = canvasPos(ev); dragRect = null; ev.preventDefault(); });
-rc.addEventListener('pointermove', ev => {
-  if (!dragStart) return; const p = canvasPos(ev);
-  dragRect = {x:Math.min(dragStart.x,p.x), y:Math.min(dragStart.y,p.y), w:Math.abs(p.x-dragStart.x), h:Math.abs(p.y-dragStart.y)};
-  drawRegionCanvas(); ev.preventDefault();
+/* ---------- 範囲スライダー（前回のセリフ起こしと同じ形式） ---------- */
+const RANGE_IDS = ['top','bottom','left','right','top2','bottom2','left2','right2'];
+const box = () => { const v=id=>+$(id).value/100; return {x1:v('left'),y1:v('top'),x2:v('right'),y2:v('bottom')}; };
+const box2 = () => { if(!$('useBubble').checked) return null; const v=id=>+$(id).value/100; return {x1:v('left2'),y1:v('top2'),x2:v('right2'),y2:v('bottom2')}; };
+// 初回だけ、セリフ起こしページで合わせた範囲を初期値として借りる（以降はこのページ専用に保存）
+const firstVal = k => store.get('voice:'+k) ?? store.get('serifu:'+k);
+function syncBubbleUI(){ $('bubbleBox').hidden = !$('useBubble').checked; }
+$('useBubble').checked = firstVal('useBubble') === '1'; syncBubbleUI();
+$('useBubble').addEventListener('change', () => { store.set('voice:useBubble', $('useBubble').checked?'1':'0'); syncBubbleUI(); drawPreview(); });
+document.querySelectorAll('label.sl').forEach(l => {
+  const inp = l.querySelector('input'), out = l.querySelector('output');
+  if (inp.id === 'seek') return;
+  const saved = firstVal(inp.id); if (saved !== null) inp.value = saved;
+  const upd = () => { out.textContent = `${inp.value}%`; };
+  inp.addEventListener('input', () => { upd(); store.set('voice:'+inp.id, inp.value); drawPreview(); }); upd();
 });
-rc.addEventListener('pointerup', () => {
-  if (!dragStart) return; dragStart = null;
-  if (dragRect && dragRect.w > 0.03 && dragRect.h > 0.03){
-    region = dragRect;
-    try { localStorage.setItem('voice_region', JSON.stringify(region)); } catch(e){}
-    log('情報', `範囲を設定 ${JSON.stringify(roundR(region))}`);
-  }
-  dragRect = null; drawRegionCanvas(); showRegionInfo();
+function boxOk(){ const ok=b=>!b || (b.y2-b.y1>=0.05 && b.x2-b.x1>=0.05); return ok(box()) && ok(box2()); }
+let seekBusy=false, seekWant=null;
+$('seek').addEventListener('input', async e => {
+  seekWant = +e.target.value; $('seekOut').textContent = fmt(seekWant);
+  if (seekBusy) return; seekBusy = true;
+  while (seekWant !== null){ const t = seekWant; seekWant = null; await seekTo(t); drawPreview(); }
+  seekBusy = false;
 });
-function roundR(r){ return r && {x:+r.x.toFixed(3), y:+r.y.toFixed(3), w:+r.w.toFixed(3), h:+r.h.toFixed(3)}; }
+function paintFrameWithBoxes(c, g, lw){
+  g.drawImage(video,0,0,c.width,c.height);
+  const rects=[[box(),'#F2B544']]; const b2=box2(); if(b2) rects.push([b2,'#5ED0E6']);
+  g.save(); g.beginPath(); g.rect(0,0,c.width,c.height);
+  for(const [b] of rects) g.rect(b.x2*c.width,b.y1*c.height,-(b.x2-b.x1)*c.width,(b.y2-b.y1)*c.height);
+  g.fillStyle='rgba(0,0,0,.55)'; g.fill('evenodd'); g.restore();
+  g.lineWidth=lw;
+  for(const [b,col] of rects){ g.strokeStyle=col; g.strokeRect(b.x1*c.width,b.y1*c.height,(b.x2-b.x1)*c.width,(b.y2-b.y1)*c.height); }
+}
+function drawPreview(){
+  const c = $('preview'); if (!video.videoWidth || running) return;
+  const w = c.clientWidth||640, dpr = window.devicePixelRatio||1;
+  c.width = Math.round(w*dpr); c.height = Math.round(w*dpr*video.videoHeight/video.videoWidth);
+  paintFrameWithBoxes(c, c.getContext('2d'), 3*dpr);
+}
+window.addEventListener('resize', () => drawPreview());
+function rectOf(b){ const W=video.videoWidth, H=video.videoHeight;
+  return [Math.round(b.x1*W), Math.round(b.y1*H), Math.max(1,Math.round((b.x2-b.x1)*W)), Math.max(1,Math.round((b.y2-b.y1)*H))]; }
+const roundB = b => b && {上端:Math.round(b.y1*100), 下端:Math.round(b.y2*100), 左端:Math.round(b.x1*100), 右端:Math.round(b.x2*100)};
 
 /* ---------- 音声処理の状態 ---------- */
 let stage = '待機中';
 let actx = null, srcNode = null, proc = null, sr = 44100;
 let running = false, paused = false, captureDone = false, finished = false;
-let store, vad, env, segments, pendingQ, maxAbs, playedSamples, zeroWarned, segId;
+let store2, vad, env, segments, pendingQ, maxAbs, playedSamples, zeroWarned, segId, runBubble = false, runBox = null, runBox2 = null;
 let pumping = false, geminiStats, lastGemini = null, lastSent = [], outputs = [], focusSec = null, wakeLock = null, zipBlob = null;
-function curSec(){ return store ? store.total / sr : (video.currentTime||0); }
+function curSec(){ return store2 ? store2.total / sr : (video.currentTime||0); }
 
 function makeStore(){
   return {
@@ -284,8 +324,8 @@ function makeStore(){
 }
 
 function resetRun(){
-  store = makeStore();
-  vad = {acc:0, cnt:0, speaking:false, speechStart:0, lastVoice:0, nextCap:0, firstP:null, lastP:null};
+  store2 = makeStore();
+  vad = {acc:0, cnt:0, speaking:false, speechStart:0, lastVoice:0, nextCap:0, caps:[]};
   env = []; segments = []; pendingQ = []; outputs = []; lastSent = []; lastGemini = null; zipBlob = null;
   maxAbs = 0; playedSamples = 0; zeroWarned = false; segId = 0; captureDone = false; finished = false; focusSec = null;
   geminiStats = {sent:0, ok:0, fail:0, retries:0, calls:0};
@@ -293,18 +333,26 @@ function resetRun(){
   $('zipBtn').disabled = true; $('saveZipBtn').disabled = true; $('retryBtn').disabled = true;
 }
 
-/* ---------- 名前欄の画像 ---------- */
+/* ---------- 名前欄・吹き出しの画像 ---------- */
+// 吹き出し範囲がある場合は「上：吹き出し／下：会話ウィンドウ」の順に縦に並べて1枚にする（間はピンクの帯）
 const cap = document.createElement('canvas');
+let capLayout = null;
+function prepareCapLayout(){
+  const parts = (runBox2 ? [runBox2, runBox] : [runBox]).map(rectOf);
+  const CW = Math.min(900, Math.max(...parts.map(p=>p[2])));
+  const hs = parts.map(p => Math.round(p[3]*CW/p[2])), GAP = parts.length>1 ? 12 : 0;
+  capLayout = {parts, CW, hs, GAP, H: hs.reduce((a,b)=>a+b,0)+GAP};
+}
 function captureFrame(){
-  if (!video.videoWidth || !region) return null;
-  const vw = video.videoWidth, vh = video.videoHeight;
-  const sx = region.x*vw, sy = region.y*vh, sw = region.w*vw, sh = region.h*vh;
-  const scale = Math.min(1, 800/sw);
-  cap.width = Math.max(1, Math.round(sw*scale)); cap.height = Math.max(1, Math.round(sh*scale));
-  const c = cap.getContext('2d');
-  c.drawImage(video, sx, sy, sw, sh, 0, 0, cap.width, cap.height);
+  if (!video.videoWidth || !capLayout) return null;
+  const {parts, CW, hs, GAP, H} = capLayout;
+  cap.width = CW; cap.height = H;
+  const g = cap.getContext('2d');
+  g.fillStyle = '#ff00ff'; g.fillRect(0,0,CW,H);
+  let y = 0;
+  parts.forEach(([sx,sy,sw,sh],k) => { g.drawImage(video,sx,sy,sw,sh,0,y,CW,hs[k]); y += hs[k]+GAP; });
   const t = video.currentTime;
-  return new Promise(res => cap.toBlob(b => res(b ? {blob:b, t} : null), 'image/jpeg', 0.8));
+  return new Promise(res => cap.toBlob(b => res(b ? {blob:b, t} : null), 'image/jpeg', 0.85));
 }
 
 /* ---------- 区切り検出 ---------- */
@@ -316,11 +364,11 @@ function onAudio(e){
     if (ib.numberOfChannels > 1){ const ch1 = ib.getChannelData(1); for (let i=0;i<n;i++) mono[i] = (ch0[i]+ch1[i])*0.5; }
     else mono.set(ch0);
     for (let i=0;i<n;i++){ const a = Math.abs(mono[i]); if (a > maxAbs) maxAbs = a; }
-    const startIdx = store.total;
-    store.append(mono);
+    const startIdx = store2.total;
+    store2.append(mono);
     playedSamples += n;
     processSamples(mono, startIdx);
-    if (!vad.speaking) store.trimBefore(store.total - Math.round(sr*(S.padMs/1000)) - 16384);
+    if (!vad.speaking) store2.trimBefore(store2.total - Math.round(sr*(S.padMs/1000)) - 16384);
     if (!zeroWarned && playedSamples > sr*20 && maxAbs === 0){
       zeroWarned = true;
       log('警告', '再生開始から20秒間、音声がまったく取得できていません');
@@ -347,17 +395,22 @@ function onFrame(db, fs, fe){
   if (!vad.speaking){
     if (voiced){
       vad.speaking = true; vad.speechStart = fs; vad.lastVoice = fe;
-      vad.firstP = null; vad.lastP = null; vad.nextCap = fs + Math.round(sr*0.4);
+      vad.caps = []; vad.nextCap = fs + Math.round(sr*0.2);
     }
     return;
   }
   if (voiced) vad.lastVoice = fe;
+  // 声が出ている間、0.25秒ごとに画面を撮る（最初・途中・最後の3枚を送って、ずっと同じ名前か確かめる）
   if (fe >= vad.nextCap && fe - vad.lastVoice < sr*0.15){
     const p = captureFrame();
-    if (p){ if (!vad.firstP) vad.firstP = p; else vad.lastP = p; }
+    if (p) vad.caps.push(p);
     vad.nextCap = fe + Math.round(sr*0.25);
   }
   if (!voiced && fe - vad.lastVoice >= minSil) endSpeech();
+}
+function pickFrames(caps){
+  if (caps.length <= 3) return caps.slice();
+  return [caps[0], caps[Math.floor((caps.length-1)/2)], caps[caps.length-1]];
 }
 function endSpeech(){
   if (!vad.speaking) return;
@@ -365,28 +418,37 @@ function endSpeech(){
   const len = vad.lastVoice - vad.speechStart;
   const pad = Math.min(Math.round(sr*S.padMs/1000), Math.round(sr*S.silMs/2000));
   if (len >= sr*S.minMs/1000){
-    const s = Math.max(vad.speechStart - pad, store.base), e = Math.min(vad.lastVoice + pad, store.total);
-    let firstP = vad.firstP, lastP = vad.lastP;
-    if (!lastP){ if (firstP){ lastP = firstP; firstP = null; } else lastP = captureFrame(); }
-    const seg = {id:++segId, s, e, speechStart:vad.speechStart, lastVoice:vad.lastVoice, audio:store.slice(s,e), firstP, lastP,
-                 first:null, last:null, startName:'', endName:'', text:'', namebox:'', done:false, gemFail:false, err:''};
+    const s = Math.max(vad.speechStart - pad, store2.base), e = Math.min(vad.lastVoice + pad, store2.total);
+    const caps = vad.caps.slice();
+    // 短いセリフで1枚しか撮れていなければ、この時点でもう1枚撮る（違う名前なら「不明」になるので安全側）
+    if (caps.length < 2){ const p = captureFrame(); if (p) caps.push(p); }
+    const seg = {id:++segId, s, e, speechStart:vad.speechStart, lastVoice:vad.lastVoice, audio:store2.slice(s,e),
+                 capsP:pickFrames(caps), frames:null, fr:[], text:'', done:false, gemFail:false, err:''};
     segments.push(seg); pendingQ.push(seg);
     pump();
   }
-  store.trimBefore(vad.lastVoice);
+  vad.caps = [];
+  store2.trimBefore(vad.lastVoice);
 }
 
 /* ---------- Gemini ---------- */
-const PROMPT = `以下はゲーム画面のセリフ表示部分（名前欄とセリフの文章）を切り抜いた画像です。
-セグメントごとに「開始付近の画像」と「終了付近の画像」があります（片方だけの場合もあります）。
-各セグメントについて次を読み取り、JSON配列だけを返してください。
-- id: セグメント番号（数値）
-- start_name: 開始付近の画像の名前欄に書かれた話者名。画像がない場合や名前欄がない場合は ""
-- end_name: 終了付近の画像の名前欄に書かれた話者名。名前欄がない場合は ""
-- text: 終了付近の画像のセリフ本文（改行は除く、話者名は含めない）
-- namebox: 終了付近の画像に名前欄が「あり」「なし」「判読不可」のいずれか
-名前は画像に書かれている表記のまま返してください。推測で補わないでください。
-例: [{"id":1,"start_name":"アリス","end_name":"アリス","text":"おはよう。","namebox":"あり"}]`;
+function buildPrompt(){
+  const layout = runBubble
+    ? '各画像は2つの範囲を縦に並べたもので、ピンクの帯より【上】が「吹き出し範囲」、【下】が「会話ウィンドウ（名前欄と台詞）」です。'
+    : '各画像はゲームの「会話ウィンドウ（名前欄と台詞）」を切り抜いたものです。';
+  return `${layout}
+セグメントごとに、同じセリフの音声が流れている間に撮った画像が時刻順に「画像1」「画像2」…として並んでいます。
+画像1枚ずつについて次を読み取り、JSON配列だけを返してください。
+
+[{"id":セグメント番号,"frames":[{"name":"名前","bubble":false,"certain":true}, ...],"text":"台詞"}]
+
+- frames は画像の枚数と同じ数・同じ順番にしてください。
+- name: 会話ウィンドウの名前欄に書かれている名前を一字一句そのまま。名前欄が無い・空欄・名前が見えない場合は ""。
+- bubble: ${runBubble ? '吹き出し範囲に吹き出し（セリフの入ったふきだし）が表示されていれば true、なければ false。' : '常に false。'}
+- certain: 名前欄の名前（または名前欄が無いこと）を完全に確信をもって読めたときだけ true。文字がかすれている・一部が隠れている・切れている・似た字と迷う・文字送りの途中など、少しでも迷いがあれば false。
+- text: 最後の画像の台詞本文（名前は含めない、改行は除く）。読めなければ ""。
+推測や補完は絶対にしないでください。前後のセグメントの内容から名前を推測してもいけません。`;
+}
 
 function blobToB64(blob){
   return new Promise((res, rej) => { const r = new FileReader(); r.onload = () => res(String(r.result).split(',')[1]); r.onerror = () => rej(r.error); r.readAsDataURL(blob); });
@@ -408,8 +470,7 @@ async function pump(){
 
 async function processBatch(batch){
   for (const s of batch){
-    if (s.firstP){ s.first = await s.firstP; s.firstP = null; }
-    if (s.lastP){ s.last = await s.lastP; s.lastP = null; }
+    if (s.capsP){ s.frames = (await Promise.all(s.capsP)).filter(Boolean); s.capsP = null; }
   }
   const prevStage = stage; stage = '名前欄読み取り';
   let lastErr = '';
@@ -418,11 +479,12 @@ async function processBatch(batch){
       const res = await callGemini(batch);
       for (const s of batch){
         const r = res.find(x => Number(x.id) === s.id);
-        if (!r){ s.gemFail = true; s.err = '応答にこのidがありません'; geminiStats.fail++; continue; }
-        s.startName = String(r.start_name||'').trim(); s.endName = String(r.end_name||'').trim();
-        s.text = String(r.text||'').trim(); s.namebox = String(r.namebox||'').trim();
+        if (!r || !Array.isArray(r.frames)){ s.gemFail = true; s.err = '応答にこのセリフの結果がありません'; geminiStats.fail++; continue; }
+        s.fr = r.frames.map(f => ({name:String(f && f.name || '').trim(), bubble:f && f.bubble === true, certain:f && f.certain === true}));
+        s.text = String(r.text||'').trim();
         s.done = true; s.gemFail = false; s.err = ''; geminiStats.ok++;
-        s.first = null; s.last = null; // メモリ節約（最後に送った分は lastSent に残る）
+        s.frameCount = s.frames.length;
+        s.frames = null; // メモリ節約（最後に送った分は lastSent に残る）
       }
       stage = running ? '区切り検出' : prevStage;
       return;
@@ -442,14 +504,15 @@ async function processBatch(batch){
 async function callGemini(batch){
   const key = getKey();
   if (!key){ const e = new Error('APIキーが入力されていません'); e.fatal = true; throw e; }
-  const parts = [{text: PROMPT}];
+  const parts = [{text: buildPrompt()}];
   lastSent = [];
   for (const s of batch){
-    parts.push({text: `\nセグメント id=${s.id}（${fmt(s.speechStart/sr)}〜${fmt(s.lastVoice/sr)}）`});
-    if (s.first){ parts.push({text:`id=${s.id} 開始付近の画像:`}); parts.push({inlineData:{mimeType:'image/jpeg', data: await blobToB64(s.first.blob)}}); }
-    if (s.last){ parts.push({text:`id=${s.id} 終了付近の画像:`}); parts.push({inlineData:{mimeType:'image/jpeg', data: await blobToB64(s.last.blob)}}); }
-    else parts.push({text:`id=${s.id} は画像を取得できませんでした。namebox は "判読不可" にしてください。`});
-    lastSent.push({id:s.id, first:s.first, last:s.last, result:null});
+    parts.push({text: `\nセグメント id=${s.id}（${fmt(s.speechStart/sr)}〜${fmt(s.lastVoice/sr)}）画像${s.frames.length}枚`});
+    for (let k=0;k<s.frames.length;k++){
+      parts.push({text:`id=${s.id} 画像${k+1}:`});
+      parts.push({inlineData:{mimeType:'image/jpeg', data: await blobToB64(s.frames[k].blob)}});
+    }
+    lastSent.push({id:s.id, frames:s.frames.slice(), result:null});
   }
   geminiStats.calls++; geminiStats.sent += batch.length;
   const url = `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(S.model)}:generateContent`;
@@ -458,7 +521,7 @@ async function callGemini(batch){
     resp = await fetch(url, {method:'POST', headers:{'Content-Type':'application/json', 'x-goog-api-key':key},
       body: JSON.stringify({contents:[{role:'user', parts}], generationConfig:{temperature:0, responseMimeType:'application/json'}})});
     bodyText = await resp.text();
-  } catch(err){ lastGemini = {status:'通信失敗', body:err.message}; throw new Error('通信に失敗しました: ' + err.message); }
+  } catch(err){ lastGemini = {status:'通信失敗', body:err.message, at:ts()}; throw new Error('通信に失敗しました: ' + err.message); }
   lastGemini = {status: resp.status, body: hideKey(bodyText).slice(0, 2500), at: ts()};
   if (!resp.ok){
     const e = new Error(`HTTP ${resp.status} ${extractMsg(bodyText)}`);
@@ -494,7 +557,7 @@ $('startBtn').onclick = async () => {
   saveSet();
   if (!getKey()){ setStatus('①でAPIキーを入力してください。', 'warn'); return; }
   if (!video.src || !video.duration){ setStatus('②で動画を選んでください。', 'warn'); return; }
-  if (!region){ setStatus('③で範囲を決めてください。', 'warn'); return; }
+  if (!boxOk()){ setStatus('範囲が狭すぎます。上端が下端より上、左端が右端より左になっているか確認してください。', 'warn'); return; }
   try {
     if (!actx){
       const AC = window.AudioContext || window.webkitAudioContext;
@@ -509,15 +572,16 @@ $('startBtn').onclick = async () => {
     applyListen();
     await actx.resume();
     resetRun();
+    runBox = box(); runBox2 = box2(); runBubble = !!runBox2;
+    prepareCapLayout();
     stage = '区切り検出';
-    video.controls = false; video.muted = false; video.playbackRate = 1;
-    video.currentTime = 0;
-    await new Promise(r => { if (!video.seeking) r(); else video.addEventListener('seeked', r, {once:true}); });
+    video.muted = false; video.playbackRate = 1;
+    await seekTo(0);
     running = true; paused = false;
     await video.play();
     requestWake();
     $('startBtn').disabled = true; $('stopBtn').disabled = false; $('resumeBtn').disabled = true;
-    log('情報', `開始 範囲${JSON.stringify(roundR(region))} 設定 ${JSON.stringify(Object.assign({}, S))}`);
+    log('情報', `開始 会話ウィンドウ${JSON.stringify(roundB(runBox))} 吹き出し${JSON.stringify(roundB(runBox2))} 設定 ${JSON.stringify(S)}`);
     setStatus('収集中…');
   } catch(err){ running = false; recordError('開始できません: ' + err.message, err.stack); }
 };
@@ -532,7 +596,6 @@ function endCapture(why){
   running = false; paused = false;
   endSpeech();
   captureDone = true;
-  video.controls = true;
   $('stopBtn').disabled = true; $('resumeBtn').disabled = true; $('startBtn').disabled = false;
   try { wakeLock && wakeLock.release(); } catch(e){}
   log('情報', `${why} ${fmt(curSec())} セリフ${segments.length}件`);
@@ -541,19 +604,27 @@ function endCapture(why){
   pump();
 }
 
-/* ---------- 振り分け・結合 ---------- */
-const norm = s => String(s||'').normalize('NFKC').replace(/[\s「」『』【】()（）…・、。！？!?,.\-ー〜~]/g,'');
-const safeName = s => String(s||'').normalize('NFKC').replace(/[\/\\:*?"<>|\u0000-\u001f]/g,'_').trim().slice(0,40) || '不明';
+/* ---------- 振り分け（確実なものだけ） ---------- */
+const normName = s => String(s||'').normalize('NFKC').replace(/\s/g,'');
+const normText = s => String(s||'').normalize('NFKC').replace(/[\s「」『』【】()（）…・、。！？!?,.\-ー〜~]/g,'');
+const safeName = s => String(s||'').normalize('NFKC').replace(/[\/\\:*?"<>|\u0000-\u001f]/g,'_').trim().slice(0,40);
+const RESERVED = ['吹き出し','不明'];
 function classify(seg){
   if (seg.gemFail || !seg.done) return {folder:'不明', kind:'読み取り失敗'};
-  if (seg.namebox === 'なし') return {folder:'ナレーション', kind:'ナレーション'};
-  const sn = norm(seg.startName), en = norm(seg.endName);
-  if (seg.namebox === '判読不可' || (!sn && !en)) return {folder:'不明', kind:'判読不可'};
-  if (sn && en && sn !== en) return {folder:'重複・要確認', kind:'話者が途中で変化'};
-  return {folder: safeName(seg.endName || seg.startName), kind:'通常'};
+  const fr = seg.fr || [];
+  if (fr.length !== seg.frameCount) return {folder:'不明', kind:'画像と結果の数が合わない'};
+  if (fr.some(f => f.bubble)) return {folder:'吹き出し', kind:'吹き出し'};
+  if (fr.length < 2) return {folder:'不明', kind:'確認できた画像が1枚以下'};
+  if (fr.some(f => !f.name)) return {folder:'不明', kind:'名前欄なし'};
+  if (fr.some(f => !f.certain)) return {folder:'不明', kind:'読み取りに迷いあり'};
+  const n0 = normName(fr[0].name);
+  if (fr.some(f => normName(f.name) !== n0)) return {folder:'不明', kind:'途中で名前が変わった'};
+  const folder = safeName(fr[0].name);
+  if (!folder || RESERVED.includes(folder)) return {folder:'不明', kind:'フォルダ名にできない名前'};
+  return {folder, kind:'確定', name:fr[0].name};
 }
 function canMerge(a, b){
-  const ta = norm(a.text), tb = norm(b.text);
+  const ta = normText(a.text), tb = normText(b.text);
   return ta.length >= 3 && tb.startsWith(ta);
 }
 function finalize(){
@@ -565,18 +636,20 @@ function finalize(){
   for (const seg of segs){
     const c = classify(seg);
     const prev = outputs[outputs.length-1];
-    if (prev && (c.kind==='通常' || c.kind==='ナレーション') && prev.kind === c.kind && prev.folder === c.folder
+    // 結合は「確定」同士・同じ名前・台詞が続きになっている場合だけ
+    if (prev && c.kind === '確定' && prev.kind === '確定' && prev.folder === c.folder
         && (seg.speechStart - prev.segs[prev.segs.length-1].lastVoice)/sr <= S.mergeSec
         && canMerge(prev.segs[prev.segs.length-1], seg)){
       prev.segs.push(seg); prev.e = seg.e; prev.text = seg.text; prev.endVoice = seg.lastVoice; merged++;
     } else {
       outputs.push({folder:c.folder, kind:c.kind, segs:[seg], s:seg.s, e:seg.e, startVoice:seg.speechStart, endVoice:seg.lastVoice,
-                    name: seg.endName || seg.startName, text: seg.text});
+                    name: c.name || '', text: seg.text});
     }
   }
   const counter = {};
   for (const o of outputs){ counter[o.folder] = (counter[o.folder]||0) + 1; o.file = `${o.folder}_${String(counter[o.folder]).padStart(4,'0')}.wav`; }
-  log('情報', `振り分け完了 ファイル${outputs.length}件 結合${merged}件`);
+  const kinds = {}; outputs.forEach(o => kinds[o.kind] = (kinds[o.kind]||0)+1);
+  log('情報', `振り分け完了 ファイル${outputs.length}件 結合${merged}件 判定${JSON.stringify(kinds)}`);
   renderList(counter, merged);
   const failed = segments.filter(s => s.gemFail).length;
   $('retryBtn').disabled = failed === 0;
@@ -588,12 +661,12 @@ function finalize(){
 function renderList(counter, merged){
   $('summary').textContent = `ファイル${outputs.length}件（結合${merged}件）　` + Object.entries(counter).map(([k,v]) => `${k}:${v}`).join('　');
   const list = $('list'); list.innerHTML = '';
-  outputs.forEach((o, i) => {
+  outputs.forEach(o => {
     const d = document.createElement('div'); d.className = 'item';
     const dur = ((o.e - o.s)/sr).toFixed(1);
     d.innerHTML = `<button class="play">▶</button><div class="meta"><div class="fn"></div><div class="tx"></div></div>`;
     d.querySelector('.fn').textContent = `${o.file}　${fmt(o.startVoice/sr)}　${dur}秒`;
-    if (o.kind !== '通常'){ const t = document.createElement('span'); t.className='tag'; t.textContent=o.kind; d.querySelector('.fn').appendChild(t); }
+    if (o.kind !== '確定'){ const t = document.createElement('span'); t.className='tag'; t.textContent=o.kind; d.querySelector('.fn').appendChild(t); }
     if (o.segs.length > 1){ const t = document.createElement('span'); t.className='tag'; t.textContent=`${o.segs.length}つを結合`; d.querySelector('.fn').appendChild(t); }
     d.querySelector('.tx').textContent = o.text || '（文章なし）';
     d.querySelector('.play').onclick = ev => { ev.stopPropagation(); selectItem(d, o); playOutput(o); };
@@ -613,7 +686,7 @@ async function playOutput(o){
 $('retryBtn').onclick = () => {
   const failed = segments.filter(s => s.gemFail);
   if (!failed.length) return;
-  const resend = failed.filter(s => s.last);
+  const resend = failed.filter(s => s.frames && s.frames.length);
   if (resend.length < failed.length) log('警告', `画像が残っていない失敗分 ${failed.length - resend.length}件は再送できません`);
   if (!resend.length){ setStatus('再送できる画像が残っていません。', 'warn'); return; }
   for (const s of resend){ s.gemFail = false; s.err = ''; }
@@ -664,14 +737,15 @@ $('zipBtn').onclick = async () => {
   try {
     stage = 'wav書き出し';
     const zip = new JSZip();
-    const rows = [['ファイル名','フォルダ','話者','セリフ','開始','終了','長さ秒','判定','結合数'].map(csvQ).join(',')];
+    const rows = [['ファイル名','フォルダ','話者','セリフ','開始','終了','長さ秒','判定','結合数','読み取った名前（画像ごと）'].map(csvQ).join(',')];
     for (let i=0;i<outputs.length;i++){
       const o = outputs[i];
       zip.folder(o.folder).file(o.file, await toWav(buildAudio(o)));
-      rows.push([o.file, o.folder, o.name, o.text, fmt(o.startVoice/sr), fmt(o.endVoice/sr), ((o.e-o.s)/sr).toFixed(2), o.kind, o.segs.length].map(csvQ).join(','));
+      const names = o.segs.map(s => (s.fr||[]).map(f => `${f.name||'(空)'}${f.bubble?'[吹]':''}${f.certain?'':'[迷]'}`).join('/')).join(' + ');
+      rows.push([o.file, o.folder, o.name, o.text, fmt(o.startVoice/sr), fmt(o.endVoice/sr), ((o.e-o.s)/sr).toFixed(2), o.kind, o.segs.length, names].map(csvQ).join(','));
       if (i % 10 === 0){ setStatus(`wavを書き出しています… ${i+1}/${outputs.length}`); $('prog').style.width = `${(i+1)/outputs.length*100}%`; await sleep(0); }
     }
-    zip.file('list.csv', '\uFEFF' + rows.join('\r\n'));
+    zip.file('list.csv', '﻿' + rows.join('\r\n'));
     stage = 'zip化';
     setStatus('zipにまとめています…');
     zipBlob = await zip.generateAsync({type:'blob', compression:'STORE'}, m => { $('prog').style.width = m.percent.toFixed(0) + '%'; });
@@ -706,14 +780,14 @@ setInterval(() => {
 }, 500);
 setInterval(() => {
   if (!running && !pumping) return;
-  try { localStorage.setItem('voice_snap', JSON.stringify({at:new Date().toLocaleString('ja-JP'), version:VERSION, stage, sec:+curSec().toFixed(1),
-    segments:segments.length, retainedSec:+(store.retained()/sr).toFixed(1), file:fileInfo})); } catch(e){}
+  store.set('voice_snap', JSON.stringify({at:new Date().toLocaleString('ja-JP'), version:VERSION, stage, sec:+curSec().toFixed(1),
+    segments:segments.length, retainedSec:+(store2.retained()/sr).toFixed(1), file:fileInfo}));
 }, 5000);
 
 /* ---------- 困ったとき ---------- */
 function memEstimateMB(){
   if (!segments) return 0;
-  const audio = segments.reduce((a,s) => a + s.audio.length*2, 0) + (store ? store.retained()*2 : 0);
+  const audio = segments.reduce((a,s) => a + s.audio.length*2, 0) + (store2 ? store2.retained()*2 : 0);
   return (audio/1048576).toFixed(1);
 }
 function buildDiag(){
@@ -726,24 +800,27 @@ function buildDiag(){
   L.push(`APIキー: ${getKey() ? `入力済（${getKey().length}文字）` : '未入力'}`);
   L.push(`音声: ${actx ? `${actx.sampleRate}Hz 状態${actx.state} 遅延${actx.baseLatency??'-'}` : '未準備'}`);
   L.push(`動画: ${fileInfo ? `${fileInfo.name} ${fileInfo.sizeMB}MB ${fileInfo.type}` : '未選択'} 長さ${fmt(video.duration)} ${video.videoWidth}x${video.videoHeight} 再生位置${fmt(video.currentTime)} 一時停止${video.paused}`);
-  L.push(`範囲: ${region ? JSON.stringify(roundR(region)) : '未設定'}`);
+  L.push(`範囲: 会話ウィンドウ${JSON.stringify(roundB(box()))} 吹き出し${JSON.stringify(roundB(box2()))}`);
+  if (runBox) L.push(`処理時の範囲: 会話ウィンドウ${JSON.stringify(roundB(runBox))} 吹き出し${JSON.stringify(roundB(runBox2))}`);
   L.push(`設定: ${JSON.stringify(S)}`);
   L.push(`段階: ${stage}　処理中${running}　一時停止${paused}　取り込み終了${captureDone}`);
   if (segments){
     const done = segments.filter(s=>s.done).length, fail = segments.filter(s=>s.gemFail).length;
     L.push(`進行: 音声位置${fmt(curSec())} 検出${segments.length}件 読み取り済${done}件 待ち${pendingQ.length}件 失敗${fail}件 出力${outputs.length}件`);
-    L.push(`音量: 最大振幅${maxAbs.toFixed(4)}（0なら音声未取得） 取得${(playedSamples/sr).toFixed(1)}秒 保持中${(store.retained()/sr).toFixed(1)}秒`);
+    L.push(`音量: 最大振幅${maxAbs.toFixed(4)}（0なら音声未取得） 取得${(playedSamples/sr).toFixed(1)}秒 保持中${(store2.retained()/sr).toFixed(1)}秒`);
     L.push(`メモリ目安: 音声${memEstimateMB()}MB`);
     L.push(`Gemini: 呼出${geminiStats.calls}回 送信${geminiStats.sent}件 成功${geminiStats.ok}件 失敗${geminiStats.fail}件 再試行${geminiStats.retries}回`);
     const fails = segments.filter(s=>s.gemFail).slice(0,10);
     if (fails.length) L.push('失敗したセリフ: ' + fails.map(s => `#${s.id}(${fmt(s.speechStart/sr)}) ${s.err}`).join(' / '));
     const kinds = {}; outputs.forEach(o => kinds[o.kind] = (kinds[o.kind]||0)+1);
     if (outputs.length) L.push('判定内訳: ' + JSON.stringify(kinds));
+    const unk = outputs.filter(o => o.kind !== '確定' && o.kind !== '吹き出し').slice(0,15);
+    if (unk.length) L.push('不明の例: ' + unk.map(o => `${o.file}(${fmt(o.startVoice/sr)}) ${o.kind} [${(o.segs[0].fr||[]).map(f=>`${f.name||'空'}${f.certain?'':'?'}`).join('/')}]`).join(' / '));
   }
   L.push(`最後のエラー: ${lastError ? `${lastError.at} 段階:${lastError.stage} 位置:${fmt(lastError.sec)} ${lastError.msg}\n${lastError.stack}` : 'なし'}`);
   L.push(`Gemini最後の応答: ${lastGemini ? `${lastGemini.at||''} ${lastGemini.status}\n${lastGemini.body}` : 'なし'}`);
   if (prevSnap) L.push(`前回の処理中の状態（ページが落ちた場合の手がかり）: ${JSON.stringify(prevSnap)}`);
-  L.push('--- 記録（新しい順の最後80件） ---');
+  L.push('--- 記録（最後の80件） ---');
   L.push(...logs.slice(-80));
   return hideKey(L.join('\n'));
 }
@@ -755,37 +832,44 @@ $('diagBtn').onclick = async () => {
 };
 function canvasBlob(c){ return new Promise(r => c.toBlob(r, 'image/png')); }
 $('regionImgBtn').onclick = async () => {
-  if (!hasSnap){ setStatus('③で「この画面で範囲を決める」を押してから保存してください。', 'warn'); return; }
-  const c = document.createElement('canvas'); c.width = snap.width; c.height = snap.height + 60;
+  if (!video.videoWidth){ setStatus('先に②で動画を選んでください。', 'warn'); return; }
+  const W = Math.min(1600, video.videoWidth), H = Math.round(W*video.videoHeight/video.videoWidth);
+  const c = document.createElement('canvas'); c.width = W; c.height = H + 60;
   const x = c.getContext('2d');
-  x.fillStyle = '#000'; x.fillRect(0,0,c.width,c.height); x.drawImage(snap, 0, 60);
-  if (region){ x.strokeStyle = '#ff3b3b'; x.lineWidth = Math.max(4, c.width/250); x.strokeRect(region.x*snap.width, 60+region.y*snap.height, region.w*snap.width, region.h*snap.height); }
-  x.fillStyle = '#fff'; x.font = '28px sans-serif'; x.fillText(`${VERSION}　範囲 ${JSON.stringify(roundR(region))}`, 12, 40);
+  x.fillStyle = '#000'; x.fillRect(0,0,c.width,c.height);
+  const f = document.createElement('canvas'); f.width = W; f.height = H;
+  paintFrameWithBoxes(f, f.getContext('2d'), Math.max(4, W/250));
+  x.drawImage(f, 0, 60);
+  x.fillStyle = '#fff'; x.font = '24px sans-serif';
+  x.fillText(`${VERSION}　${fmt(video.currentTime)}　黄=会話ウィンドウ${JSON.stringify(roundB(box()))}${box2() ? '　水色=吹き出し'+JSON.stringify(roundB(box2())) : ''}`, 12, 38);
   saveBlob(await canvasBlob(c), `範囲_${stamp()}.png`);
 };
 function loadImg(blob){ return new Promise((res, rej) => { const i = new Image(); i.onload = () => res(i); i.onerror = rej; i.src = URL.createObjectURL(blob); }); }
 $('sentImgBtn').onclick = async () => {
   if (!lastSent.length){ setStatus('まだGeminiに画像を送っていません。', 'warn'); return; }
-  const W = 1000, rows = [];
+  const W = 1200, COL = 3, cw = Math.floor((W - 10*(COL+1)) / COL), rows = [];
   for (const ls of lastSent){
     const imgs = [];
-    for (const f of [ls.first, ls.last]) if (f && f.blob) imgs.push(await loadImg(f.blob));
-    rows.push({ls, imgs});
+    for (const f of ls.frames) if (f && f.blob) imgs.push(await loadImg(f.blob));
+    const ih = Math.max(0, ...imgs.map(i => Math.round(i.height * cw / i.width)));
+    rows.push({ls, imgs, h: Math.max(120, 90 + ih)});
   }
-  let H = 70;
-  for (const r of rows){ r.h = 70 + Math.max(0, ...r.imgs.map(i => Math.round(i.height * (W/2-15) / i.width))); r.h = Math.max(r.h, 120); H += r.h + 20; }
+  const H = 70 + rows.reduce((a,r) => a + r.h + 20, 0);
   const c = document.createElement('canvas'); c.width = W; c.height = H; const x = c.getContext('2d');
   x.fillStyle = '#111'; x.fillRect(0,0,W,H); x.fillStyle = '#fff'; x.font = '22px sans-serif';
   x.fillText(`${VERSION}　最後に送った画像`, 10, 35);
   let y = 70;
   for (const r of rows){
-    const res = r.ls.result;
+    const res = r.ls.result, fr = res && Array.isArray(res.frames) ? res.frames : [];
     x.fillStyle = '#ffd36e'; x.font = '20px sans-serif';
-    x.fillText(`id ${r.ls.id}　結果: ${res ? `開始[${res.start_name||''}] 終了[${res.end_name||''}] 名前欄[${res.namebox||''}]` : 'なし'}`, 10, y + 22);
-    x.fillStyle = '#ddd'; x.font = '18px sans-serif';
-    x.fillText(res ? String(res.text||'').slice(0,50) : '', 10, y + 48);
-    let ix = 10;
-    for (const im of r.imgs){ const w = W/2 - 15, h = Math.round(im.height * w / im.width); x.drawImage(im, ix, y + 60, w, h); ix += w + 10; }
+    x.fillText(`id ${r.ls.id}　台詞: ${res ? String(res.text||'').slice(0,40) : '結果なし'}`, 10, y + 24);
+    r.imgs.forEach((im, k) => {
+      const ix = 10 + k*(cw+10), h = Math.round(im.height * cw / im.width);
+      const f = fr[k];
+      x.fillStyle = '#ddd'; x.font = '17px sans-serif';
+      x.fillText(`画像${k+1}: ${f ? `名前[${f.name||''}] 吹き出し${f.bubble?'あり':'なし'} ${f.certain?'確信':'迷い'}` : '結果なし'}`, ix, y + 56);
+      x.drawImage(im, ix, y + 70, cw, h);
+    });
     y += r.h + 20;
   }
   saveBlob(await canvasBlob(c), `送った画像_${stamp()}.png`);
@@ -806,7 +890,7 @@ $('waveImgBtn').onclick = async () => {
     x.fillRect(X(s.speechStart/sr), top, X(s.lastVoice/sr)-X(s.speechStart/sr), plotH);
     const o = outputs.find(o => o.segs.includes(s));
     x.fillStyle = '#fff'; x.font = '16px sans-serif';
-    x.fillText(`#${s.id} ${o ? o.file.replace('.wav','') : (s.endName||'')}`, X(s.speechStart/sr)+3, top + 18);
+    x.fillText(`#${s.id} ${o ? o.file.replace('.wav','') : ''}`, X(s.speechStart/sr)+3, top + 18);
   }
   x.strokeStyle = '#6ea8ff'; x.lineWidth = 1; x.beginPath();
   const f0 = Math.floor(t0*100), f1 = Math.min(env.length, Math.ceil(t1*100));
@@ -825,7 +909,7 @@ $('waveImgBtn').onclick = async () => {
 $('clearBtn').onclick = () => {
   if (!confirm('記録を消しますか？（設定・APIキー・範囲は残ります）')) return;
   logs = []; lastError = null; prevSnap = null; lastGemini = null;
-  try { localStorage.removeItem('voice_logs'); localStorage.removeItem('voice_snap'); } catch(e){}
+  store.del('voice_logs'); store.del('voice_snap');
   setStatus('記録を消しました。');
 };
 log('情報', `ページを開きました ${VERSION}`);

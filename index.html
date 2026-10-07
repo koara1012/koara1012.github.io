@@ -174,12 +174,23 @@ ol.steps{padding-left:1.3em;margin:6px 0;font-size:14px}
     <textarea id="fallback" readonly hidden></textarea>
     <ol id="lines"></ol>
   </section>
+  <section>
+    <h2>困ったとき</h2>
+    <p class="hint">うまくいかないときは、下のボタンで情報を集めてClaudeに送ってください。APIキーは含まれません。</p>
+    <div class="exports">
+      <button class="sub" id="diagCopy">診断情報をコピー</button>
+      <button class="sub" id="diagRange">範囲の画像を保存</button>
+      <button class="sub" id="diagSent">送った画像を保存</button>
+      <button class="sub" id="diagClear">記録を消す</button>
+    </div>
+    <p class="hint">「診断情報をコピー」はテキストなのでそのまま貼り付けて、画像の2つは保存してから画像として送ってください。</p>
+  </section>
 </main>
 <video id="video" muted playsinline preload="auto"></video>
 
 <script>
 const $ = id => document.getElementById(id);
-const APP_BUILD = 12; // アップデートの回数（更新のたびに1つ増やす）
+const APP_BUILD = 14; // アップデートの回数（更新のたびに1つ増やす）
 const APP_VERSION = `第${APP_BUILD}版（2026-10-07）`;
 let currentStep = "待機中";
 $("build").textContent = APP_VERSION;
@@ -214,11 +225,22 @@ function seekTo(t){
       if(video.requestVideoFrameCallback){ video.requestVideoFrameCallback(()=>finish()); setTimeout(finish,300); }
       else setTimeout(finish,60);
     };
-    video.addEventListener("seeked",onSeeked); setTimeout(finish,4000);
+    video.addEventListener("seeked",onSeeked); setTimeout(()=>{ if(!done){ seekTimeouts++; if(seekTimeouts<=5) log(`シーク待ちが4秒を超えた（${t.toFixed(1)}秒地点）`); } finish(); },4000);
     video.currentTime=Math.min(t, Math.max(0,video.duration-0.05));
   });
 }
 function setStatus(msg, err){ const s=$("status"); s.textContent=msg; s.classList.toggle("err",!!err); }
+/* ---------- 動作の記録（診断用） ---------- */
+const LOG_KEY="serifu:log";
+let actLog=[]; try{ actLog=JSON.parse(localStorage.getItem(LOG_KEY)||"[]"); }catch{ actLog=[]; }
+function log(msg){
+  const t=new Date(); const hh=`${String(t.getHours()).padStart(2,"0")}:${String(t.getMinutes()).padStart(2,"0")}:${String(t.getSeconds()).padStart(2,"0")}`;
+  actLog.push(`${hh} ${msg}`); if(actLog.length>80) actLog.splice(0,actLog.length-80);
+  try{ localStorage.setItem(LOG_KEY, JSON.stringify(actLog)); }catch{}
+}
+const apiLog=[];   // 直近のAPI呼び出し
+function logApi(o){ apiLog.push(o); if(apiLog.length>6) apiLog.shift(); log(`API ${o.kind} ${o.status} ${o.ms}ms 画像${o.images}枚 ${o.note||""}`); }
+let seekTimeouts=0, lastSentImages=[];
 function setBar(p){ $("barFill").style.width=`${Math.round(Math.min(1,Math.max(0,p))*100)}%`; }
 
 /* ---------- エラー報告（Claudeに送る用） ---------- */
@@ -241,9 +263,40 @@ function reportError(e, where, jobArg){
     job ? `その時の範囲: ${JSON.stringify(job.box)} 吹き出し: ${JSON.stringify(job.box2||null)} 間隔${job.step} 静止${job.stable} 感度${job.thresh}` : "",
     `オンライン: ${navigator.onLine}`,
     `端末: ${navigator.userAgent}`,
+    `画面: ${window.screen?.width}x${window.screen?.height} 倍率${window.devicePixelRatio} / シーク待ち超過: ${seekTimeouts}回`,
+    job?.diag?.regions ? `範囲ごとの結果: ${JSON.stringify(job.diag.regions)}` : "",
+    job?.diag?.sceneTimes ? `見つかった場面（秒）: ${job.diag.sceneTimes}` : "",
+    job?.states?.length ? `読み取り結果の例:\n${job.states.slice(0,12).map((x,k)=>`  ${k}: ${x.start?.toFixed?.(1)}秒 ${x.ok?"○":x.tried?"×":"-"} 名前=${x.name??""} 台詞=${(x.text??"").slice(0,30)}${x.bubble?` 吹き出し=${x.bubble.slice(0,20)}`:""}`).join("\n")}` : "",
+    apiLog.length ? `直近のAPI応答:\n${apiLog.slice(-3).map(a=>`  [${a.kind}] ${a.status} ${a.ms}ms 画像${a.images} ${a.finish||""} ${a.note||""}\n    ${a.snippet}`).join("\n")}` : "直近のAPI応答: なし",
+    `設定: 間隔${$("step")?.value} 静止${$("stable")?.value} 感度${$("thresh")?.value} 話者推定=${$("guessBubble")?.checked}`,
+    `動作の記録（新しい順）:\n${actLog.slice(-25).reverse().map(x=>"  "+x).join("\n")}`,
   ].filter(Boolean);
   $("errText").value=lines.join("\n"); $("errBox").hidden=false;
 }
+function diagText(){ reportError({message:"（手動で取得した診断情報）",name:"診断"}, "困ったとき", loadJob()||lastJobRef); return $("errText").value; }
+let lastJobRef=null;
+async function copyText(txt, btn, label){
+  try{ await navigator.clipboard.writeText(txt); btn.textContent="コピーしました"; setTimeout(()=>btn.textContent=label,2000); }
+  catch{ const t=$("errText"); t.value=txt; $("errBox").hidden=false; t.focus(); t.select(); }
+}
+$("diagCopy").addEventListener("click", ()=>copyText(diagText(), $("diagCopy"), "診断情報をコピー"));
+$("diagClear").addEventListener("click", ()=>{ actLog=[]; try{ localStorage.removeItem(LOG_KEY); }catch{} apiLog.length=0; $("diagClear").textContent="消しました"; setTimeout(()=>$("diagClear").textContent="記録を消す",2000); });
+async function saveCanvas(c, name){
+  const blob=await new Promise(r=>c.toBlob(r,"image/jpeg",0.85)); if(!blob) return;
+  const file=new File([blob], name, {type:"image/jpeg"});
+  try{ if(navigator.canShare?.({files:[file]})){ await navigator.share({files:[file]}); return; } }catch(e){ if(e?.name==="AbortError") return; }
+  const a=document.createElement("a"); a.href=URL.createObjectURL(file); a.download=name; document.body.append(a); a.click(); a.remove();
+}
+$("diagRange").addEventListener("click", ()=>{ if(!video.videoWidth){ setStatus("先に録画を選んでください。",true); return; } drawPreview(); saveCanvas($("preview"),"serifu-range.jpg"); });
+$("diagSent").addEventListener("click", async ()=>{
+  if(!lastSentImages.length){ setStatus("まだGeminiに画像を送っていません。読み取りを一度実行してから押してください。",true); return; }
+  const imgs=await Promise.all(lastSentImages.map(b=>new Promise(r=>{ const im=new Image(); im.onload=()=>r(im); im.onerror=()=>r(null); im.src="data:image/jpeg;base64,"+b; })));
+  const ok=imgs.filter(Boolean), W=720, hs=ok.map(im=>Math.round(im.height*W/im.width));
+  const c=document.createElement("canvas"); c.width=W; c.height=hs.reduce((a,b)=>a+b+8,0)||1;
+  const g=c.getContext("2d"); g.fillStyle="#000"; g.fillRect(0,0,c.width,c.height);
+  let y=0; ok.forEach((im,k)=>{ g.drawImage(im,0,y,W,hs[k]); g.fillStyle="#ff0"; g.font="bold 28px sans-serif"; g.fillText(String(k),8,y+32); y+=hs[k]+8; });
+  saveCanvas(c,"serifu-sent.jpg");
+});
 $("errCopy").addEventListener("click", async ()=>{
   try{ await navigator.clipboard.writeText($("errText").value); $("errCopy").textContent="コピーしました"; setTimeout(()=>$("errCopy").textContent="エラー内容をコピー",2000); }
   catch{ const t=$("errText"); t.focus(); t.select(); }
@@ -357,10 +410,10 @@ function rectOf(b){ const W=video.videoWidth, H=video.videoHeight;
   return [Math.round(b.x1*W), Math.round(b.y1*H), Math.max(1,Math.round((b.x2-b.x1)*W)), Math.max(1,Math.round((b.y2-b.y1)*H))]; }
 function srcRect(){ return rectOf(box()); }
 function regions(){ const b2=box2(); return b2 ? [box(), b2] : [box()]; }
-function signature(){
-  const regs=regions(); sigCanvas.height=SH*regs.length;
-  regs.forEach((b,k)=>{ const [sx,sy,sw,sh]=rectOf(b); sigCtx.drawImage(video,sx,sy,sw,sh,0,SH*k,SW,SH); });
-  const d=sigCtx.getImageData(0,0,SW,SH*regs.length).data, g=new Uint8Array(SW*SH*regs.length);
+function sigOf(b){
+  const [sx,sy,sw,sh]=rectOf(b); sigCanvas.height=SH;
+  sigCtx.drawImage(video,sx,sy,sw,sh,0,0,SW,SH);
+  const d=sigCtx.getImageData(0,0,SW,SH).data, g=new Uint8Array(SW*SH);
   for(let i=0,j=0;i<g.length;i++,j+=4) g[i]=(d[j]*299+d[j+1]*587+d[j+2]*114)/1000;
   return g;
 }
@@ -379,30 +432,52 @@ document.addEventListener("visibilitychange",()=>{ if(document.hidden) persistNo
 window.addEventListener("pagehide",()=>persistNow?.());
 
 /* ---------- 1段階目：台詞の場面を探す ---------- */
+// 範囲（会話ウィンドウ・吹き出し）ごとに別々に「表示が止まった瞬間」を探す。
+// 吹き出しの範囲にはキャラクターの髪の揺れやボタンの光など常に動くものが入りやすいので、
+// 範囲ごとに普段の揺れの大きさ（ノイズ）を測り、それより大きな変化だけを「切り替わり」とみなす。
 async function scanPhase(job, signal){
   const {step, thresh:th, dur}=job, need=Math.max(1,Math.round(job.stable/step)), total=Math.floor(dur/step);
-  const st=job.scan, states=job.states;
-  let prev=dec(st.prev), cur=st.cur?{start:st.cur.start,end:st.cur.end,sig:dec(st.cur.sig)}:null;
-  let stable=st.stable, changeStart=st.changeStart, lastSig=dec(st.lastSig), i=st.i;
-  const commit=c=>{ if(!c||stdev(c.sig)<4) return; const last=states[states.length-1];
-    if(last && lastSig && changed(lastSig,c.sig)<th) last.end=c.end; else states.push({start:c.start,end:c.end});
-    lastSig=c.sig; };
-  const persist=()=>{ job.scan={i, prev:enc(prev), cur:cur&&{start:cur.start,end:cur.end,sig:enc(cur.sig)}, stable, changeStart, lastSig:enc(lastSig)}; saveJob(job); };
+  const regs=job.box2 ? [job.box, job.box2] : [job.box];
+  const states=job.states;
+  const sc=job.scan;
+  const R=regs.map((_,r)=>{ const x=sc.regs?.[r]||{};
+    return {prev:dec(x.prev), cur:x.cur?{start:x.cur.start,end:x.cur.end,sig:dec(x.cur.sig)}:null,
+            stable:x.stable||0, changeStart:x.changeStart||0, lastSig:dec(x.lastSig), hist:x.hist||[]}; });
+  let i=sc.i;
+  const thrOf=S=>{ const h=S.hist.slice(-40); if(h.length<5) return th; const m=[...h].sort((a,b)=>a-b)[Math.floor(h.length/2)]; return Math.max(th, m*2.5); };
+  const commit=(r,c)=>{ const S=R[r]; if(!c||stdev(c.sig)<4) return;
+    if(S.lastSig && changed(S.lastSig,c.sig)<thrOf(S)){ for(let k=states.length-1;k>=0;k--) if((states[k].r||0)===r){ states[k].end=c.end; break; } }
+    else states.push({start:c.start,end:c.end,r});
+    S.lastSig=c.sig; };
+  const persist=()=>{ job.scan={i, regs:R.map(S=>({prev:enc(S.prev), cur:S.cur&&{start:S.cur.start,end:S.cur.end,sig:enc(S.cur.sig)},
+      stable:S.stable, changeStart:S.changeStart, lastSig:enc(S.lastSig), hist:S.hist.slice(-40)}))}; saveJob(job); };
   persistNow=persist;
   const diag=job.diag=job.diag||{samples:0,same:0,changes:0};
   for(;i<=total;i++){
     if(signal.aborted){ persist(); throw {code:"cancelled"}; }
-    const t=i*step; await seekTo(t); const sig=signature();
-    if(prev){ const d=changed(sig,prev); diag.samples++; if(d===0) diag.same++; if(d>=th) diag.changes++; }
-    if(prev && changed(sig,prev)<th) stable++; else { commit(cur); cur=null; stable=0; changeStart=t; }
-    if(stable>=need){ if(!cur) cur={start:changeStart,end:t,sig}; else { cur.end=t; cur.sig=sig; } }
-    prev=sig;
+    const t=i*step; await seekTo(t);
+    regs.forEach((b,r)=>{
+      const S=R[r], sig=sigOf(b);
+      if(S.prev){
+        const d=changed(sig,S.prev), thr=thrOf(S); S.hist.push(d); if(S.hist.length>80) S.hist.splice(0,S.hist.length-40);
+        if(r===0){ diag.samples++; if(d===0) diag.same++; if(d>=thr) diag.changes++; }
+        if(d<thr) S.stable++; else { commit(r,S.cur); S.cur=null; S.stable=0; S.changeStart=t; }
+      } else S.changeStart=t;
+      if(S.stable>=need){ if(!S.cur) S.cur={start:S.changeStart,end:t,sig}; else { S.cur.end=t; S.cur.sig=sig; } }
+      S.prev=sig;
+    });
     if(i%10===0){ setBar(0.5*i/total); setStatus(`台詞の場面を探しています… ${fmt(t)} / ${fmt(dur)}（${states.length}件）`); }
     if(i%40===0){ i++; persist(); i--; }
   }
-  commit(cur);
+  R.forEach((S,r)=>commit(r,S.cur));
+  // 範囲ごとに見つけた場面を時刻順に並べ、ほぼ同じ瞬間のものは1つにまとめる
+  states.sort((a,b)=>a.end-b.end);
+  for(let k=states.length-1;k>0;k--) if(states[k].end-states[k-1].end<0.35){ states[k-1].start=Math.min(states[k-1].start,states[k].start); states[k-1].end=states[k].end; states.splice(k,1); }
   job.lowCount = states.length < Math.max(3, dur/20); // 20秒に1場面より少ない＝範囲が合っていない可能性
   diag.scenes=states.length;
+  diag.regions=R.map((S,r)=>({範囲:r?"吹き出し":"会話ウィンドウ", しきい値:+thrOf(S).toFixed(2), 場面:states.filter(x=>(x.r||0)===r).length}));
+  diag.sceneTimes=states.slice(0,40).map(x=>`${x.start.toFixed(1)}-${x.end.toFixed(1)}${x.r?"吹":""}`).join(" ");
+  log(`場面探し完了：${states.length}場面 ${JSON.stringify(diag.regions)}`);
   job.phase="read"; job.next=0; delete job.scan; persistNow=null; saveJob(job);
 }
 
@@ -469,6 +544,7 @@ async function callGemini(batch, signal){
   const parts=[];
   batch.forEach((s,k)=>{ parts.push({text:`画像${k}`}); parts.push({inline_data:{mime_type:"image/jpeg",data:s.b64}}); });
   parts.push({text:PROMPT(batch.length, !!box2())});
+  lastSentImages=batch.map(s=>s.b64);
   const gen={temperature:0,responseMimeType:"application/json"};
   if(/2\.5-flash/.test(model)) gen.thinkingConfig={thinkingBudget:0}; // 考える時間を省いて速くする
   const ctl=new AbortController(); let timedOut=false;
@@ -483,14 +559,17 @@ async function callGemini(batch, signal){
       body:JSON.stringify({contents:[{role:"user",parts}],generationConfig:gen}),
     });
     const j=await res.json().catch(()=>({}));
+    if(!res.ok) logApi({kind:"読み取り", status:res.status, ms:Date.now()-t0, images:batch.length, model, note:(j?.error?.message||"").slice(0,160), snippet:JSON.stringify(j).slice(0,400)});
     if(res.status===429){ const msg=j?.error?.message||""; const e=new QuotaError(msg); e.daily=/per.?day|daily|PerDay/i.test(msg); throw e; }
     if(!res.ok) throw new Error(j?.error?.message||`HTTP ${res.status}`);
     const cand=j.candidates?.[0];
     const text=(cand?.content?.parts||[]).map(p=>p.text||"").join("");
+    logApi({kind:"読み取り", status:res.status, ms:Date.now()-t0, images:batch.length, model, finish:cand?.finishReason||"", note:res.ok?"":(j?.error?.message||"").slice(0,120), snippet:(text||JSON.stringify(j)).slice(0,400)});
     if(!text) throw new Error(`空の応答（${cand?.finishReason||j?.promptFeedback?.blockReason||"理由不明"}）`);
     return {arr:parseJsonArray(text), raw:text};
   }catch(e){
-    if(timedOut && !signal.aborted) throw new Error("Geminiから2分以上応答がありませんでした");
+    if(timedOut && !signal.aborted){ log("Geminiの応答が2分を超えたので送り直し"); throw new Error("Geminiから2分以上応答がありませんでした"); }
+    if(e?.name!=="AbortError" && !(e instanceof QuotaError)) log(`通信エラー：${e?.name||""} ${e?.message||e}`);
     throw e;
   }finally{
     clearTimeout(timer); clearInterval(tick); signal.removeEventListener("abort",onAbort);
@@ -585,6 +664,7 @@ async function callGeminiText(prompt, signal){
       headers:{"Content-Type":"application/json","x-goog-api-key":key},
       body:JSON.stringify({contents:[{role:"user",parts:[{text:prompt}]}],generationConfig:gen})});
     const j=await res.json().catch(()=>({}));
+    logApi({kind:"話者推定", status:res.status, ms:0, images:0, model, note:res.ok?"":(j?.error?.message||"").slice(0,160), snippet:JSON.stringify(j?.candidates?.[0]?.content?.parts?.[0]?.text??j).slice(0,300)});
     if(res.status===429){ const msg=j?.error?.message||""; const e=new QuotaError(msg); e.daily=/per.?day|daily|PerDay/i.test(msg); throw e; }
     if(!res.ok) throw new Error(j?.error?.message||`HTTP ${res.status}`);
     const text=(j.candidates?.[0]?.content?.parts||[]).map(p=>p.text||"").join("");
@@ -673,13 +753,13 @@ function applyJobSettings(job){
 }
 async function run(job){
   const why=blockReason(); if(why){ setStatus(why,true); return; }
-  lastError=""; $("errBox").hidden=true; finishGuesses=job.guesses||null;
+  lastError=""; $("errBox").hidden=true; lastJobRef=job; finishGuesses=job.guesses||null;
   abortCtl=new AbortController(); const signal=abortCtl.signal;
   $("start").hidden=true; $("resumeBox").hidden=true; $("stop").hidden=false;
   try{ wakeLock=await navigator.wakeLock?.request("screen"); }catch{}
   try{
     try{ await video.play(); video.pause(); }catch{}
-    currentStep="台詞の場面探し";
+    currentStep="台詞の場面探し"; log(`開始：段階=${job.phase} 長さ${Math.round(job.dur)}秒 お試し=${job.trial} 範囲=${JSON.stringify(job.box)} 吹き出し=${JSON.stringify(job.box2||null)} モデル=${$("model").value}`);
     if(job.phase==="scan") await scanPhase(job, signal);
     currentStep="切り出しと読み取り";
     if(!job.states.length){ clearJob(); setStatus("台詞の表示が見つかりませんでした。範囲と場面を確認するか、感度を下げてみてください。",true); return; }
@@ -709,7 +789,7 @@ $("start").addEventListener("click", ()=>{
   const trial=$("trial").checked;
   run({key:currentKey, fileName, box:box(), box2:box2(), guess:$("guessBubble").checked && !!box2(), guesses:{}, step:+$("step").value, stable:+$("stable").value, thresh:+$("thresh").value,
        trial, dur: trial?Math.min(180,video.duration):video.duration, phase:"scan",
-       scan:{i:0,prev:null,cur:null,stable:0,changeStart:0,lastSig:null}, states:[], next:0});
+       scan:{i:0,regs:[]}, states:[], next:0});
 });
 $("resume").addEventListener("click", ()=>{ const job=loadJob(); if(job){ applyJobSettings(job); run(job); } });
 $("restart").addEventListener("click", ()=>{ clearJob(); refreshResume(); setStatus("途中経過を消しました。設定を確認して「読み取りを始める」を押してください。"); });

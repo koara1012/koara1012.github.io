@@ -91,6 +91,7 @@ ol.steps{padding-left:1.3em;margin:6px 0;font-size:14px}
 <main>
   <div id="build" class="build"></div>
   <h1>セリフ起こし</h1>
+  <div id="bootNote" class="notice" hidden></div>
   <p class="lead">ゲームの画面録画から、キャラクター名つきの台詞一覧を作ります。ボイスの有無は関係なく、画面に表示された名前欄と台詞を読み取ります。</p>
 
   <section id="secKey">
@@ -190,7 +191,7 @@ ol.steps{padding-left:1.3em;margin:6px 0;font-size:14px}
 
 <script>
 const $ = id => document.getElementById(id);
-const APP_BUILD = 15; // アップデートの回数（更新のたびに1つ増やす）
+const APP_BUILD = 16; // アップデートの回数（更新のたびに1つ増やす）
 const APP_VERSION = `第${APP_BUILD}版（2026-10-07）`;
 let currentStep = "待機中";
 $("build").textContent = APP_VERSION;
@@ -262,6 +263,7 @@ function reportError(e, where, jobArg){
     job?.diag ? `場面探しの診断: 確認${job.diag.samples}回, 全く同じ画面${job.diag.same}回, 変化あり${job.diag.changes}回` : "",
     job ? `その時の範囲: ${JSON.stringify(job.box)} 吹き出し: ${JSON.stringify(job.box2||null)} 間隔${job.step} 静止${job.stable} 感度${job.thresh}` : "",
     `オンライン: ${navigator.onLine}`,
+    `保存データ: ${(()=>{ try{ let n=0; for(let k=0;k<localStorage.length;k++){ const key=localStorage.key(k); n+=(localStorage.getItem(key)||"").length; } return Math.round(n/1024)+"KB"; }catch{ return "不明"; } })()} / 途中経過=${localStorage.getItem("serifu:job")?"あり":"なし"} / 録画の識別=${JSON.stringify(typeof currentRec!=="undefined"?currentRec:null)}`,
     `端末: ${navigator.userAgent}`,
     `画面: ${window.screen?.width}x${window.screen?.height} 倍率${window.devicePixelRatio} / シーク待ち超過: ${seekTimeouts}回`,
     job?.diag?.regions ? `範囲ごとの結果: ${JSON.stringify(job.diag.regions)}` : "",
@@ -376,7 +378,8 @@ $("file").addEventListener("change", async () => {
   const s=$("seek"); s.max=String(video.duration); s.value=String(Math.min(5,video.duration/2));
   $("secRange").hidden=false; $("secRun").hidden=false;
   currentKey=`${f.name}|${f.size}`;
-  const job=loadJob(); if(job && job.key===currentKey && job.phase!=="done") applyJobSettings(job);
+  currentRec={name:f.name, dur:video.duration, w:video.videoWidth, h:video.videoHeight};
+  const job=loadJob(); if(job && job.phase!=="done" && sameRecording(job)) applyJobSettings(job);
   refreshResume();
   await seekTo(+s.value); $("seekOut").textContent=fmt(+s.value); drawPreview();
 });
@@ -411,7 +414,7 @@ function rectOf(b){ const W=video.videoWidth, H=video.videoHeight;
 function srcRect(){ return rectOf(box()); }
 function regions(){ const b2=box2(); return b2 ? [box(), b2] : [box()]; }
 function sigOf(b){
-  const [sx,sy,sw,sh]=rectOf(b); sigCanvas.height=SH;
+  const [sx,sy,sw,sh]=rectOf(b);
   sigCtx.drawImage(video,sx,sy,sw,sh,0,0,SW,SH);
   const d=sigCtx.getImageData(0,0,SW,SH).data, g=new Uint8Array(SW*SH);
   for(let i=0,j=0;i<g.length;i++,j+=4) g[i]=(d[j]*299+d[j+1]*587+d[j+2]*114)/1000;
@@ -420,11 +423,37 @@ function sigOf(b){
 function changed(a,b){ let n=0; for(let i=0;i<a.length;i++) if(Math.abs(a[i]-b[i])>28) n++; return n/a.length*100; }
 function stdev(a){ let s=0,s2=0; for(const v of a){s+=v;s2+=v*v;} const m=s/a.length; return Math.sqrt(Math.max(0,s2/a.length-m*m)); }
 
+/* ---------- 動画の読み込み直し（メモリ対策） ---------- */
+// iPhoneのSafariは、動画の位置移動を何千回もくり返すとメモリがたまり、ページごと落ちることがある。
+// 一定回数ごとに動画を読み込み直して、たまったメモリを解放する。
+let seeksSinceReload=0;
+const RELOAD_EVERY=300;
+async function maybeReloadVideo(){
+  if(++seeksSinceReload<RELOAD_EVERY || !objUrl) return;
+  seeksSinceReload=0;
+  try{
+    video.pause(); video.removeAttribute("src"); video.load();
+    await sleep(50);
+    video.src=objUrl; video.load();
+    await once(video,"loadedmetadata",8000); await once(video,"loadeddata",4000);
+    log("動画を読み込み直した（メモリ対策）");
+  }catch(e){ log(`動画の読み込み直しに失敗：${e?.message||e}`); }
+}
+
 /* ---------- 途中経過の保存（再開用） ---------- */
 const JOB="serifu:job";
-let currentKey="", persistNow=null;
+let currentKey="", persistNow=null, currentRec=null;
+// iPhoneでは選び直すたびにファイルのサイズが変わることがあるため、名前・長さ・画面サイズでも同じ録画とみなす
+function sameRecording(job){
+  if(!job || !currentRec) return false;
+  if(job.key===currentKey) return true;
+  if(!job.rec) return false;
+  const closeDur=Math.abs((job.rec.dur||0)-currentRec.dur)<0.6, sameSize=job.rec.w===currentRec.w && job.rec.h===currentRec.h;
+  return closeDur && sameSize && (job.rec.name===currentRec.name || Math.abs(job.rec.dur-currentRec.dur)<0.05);
+}
 function loadJob(){ try{ return JSON.parse(localStorage.getItem(JOB)||"null"); }catch{ return null; } }
-function saveJob(job){ try{ localStorage.setItem(JOB, JSON.stringify(job, (k,v)=>k==="b64"?undefined:v)); }catch{} }
+let saveFailLogged=false;
+function saveJob(job){ try{ localStorage.setItem(JOB, JSON.stringify(job, (k,v)=>k==="b64"?undefined:v)); }catch(e){ if(!saveFailLogged){ saveFailLogged=true; log(`途中経過の保存に失敗：${e?.name||""} ${e?.message||e}`); } } }
 function clearJob(){ try{ localStorage.removeItem(JOB); }catch{} }
 const enc=a=>{ if(!a) return null; let s=""; for(let i=0;i<a.length;i+=8192) s+=String.fromCharCode.apply(null,a.subarray(i,i+8192)); return btoa(s); };
 const dec=b=>{ if(!b) return null; const s=atob(b), a=new Uint8Array(s.length); for(let i=0;i<s.length;i++) a[i]=s.charCodeAt(i); return a; };
@@ -456,7 +485,7 @@ async function scanPhase(job, signal){
   const diag=job.diag=job.diag||{samples:0,same:0,changes:0};
   for(;i<=total;i++){
     if(signal.aborted){ persist(); throw {code:"cancelled"}; }
-    const t=i*step; await seekTo(t);
+    const t=i*step; await maybeReloadVideo(); await seekTo(t);
     regs.forEach((b,r)=>{
       const S=R[r], sig=sigOf(b);
       if(S.prev){
@@ -468,7 +497,7 @@ async function scanPhase(job, signal){
       S.prev=sig;
     });
     if(i%10===0){ setBar(0.5*i/total); setStatus(`台詞の場面を探しています… ${fmt(t)} / ${fmt(dur)}（${states.length}件）`); }
-    if(i%40===0){ i++; persist(); i--; }
+    if(i%20===0){ i++; persist(); i--; }
   }
   R.forEach((S,r)=>commit(r,S.cur));
   // 切り出す瞬間は「表示が止まっている時間の真ん中」にする。
@@ -506,7 +535,7 @@ async function readPhase(job, signal){
     try{
       for(const s of batch){
         if(signal.aborted) throw {code:"cancelled"};
-        await seekTo(s.at ?? Math.max(s.start, s.end-0.15)); drawCrop();
+        await maybeReloadVideo(); await seekTo(s.at ?? Math.max(s.start, s.end-0.15)); drawCrop();
         s.b64=cropCanvas.toDataURL("image/jpeg",0.85).split(",")[1];
       }
       setStatus(`名前欄と台詞を読み取っています… ${b+1}/${nb}組目`);
@@ -736,8 +765,8 @@ function jobProgress(job){
 }
 function refreshResume(){
   const job=loadJob(), boxEl=$("resumeBox");
-  const mine = job && job.phase!=="done" && job.key===currentKey;
-  const other = job && job.phase!=="done" && job.key!==currentKey;
+  const mine = job && job.phase!=="done" && sameRecording(job);
+  const other = job && job.phase!=="done" && !mine;
   boxEl.hidden = !(mine || other);
   $("resume").hidden = !mine; $("restart").hidden = !mine;
   $("start").hidden = !!mine || !!abortCtl;
@@ -765,6 +794,7 @@ async function run(job){
   try{ wakeLock=await navigator.wakeLock?.request("screen"); }catch{}
   try{
     try{ await video.play(); video.pause(); }catch{}
+    store.set("serifu:running", JSON.stringify({since:Date.now(), file:job.fileName, phase:job.phase, build:APP_BUILD}));
     currentStep="台詞の場面探し"; log(`開始：段階=${job.phase} 長さ${Math.round(job.dur)}秒 お試し=${job.trial} 範囲=${JSON.stringify(job.box)} 吹き出し=${JSON.stringify(job.box2||null)} モデル=${$("model").value}`);
     if(job.phase==="scan") await scanPhase(job, signal);
     currentStep="切り出しと読み取り";
@@ -785,6 +815,7 @@ async function run(job){
     else if(e instanceof QuotaError) finish(job.states, e.daily ? `今日の無料枠を使い切ったため止めました。明日、${tail}` : `回数制限が続いたため止めました。少し時間をおいてから${tail}`, true);
     else { setStatus(`エラーで止まりました：${e?.message||e}。${tail}`,true); reportError(e, "読み取り処理"); }
   }finally{
+    try{ localStorage.removeItem("serifu:running"); }catch{}
     persistNow=null; $("stop").hidden=true; abortCtl=null;
     try{ await wakeLock?.release(); }catch{} wakeLock=null;
     refreshResume();
@@ -793,11 +824,11 @@ async function run(job){
 $("start").addEventListener("click", ()=>{
   if(blockReason()){ setStatus(blockReason(),true); return; }
   const trial=$("trial").checked;
-  run({key:currentKey, fileName, box:box(), box2:box2(), guess:$("guessBubble").checked && !!box2(), guesses:{}, step:+$("step").value, stable:+$("stable").value, thresh:+$("thresh").value,
+  run({key:currentKey, rec:currentRec, fileName, box:box(), box2:box2(), guess:$("guessBubble").checked && !!box2(), guesses:{}, step:+$("step").value, stable:+$("stable").value, thresh:+$("thresh").value,
        trial, dur: trial?Math.min(180,video.duration):video.duration, phase:"scan",
        scan:{i:0,regs:[]}, states:[], next:0});
 });
-$("resume").addEventListener("click", ()=>{ const job=loadJob(); if(job){ applyJobSettings(job); run(job); } });
+$("resume").addEventListener("click", ()=>{ const job=loadJob(); if(job){ job.key=currentKey; job.rec=currentRec; applyJobSettings(job); run(job); } });
 $("restart").addEventListener("click", ()=>{ clearJob(); refreshResume(); setStatus("途中経過を消しました。設定を確認して「読み取りを始める」を押してください。"); });
 $("stop").addEventListener("click",()=>abortCtl?.abort());
 let finishGuesses=null;
@@ -850,6 +881,20 @@ $("copy").addEventListener("click", async ()=>{
   try{ await navigator.clipboard.writeText(data); $("copy").textContent="コピーしました"; setTimeout(()=>$("copy").textContent="テキストをコピー",2000); }
   catch{ showFallback(data); }
 });
+
+/* ---------- 起動時のお知らせ ---------- */
+(() => {
+  let crashed=null; try{ crashed=JSON.parse(localStorage.getItem("serifu:running")||"null"); }catch{}
+  const job=loadJob(); const msgs=[];
+  if(crashed){
+    log(`前回、処理中にページが閉じられた（${crashed.file}・段階=${crashed.phase}・第${crashed.build}版）`);
+    try{ localStorage.removeItem("serifu:running"); }catch{}
+    msgs.push("前回の読み取り中にページが閉じられました（iPhoneのメモリ不足などでSafariが再読み込みした可能性があります）。");
+  }
+  if(job && job.phase!=="done") msgs.push(`「${job.fileName}」の途中経過が保存されています（${jobProgress(job)}）。同じ録画を選ぶと「続きから再開」が表示されます。`);
+  else if(crashed) msgs.push("途中経過は保存されていませんでした。お手数ですが「困ったとき」の「診断情報をコピー」をClaudeに送ってください。");
+  if(msgs.length){ const n=$("bootNote"); n.textContent=msgs.join(" "); n.hidden=false; }
+})();
 
 /* ---------- 前回の結果を保持 ---------- */
 function saveResult(){ store.set("serifu:last",JSON.stringify({fileName,rows})); }

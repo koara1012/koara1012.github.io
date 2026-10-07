@@ -190,7 +190,7 @@ ol.steps{padding-left:1.3em;margin:6px 0;font-size:14px}
 
 <script>
 const $ = id => document.getElementById(id);
-const APP_BUILD = 14; // アップデートの回数（更新のたびに1つ増やす）
+const APP_BUILD = 15; // アップデートの回数（更新のたびに1つ増やす）
 const APP_VERSION = `第${APP_BUILD}版（2026-10-07）`;
 let currentStep = "待機中";
 $("build").textContent = APP_VERSION;
@@ -441,15 +441,16 @@ async function scanPhase(job, signal){
   const states=job.states;
   const sc=job.scan;
   const R=regs.map((_,r)=>{ const x=sc.regs?.[r]||{};
-    return {prev:dec(x.prev), cur:x.cur?{start:x.cur.start,end:x.cur.end,sig:dec(x.cur.sig)}:null,
+    return {prev:dec(x.prev), cur:x.cur?{start:x.cur.start,firm:x.cur.firm,end:x.cur.end,sig:dec(x.cur.sig)}:null,
             stable:x.stable||0, changeStart:x.changeStart||0, lastSig:dec(x.lastSig), hist:x.hist||[]}; });
   let i=sc.i;
-  const thrOf=S=>{ const h=S.hist.slice(-40); if(h.length<5) return th; const m=[...h].sort((a,b)=>a-b)[Math.floor(h.length/2)]; return Math.max(th, m*2.5); };
+  // 会話ウィンドウ（r=0）は常に設定どおりのしきい値。動きの多い場面で同じ人の台詞同士がまとめられるのを防ぐ
+  const thrOf=(S,r)=>{ if(r===0) return th; const h=S.hist.slice(-40); if(h.length<5) return th; const m=[...h].sort((a,b)=>a-b)[Math.floor(h.length/2)]; return Math.max(th, m*2.5); };
   const commit=(r,c)=>{ const S=R[r]; if(!c||stdev(c.sig)<4) return;
-    if(S.lastSig && changed(S.lastSig,c.sig)<thrOf(S)){ for(let k=states.length-1;k>=0;k--) if((states[k].r||0)===r){ states[k].end=c.end; break; } }
-    else states.push({start:c.start,end:c.end,r});
+    if(S.lastSig && changed(S.lastSig,c.sig)<thrOf(S,r)){ for(let k=states.length-1;k>=0;k--) if((states[k].r||0)===r){ states[k].end=c.end; break; } }
+    else states.push({start:c.start,end:c.end,firm:c.firm??c.end,r});
     S.lastSig=c.sig; };
-  const persist=()=>{ job.scan={i, regs:R.map(S=>({prev:enc(S.prev), cur:S.cur&&{start:S.cur.start,end:S.cur.end,sig:enc(S.cur.sig)},
+  const persist=()=>{ job.scan={i, regs:R.map(S=>({prev:enc(S.prev), cur:S.cur&&{start:S.cur.start,firm:S.cur.firm,end:S.cur.end,sig:enc(S.cur.sig)},
       stable:S.stable, changeStart:S.changeStart, lastSig:enc(S.lastSig), hist:S.hist.slice(-40)}))}; saveJob(job); };
   persistNow=persist;
   const diag=job.diag=job.diag||{samples:0,same:0,changes:0};
@@ -459,23 +460,28 @@ async function scanPhase(job, signal){
     regs.forEach((b,r)=>{
       const S=R[r], sig=sigOf(b);
       if(S.prev){
-        const d=changed(sig,S.prev), thr=thrOf(S); S.hist.push(d); if(S.hist.length>80) S.hist.splice(0,S.hist.length-40);
+        const d=changed(sig,S.prev), thr=thrOf(S,r); S.hist.push(d); if(S.hist.length>80) S.hist.splice(0,S.hist.length-40);
         if(r===0){ diag.samples++; if(d===0) diag.same++; if(d>=thr) diag.changes++; }
         if(d<thr) S.stable++; else { commit(r,S.cur); S.cur=null; S.stable=0; S.changeStart=t; }
       } else S.changeStart=t;
-      if(S.stable>=need){ if(!S.cur) S.cur={start:S.changeStart,end:t,sig}; else { S.cur.end=t; S.cur.sig=sig; } }
+      if(S.stable>=need){ if(!S.cur) S.cur={start:S.changeStart,firm:Math.max(S.changeStart,t-need*step),end:t,sig}; /* firm＝同じ画面が続いていると確かめられた最初の時刻 */ else { S.cur.end=t; S.cur.sig=sig; } }
       S.prev=sig;
     });
     if(i%10===0){ setBar(0.5*i/total); setStatus(`台詞の場面を探しています… ${fmt(t)} / ${fmt(dur)}（${states.length}件）`); }
     if(i%40===0){ i++; persist(); i--; }
   }
   R.forEach((S,r)=>commit(r,S.cur));
-  // 範囲ごとに見つけた場面を時刻順に並べ、ほぼ同じ瞬間のものは1つにまとめる
+  // 切り出す瞬間は「表示が止まっている時間の真ん中」にする。
+  // 最後の瞬間（end）だと次の台詞への切り替わり（フェード）の直前で、iPhoneでは空のウィンドウや次の台詞を撮ってしまうことがあるため
+  for(const x of states){ const f=x.firm??x.end; x.at=f+(x.end-f)/2; }
+  // 範囲ごとに見つけた場面を時刻順に並べ、ほぼ同じ瞬間のものは1つにまとめる（切り出す瞬間は会話ウィンドウ側を優先）
   states.sort((a,b)=>a.end-b.end);
-  for(let k=states.length-1;k>0;k--) if(states[k].end-states[k-1].end<0.35){ states[k-1].start=Math.min(states[k-1].start,states[k].start); states[k-1].end=states[k].end; states.splice(k,1); }
+  for(let k=states.length-1;k>0;k--) if(states[k].end-states[k-1].end<0.35){
+    const a=states[k-1], b=states[k]; const keep=(a.r||0)===0 ? a : (b.r||0)===0 ? b : a;
+    a.start=Math.min(a.start,b.start); a.end=b.end; a.at=keep.at; a.r=Math.min(a.r||0,b.r||0); states.splice(k,1); }
   job.lowCount = states.length < Math.max(3, dur/20); // 20秒に1場面より少ない＝範囲が合っていない可能性
   diag.scenes=states.length;
-  diag.regions=R.map((S,r)=>({範囲:r?"吹き出し":"会話ウィンドウ", しきい値:+thrOf(S).toFixed(2), 場面:states.filter(x=>(x.r||0)===r).length}));
+  diag.regions=R.map((S,r)=>({範囲:r?"吹き出し":"会話ウィンドウ", しきい値:+thrOf(S,r).toFixed(2), 場面:states.filter(x=>(x.r||0)===r).length}));
   diag.sceneTimes=states.slice(0,40).map(x=>`${x.start.toFixed(1)}-${x.end.toFixed(1)}${x.r?"吹":""}`).join(" ");
   log(`場面探し完了：${states.length}場面 ${JSON.stringify(diag.regions)}`);
   job.phase="read"; job.next=0; delete job.scan; persistNow=null; saveJob(job);
@@ -500,7 +506,7 @@ async function readPhase(job, signal){
     try{
       for(const s of batch){
         if(signal.aborted) throw {code:"cancelled"};
-        await seekTo(s.end); drawCrop();
+        await seekTo(s.at ?? Math.max(s.start, s.end-0.15)); drawCrop();
         s.b64=cropCanvas.toDataURL("image/jpeg",0.85).split(",")[1];
       }
       setStatus(`名前欄と台詞を読み取っています… ${b+1}/${nb}組目`);

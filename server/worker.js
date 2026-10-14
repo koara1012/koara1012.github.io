@@ -14,7 +14,8 @@
 
 const VERSION = '第6版（2026-10-14 18:10:00 更新・裏のプロンプトを別に設定）';
 const DEFAULT_MODEL = 'gemini-flash-latest';
-const DEFAULT_GROK_MODEL = 'grok-4-fast-non-reasoning';
+const DEFAULT_GROK_MODEL = 'grok-4.7';                 // X（Twitter）の Grok と同じ最新世代
+const FALLBACK_GROK_MODEL = 'grok-4-fast-non-reasoning'; // 上が使えないときの予備
 const JST = 9 * 3600 * 1000;
 const TICK_MIN = 15;              // Cronの間隔（分）
 const MAX_UNREAD = 8;             // 未読がこれ以上たまったら送らない
@@ -550,18 +551,28 @@ async function callGrok(env, model, system, contents, maxSplit) {
     },
   };
   let format = schemaFormat, data, lastErr;
-  for (let attempt = 0; attempt < 3; attempt++) {
+  // 考えるモデル（grok-4.7 など）は、チャットの返事が遅くならないよう思考を軽めにする
+  let effort = /^grok-4\.[5-9]|^grok-[5-9]/.test(model) ? 'low' : null;
+  for (let attempt = 0; attempt < 5; attempt++) {
+    const req = { model, messages, temperature: 1.0, response_format: format };
+    if (effort) req.reasoning_effort = effort;
     const r = await fetch('https://api.x.ai/v1/chat/completions', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', Authorization: 'Bearer ' + env.XAI_API_KEY },
-      body: JSON.stringify({ model, messages, temperature: 1.0, response_format: format }),
+      body: JSON.stringify(req),
     });
     data = await r.json().catch(() => null);
     if (r.ok) break;
     const msg = (data && ((data.error && (data.error.message || data.error)) || data.message)) || '不明なエラー';
     lastErr = `Grok ${r.status}: ${typeof msg === 'string' ? msg : JSON.stringify(msg)}`;
     // 構造化出力に対応していないモデルなら、JSON指定をゆるめて再試行
+    if (r.status === 400 && effort && /reasoning/i.test(lastErr)) { effort = null; data = null; continue; }
     if (r.status === 400 && format === schemaFormat && /response_format|json_schema|schema/i.test(lastErr)) { format = { type: 'json_object' }; data = null; continue; }
+    // 既定のモデルが使えないキーなら、予備のモデルで続ける
+    if ([400, 403, 404].includes(r.status) && model === DEFAULT_GROK_MODEL && /model/i.test(lastErr)) {
+      await log(env, `Grok: ${model} が使えないため ${FALLBACK_GROK_MODEL} を使いました（${lastErr.slice(0, 120)}）`);
+      model = FALLBACK_GROK_MODEL; effort = null; data = null; continue;
+    }
     if (![429, 500, 502, 503, 504].includes(r.status)) throw new Error(lastErr);
     await new Promise((res) => setTimeout(res, 1500 * (attempt + 1)));
     data = null;

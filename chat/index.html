@@ -97,6 +97,23 @@ body.ura .pbtn{display:none}
   background:#fff;line-height:1.4;outline:none}
 .send{flex:none;width:40px;height:40px;border-radius:50%;background:var(--accent);color:#fff;display:grid;place-items:center;font-size:18px}
 .send:disabled{background:#c5cbd5}
+/* メッセージを選んで消す */
+.selbar{flex:none;display:none;align-items:center;gap:8px;background:#f5f6f8;border-top:1px solid var(--line);
+  padding:8px 10px calc(env(safe-area-inset-bottom) + 8px)}
+.selbar button{height:40px;padding:0 14px;border-radius:20px;font-size:14px;font-weight:700;background:#e6e9ef;color:#2a3342}
+.selbar button.on{background:var(--accent);color:#fff}
+.selbar .del{margin-left:auto;background:#e0524f;color:#fff}
+.selbar .del:disabled{background:#e9b3b2}
+#chatView.selecting .inbar{display:none}
+#chatView.selecting .selbar{display:flex}
+#selHint{display:none;text-align:center;font-size:12.5px;color:#fff;background:rgba(0,0,0,.35);padding:6px 10px}
+#chatView.selecting #selHint{display:block}
+#chatView.selecting .msg:not(.typing), #chatView.selecting .narr{position:relative;padding-left:34px;cursor:pointer;-webkit-user-select:none;user-select:none}
+#chatView.selecting .msg:not(.typing)::before, #chatView.selecting .narr::before{content:'';position:absolute;left:4px;top:50%;margin-top:-11px;width:20px;height:20px;border-radius:50%;border:2px solid #fff;background:rgba(255,255,255,.25)}
+#chatView.selecting .sel::before{background:var(--accent)!important;border-color:#fff;box-shadow:inset 0 0 0 4px var(--accent)}
+#chatView.selecting .sel::after{content:'✓';position:absolute;left:9px;top:50%;margin-top:-10px;color:#fff;font-size:13px;font-weight:900}
+#chatView.selecting .sel .bub{filter:brightness(.88)}
+#chatView.selecting .rangeStart::before{background:#ffd34d!important}
 
 /* フォーム */
 .form{padding:16px;display:flex;flex-direction:column;gap:18px}
@@ -235,14 +252,21 @@ body.ura #list.tlMode{background:#efe9f0}
   <header class="bar">
     <button class="ib" id="btnBack" aria-label="戻る">‹</button>
     <h1 id="chatTitle"></h1>
+    <button class="ib" id="btnSelect" aria-label="メッセージを選んで消す" style="font-size:14px;font-weight:700;padding:0 8px">選択</button>
     <button class="ib" id="btnEditChar" aria-label="キャラを編集" style="font-size:14px;font-weight:700;padding:0 8px">編集</button>
   </header>
+  <div id="selHint">消したいメッセージをタップして選んでください</div>
   <div class="scroll" id="msgs"></div>
   <div class="inbar">
     <button class="pbtn" id="btnPhoto" aria-label="写真を送る">📷</button>
     <input type="file" id="photoFile" accept="image/*" hidden>
     <textarea id="input" rows="1" placeholder="メッセージを入力"></textarea>
     <button class="send" id="btnSend" aria-label="送信" disabled>➤</button>
+  </div>
+  <div class="selbar">
+    <button id="selCancel">やめる</button>
+    <button id="selRange">範囲で選ぶ</button>
+    <button class="del" id="selDelete" disabled>削除</button>
   </div>
 </section>
 
@@ -521,7 +545,7 @@ body.ura #list.tlMode{background:#efe9f0}
 
 <script>
 'use strict';
-const APP_VERSION = '第14版（2026-10-14 23:46:00 更新・送信ボタンの不具合を修正）';
+const APP_VERSION = '第15版（2026-10-15 03:10:00 更新・メッセージを選んで消せる）';
 const $ = (id) => document.getElementById(id);
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 const esc = (s) => String(s).replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
@@ -894,7 +918,61 @@ function renderChat(keepPos, forceBottom) {
   box.innerHTML = html;
   const after = box.querySelectorAll('.msg:not(.typing), .narr');
   if (keepPos && after.length > before) after[after.length - 1].classList.add('pop');
-  if (!keepPos || nearBottom || forceBottom) box.scrollTop = box.scrollHeight;
+  if (sel.on) markSel();
+  else if (!keepPos || nearBottom || forceBottom) box.scrollTop = box.scrollHeight;
+}
+
+// ------------------------------------------------ メッセージを選んで消す
+const sel = { on: false, ids: new Set(), range: false, start: null };
+function startSelect(firstId) {
+  sel.on = true; sel.ids = new Set(firstId != null ? [String(firstId)] : []); sel.range = false; sel.start = null;
+  $('chatView').classList.add('selecting'); markSel();
+}
+function endSelect() {
+  sel.on = false; sel.ids.clear(); sel.range = false; sel.start = null;
+  $('chatView').classList.remove('selecting');
+  document.querySelectorAll('#msgs .sel, #msgs .rangeStart').forEach((el) => el.classList.remove('sel', 'rangeStart'));
+}
+function selectable() { return [...document.querySelectorAll('#msgs .msg[data-id], #msgs .narr[data-id]')].filter((el) => !el.classList.contains('typing')); }
+function markSel() {
+  for (const el of selectable()) {
+    el.classList.toggle('sel', sel.ids.has(el.dataset.id));
+    el.classList.toggle('rangeStart', sel.range && sel.start === el.dataset.id);
+  }
+  const n = sel.ids.size;
+  $('selDelete').textContent = n ? `削除（${n}件）` : '削除';
+  $('selDelete').disabled = !n;
+  $('selRange').classList.toggle('on', sel.range);
+  $('selHint').textContent = sel.range
+    ? (sel.start ? 'ここまで、の最後のメッセージをタップしてください' : 'ここから、の最初のメッセージをタップしてください')
+    : '消したいメッセージをタップして選んでください';
+}
+function selTap(el) {
+  const id = el.dataset.id;
+  if (sel.range) {
+    if (!sel.start) { sel.start = id; markSel(); return; }
+    const list = selectable().map((x) => x.dataset.id);
+    let a = list.indexOf(sel.start), b = list.indexOf(id);
+    if (a < 0 || b < 0) { sel.start = null; markSel(); return; }
+    if (a > b) [a, b] = [b, a];
+    for (let i = a; i <= b; i++) sel.ids.add(list[i]);
+    sel.range = false; sel.start = null; markSel(); return;
+  }
+  if (sel.ids.has(id)) sel.ids.delete(id); else sel.ids.add(id);
+  markSel();
+}
+async function deleteSelected() {
+  const k = curKey(), arr = S.msgs[k] || [];
+  const picked = arr.filter((m) => sel.ids.has(String(m.id)));
+  if (!picked.length) return;
+  if (!confirm(`選んだ${picked.length}件のメッセージを消します。キャラもこのやり取りを見られなくなります（キャラが覚えたことは、編集画面の一覧から消せます）。よろしいですか？`)) return;
+  const serverIds = picked.filter((m) => typeof m.id === 'number').map((m) => m.id);
+  try {
+    if (serverIds.length) await api('POST', '/messages/delete', { charId: k, ids: serverIds });
+    const gone = new Set(picked.map((m) => m.id));
+    S.msgs[k] = arr.filter((m) => !gone.has(m.id));
+    endSelect(); renderAll(true); toast(`${picked.length}件消しました`);
+  } catch (e) { toast('消せませんでした：' + e.message); }
 }
 
 function applyWorld() {
@@ -942,6 +1020,7 @@ function show(view) {
 }
 
 function openChat(id, world) {
+  endSelect();
   if (!charById(id)) return;
   if (world) setWorld(world);
   S.current = baseId(id);
@@ -1559,7 +1638,17 @@ $('list').addEventListener('click', (e) => {
 $('worldTabs').addEventListener('click', (e) => { const b = e.target.closest('button'); if (b) setWorld(b.dataset.w); });
 $('btnAdd').onclick = () => { if (!S.cfg.url) { openSettings(); return; } openEdit(null); };
 $('btnSettings').onclick = openSettings;
-$('btnBack').onclick = () => { show('list'); renderAll(); };
+$('btnBack').onclick = () => { endSelect(); show('list'); renderAll(); };
+$('btnSelect').onclick = () => (sel.on ? endSelect() : startSelect());
+$('selCancel').onclick = endSelect;
+$('selRange').onclick = () => { sel.range = !sel.range; sel.start = null; markSel(); };
+$('selDelete').onclick = deleteSelected;
+$('msgs').addEventListener('click', (e) => {
+  if (!sel.on) return;
+  const el = e.target.closest('.msg[data-id], .narr[data-id]');
+  e.stopPropagation(); e.preventDefault();
+  if (el && !el.classList.contains('typing')) selTap(el);
+}, true);
 $('btnEditChar').onclick = () => { editFrom = 'chat'; openEdit(S.current); };
 $('btnAdd').addEventListener('click', () => { editFrom = 'list'; });
 $('btnEditBack').onclick = () => { if (edit && edit.id && editFrom === 'chat') openChat(edit.id); else { show('list'); renderAll(); } };

@@ -149,6 +149,7 @@ pre.diag{white-space:pre-wrap;word-break:break-all;font-size:11px;background:#f3
 body.ura{--head:#3b2a3f;--chat-bg:#5a4a5e;--me:#f3d9e6;--me-fg:#2b1a24;--accent:#9a5c8a}
 .uraMode .msg .meta{display:none}
 .narr{margin:10px 6px;color:#f3eef4;font-size:13.5px;line-height:1.7;font-style:italic;text-align:center;white-space:pre-wrap;word-break:break-word;opacity:.92}
+.narr.long{text-align:left;margin:10px 14px}
 .uraMode .msg{margin:6px 0}
 .uraBox{border:1px dashed #d8c3d3;border-radius:12px;padding:12px;display:flex;flex-direction:column;gap:14px}
 
@@ -386,6 +387,11 @@ body.ura #list.tlMode{background:#efe9f0}
         <div class="seg" id="edUraNarr"><button data-v="1">あり</button><button data-v="0">なし</button></div>
       </div>
       <div class="field">
+        <label class="t">返事の長さ（裏）</label>
+        <div class="seg" id="edUraLen"><button data-v="short">短め</button><button data-v="normal">ふつう</button><button data-v="long">長め（小説風）</button></div>
+        <div class="hint">長め（小説風）は、地の文をじっくり書いた長い返事になります。返事が届くまで少し時間がかかり、料金も少し増えます。</div>
+      </div>
+      <div class="field">
         <label class="t">吹き出しの最大数（裏） <span class="rangeval" id="edUraSplitV"></span></label>
         <input type="range" id="edUraSplit" min="1" max="8" step="1">
       </div>
@@ -545,7 +551,7 @@ body.ura #list.tlMode{background:#efe9f0}
 
 <script>
 'use strict';
-const APP_VERSION = '第15版（2026-10-15 03:10:00 更新・メッセージを選んで消せる）';
+const APP_VERSION = '第16版（2026-10-15 03:30:00 更新・裏の返事の長さを選べる）';
 const $ = (id) => document.getElementById(id);
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 const esc = (s) => String(s).replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
@@ -893,7 +899,7 @@ function renderChat(keepPos, forceBottom) {
     if (!ura && dk !== prevDay) { html += `<div class="day"><span>${dayLabel(m.at)}</span></div>`; prevDay = dk; prev = null; }
     const cont = prev && prev.sender === m.sender && (ura || m.at - prev.at < 5 * 60e3);
     if (m.sender === 'narr') {
-      html += `<div class="narr" data-id="${esc(m.id)}">${esc(m.text)}</div>`;
+      html += `<div class="narr ${m.text.length > 70 ? 'long' : ''}" data-id="${esc(m.id)}">${esc(m.text)}</div>`;
     } else if (m.sender === 'me') {
       const idx = all.indexOf(m);
       const read = !m.pending && !m.failed && idx < readUpTo;
@@ -1330,6 +1336,7 @@ function openEdit(id) {
   $('edLifeBox').style.display = c ? '' : 'none';
   if (c) loadLife(c.id);
   edit.uraNarration = c ? c.uraNarration !== false : true;
+  edit.uraLength = c && c.uraLength ? c.uraLength : 'normal';
   $('edDanger').style.display = c ? '' : 'none';
   syncEditLabels(); drawEditIcon();
   show('edit');
@@ -1363,6 +1370,7 @@ function syncEditLabels() {
   $('edTlPerV').textContent = per($('edTlPer').value);
   $('edUraTlPerV').textContent = per($('edUraTlPer').value);
   $('edUraNarr').querySelectorAll('button').forEach((b) => b.classList.toggle('on', (b.dataset.v === '1') === edit.uraNarration));
+  $('edUraLen').querySelectorAll('button').forEach((b) => b.classList.toggle('on', b.dataset.v === (edit.uraLength || 'normal')));
   $('edTyping').querySelectorAll('button').forEach((b) => b.classList.toggle('on', b.dataset.v === edit.typing));
   $('edJealous').querySelectorAll('button').forEach((b) => b.classList.toggle('on', b.dataset.v === (edit.jealous || 'auto')));
 }
@@ -1395,7 +1403,7 @@ async function saveEdit() {
     id: edit.id || undefined, name, prompt: $('edPrompt').value,
     perDay: +$('edPerDay').value, nudgeRate: +$('edNudge').value, maxSplit: +$('edSplit').value, typing: edit.typing,
     uraName: $('edUraName').value.trim(), uraCharPrompt: $('edUraCharPrompt').value, uraPrompt: $('edUraPrompt').value, uraScene: $('edUraScene').value,
-    uraNarration: edit.uraNarration, uraMaxSplit: +$('edUraSplit').value,
+    uraNarration: edit.uraNarration, uraLength: edit.uraLength || 'normal', uraMaxSplit: +$('edUraSplit').value,
     affinity: +$('edAff').value, snsActivity: +$('edAct').value, tlPerDay: +$('edTlPer').value, uraTlPerDay: +$('edUraTlPer').value,
     newsKeywords: $('edNewsKw').value.trim(), jealous: edit.jealous || 'auto',
   };
@@ -1741,6 +1749,7 @@ $('msgs').addEventListener('click', (e) => {
   $('input').value = msg.text; sendMsg();
 });
 ['edPerDay', 'edNudge', 'edSplit', 'edUraSplit'].forEach((id) => $(id).addEventListener('input', syncEditLabels));
+$('edUraLen').addEventListener('click', (e) => { const b = e.target.closest('button'); if (b) { edit.uraLength = b.dataset.v; syncEditLabels(); } });
 $('edUraNarr').addEventListener('click', (e) => { const b = e.target.closest('button'); if (b) { edit.uraNarration = b.dataset.v === '1'; syncEditLabels(); } });
 $('edTyping').addEventListener('click', (e) => { const b = e.target.closest('button'); if (b) { edit.typing = b.dataset.v; syncEditLabels(); } });
 $('edJealous').addEventListener('click', (e) => { const b = e.target.closest('button'); if (b) { edit.jealous = b.dataset.v; syncEditLabels(); } });

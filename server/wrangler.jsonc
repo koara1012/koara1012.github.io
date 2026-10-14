@@ -12,6 +12,6 @@
       "database_id": "7e589630-120d-446f-8859-e1dd2178223d"
     }
   ],
-  "triggers": { "crons": ["*/15 * * * *"] },
+  "triggers": { "crons": ["* * * * *"] }, // 毎分鳴らし、worker.js 側で13分おきのときだけ動く
   "observability": { "enabled": true }
 }

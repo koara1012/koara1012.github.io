@@ -14,7 +14,7 @@
 //    ・Cron トリガー  * * * * *  （毎分。実際に動くのは13分おき）
 // =====================================================================
 
-const VERSION = '第12版（2026-10-14 23:50:00 更新・深夜早朝もたまに届く）';
+const VERSION = '第13版（2026-10-14 23:55:00 更新・夜の投稿はコメント欄も昼と同じ）';
 const DEFAULT_MODEL = 'gemini-flash-latest';
 const DEFAULT_GROK_MODEL = 'grok-4.7';                 // X（Twitter）の Grok と同じ最新世代
 const FALLBACK_GROK_MODEL = 'grok-4-fast-non-reasoning'; // 上が使えないときの予備
@@ -1078,8 +1078,9 @@ async function deletePosts(env, where, args) {
 }
 
 // ---- 静かな時間（表のみ）にかかる予定は、静かな時間が明けてから少しずつ
-function deferQuiet(due, st, world, rnd = Math.random()) {
+function deferQuiet(due, st, world, rnd = Math.random(), postAt = 0) {
   if (world !== 'omote' || !isQuiet(due, st)) return due;
+  if (postAt && isQuiet(postAt, st)) return due; // 静かな時間に投稿されたものは、コメント欄も昼と同じように動く
   if (rnd < QUIET_RATE) return due; // 夜更かし・早起きしている子は、たまにそのまま反応する
   let t = due;
   for (let i = 0; i < 200 && isQuiet(t, st); i++) t += 15 * MIN;
@@ -1215,8 +1216,8 @@ async function planReactions(env, post) {
     const doComment = Math.random() < pComment;
     const doLike = Math.random() < (doComment ? Math.min(0.97, pLike + 0.25) : pLike);
     const note = String(s.note || '').slice(0, 60);
-    if (doLike) plan.push({ c, kind: 'like', due: deferQuiet(now + reactDelay(x, false), st, world), x });
-    if (doComment) plan.push({ c, kind: 'comment', due: deferQuiet(now + reactDelay(x, true), st, world), note, x });
+    if (doLike) plan.push({ c, kind: 'like', due: deferQuiet(now + reactDelay(x, false), st, world, undefined, post.at), x });
+    if (doComment) plan.push({ c, kind: 'comment', due: deferQuiet(now + reactDelay(x, true), st, world, undefined, post.at), note, x });
   }
   if (plan.length) {
     await env.DB.batch(plan.map((j) => env.DB.prepare('INSERT INTO tl_jobs (world,char_id,kind,post_id,comment_id,due,note) VALUES (?,?,?,?,NULL,?,?)')
@@ -1247,7 +1248,7 @@ async function planReplyToMe(env, post, comment, replyTo) {
   const p = clamp((replyTo ? 0.55 : 0.45) + 0.35 * aff + 0.15 * act, 0, 0.98);
   if (Math.random() >= p) return;
   const x = clamp(0.4 + 0.6 * aff + (Math.random() - 0.5) * 0.2, 0, 1);
-  const due = deferQuiet(Date.now() + reactDelay(x, true), st, post.world);
+  const due = deferQuiet(Date.now() + reactDelay(x, true), st, post.world, undefined, post.at);
   await env.DB.prepare('INSERT INTO tl_jobs (world,char_id,kind,post_id,comment_id,due,note) VALUES (?,?,?,?,?,?,?)')
     .bind(post.world, c.id, 'reply', post.id, comment.id, due, '').run();
 }
@@ -1474,7 +1475,7 @@ async function execJob(env, j) {
   if (!replyTo && post.author !== ME && post.author !== c.id) {
     const author = (await loadChars(env)).find((x) => x.id === post.author);
     if (author && Math.random() < clamp(0.2 + 0.45 * (nz(author.snsActivity, 50) / 100), 0, 0.8)) {
-      const due = deferQuiet(Date.now() + reactDelay(0.5, true), st, world);
+      const due = deferQuiet(Date.now() + reactDelay(0.5, true), st, world, undefined, post.at);
       await env.DB.prepare('INSERT INTO tl_jobs (world,char_id,kind,post_id,comment_id,due,note) VALUES (?,?,?,?,?,?,?)')
         .bind(world, author.id, 'reply', post.id, commentId, due, '').run();
     }

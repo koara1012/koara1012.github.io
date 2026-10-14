@@ -36,6 +36,9 @@ header.bar .ib:active{background:rgba(255,255,255,.15)}
 /* 一覧 */
 .row{display:flex;align-items:center;gap:12px;padding:10px 14px;border-bottom:1px solid var(--line);width:100%;text-align:left}
 .row:active{background:#f3f5f8}
+.row{cursor:pointer}
+.edbtn{flex:none;width:38px;height:38px;border-radius:10px;display:grid;place-items:center;font-size:18px;color:var(--sub);background:#f1f3f7;margin-left:2px}
+.edbtn:active{background:#e3e7ee}
 .av{flex:none;width:50px;height:50px;border-radius:50%;object-fit:cover;background:#cfd8e6;display:grid;place-items:center;
   font-weight:700;color:#fff;font-size:20px;overflow:hidden}
 .av.sm{width:36px;height:36px;font-size:15px}
@@ -143,7 +146,7 @@ body.ura{--head:#3b2a3f;--chat-bg:#5a4a5e;--me:#f3d9e6;--me-fg:#2b1a24;--accent:
   <header class="bar">
     <button class="ib" id="btnBack" aria-label="戻る">‹</button>
     <h1 id="chatTitle"></h1>
-    <button class="ib" id="btnEditChar" aria-label="キャラ設定">≡</button>
+    <button class="ib" id="btnEditChar" aria-label="キャラを編集" style="font-size:14px;font-weight:700;padding:0 8px">編集</button>
   </header>
   <div class="scroll" id="msgs"></div>
   <div class="inbar">
@@ -331,7 +334,7 @@ body.ura{--head:#3b2a3f;--chat-bg:#5a4a5e;--me:#f3d9e6;--me-fg:#2b1a24;--accent:
 
 <script>
 'use strict';
-const APP_VERSION = '第6版（2026-10-14 18:10:00 更新・裏のプロンプトを別に設定）';
+const APP_VERSION = '第7版（2026-10-14 18:15:00 更新・一覧からキャラを編集）';
 const $ = (id) => document.getElementById(id);
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 const esc = (s) => String(s).replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
@@ -632,10 +635,11 @@ function renderList() {
     const n = ura ? 0 : unreadCount(c.id); // 裏は未読バッジなし
     const empty = ura ? 'まだ会っていません' : 'メッセージはまだありません';
     const pv = S.typingFor === k ? '入力中…' : last ? (last.sender === 'me' ? 'あなた: ' : last.sender === 'narr' ? '＊' : '') + last.text.replace(/\s+/g, ' ') : empty;
-    return `<button class="row" data-id="${esc(c.id)}">${avatarHTML(c)}
+    return `<div class="row" role="button" tabindex="0" data-id="${esc(c.id)}">${avatarHTML(c)}
       <div class="mid"><div class="nm">${esc(dispName(c))}</div><div class="pv ${S.typingFor === k ? 'typing' : ''}">${esc(pv)}</div></div>
       <div class="rt"><div class="tm">${last && !ura ? listTime(last.at) : ''}</div>${n ? `<div class="bdg">${n > 99 ? '99+' : n}</div>` : ''}</div>
-    </button>`;
+      <button class="edbtn" data-edit="${esc(c.id)}" aria-label="${esc(dispName(c))}を編集">✎</button>
+    </div>`;
   }).join('') + `<div class="foot">${esc(APP_VERSION)}</div>`;
 }
 
@@ -728,11 +732,12 @@ function openChat(id, world) {
 }
 
 // ------------------------------------------------ キャラ編集
+let editFrom = 'list'; // 編集画面をどこから開いたか（戻り先）
 let edit = null; // {id?, iconData?: string|null|undefined, typing}
 function openEdit(id) {
   const c = id ? charById(id) : null;
   edit = { id: c ? c.id : null, icon: undefined, uraIcon: undefined, typing: c ? c.typing : 'normal' };
-  $('editTitle').textContent = c ? 'キャラ設定' : 'キャラを追加';
+  $('editTitle').textContent = c ? `${c.name} を編集` : 'キャラを追加';
   $('edName').value = c ? c.name : '';
   $('edPrompt').value = c ? c.prompt : '';
   $('edPerDay').value = c ? c.perDay : 3;
@@ -800,7 +805,7 @@ async function saveEdit() {
     if (edit.icon !== undefined) { S.icons[d.char.id] = { ver: d.char.iconVer, data: edit.icon }; store.set('chat.icons', S.icons); }
     if (edit.uraIcon !== undefined) { S.icons[d.char.id + URA] = { ver: d.char.uraIconVer || 0, data: edit.uraIcon }; store.set('chat.icons', S.icons); }
     toast('保存しました');
-    if (edit.id) { openChat(d.char.id); } else { show('list'); renderAll(); }
+    if (edit.id && editFrom === 'chat') { openChat(d.char.id); } else { show('list'); renderAll(); }
   } catch (e) { toast('保存できませんでした：' + e.message); }
   finally { $('edSave').disabled = false; }
 }
@@ -980,13 +985,18 @@ function autosize() {
 }
 
 // ------------------------------------------------ イベント
-$('list').addEventListener('click', (e) => { const b = e.target.closest('.row'); if (b) openChat(b.dataset.id); });
+$('list').addEventListener('click', (e) => {
+  const ed = e.target.closest('.edbtn');
+  if (ed) { editFrom = 'list'; openEdit(ed.dataset.edit); return; }
+  const b = e.target.closest('.row'); if (b) openChat(b.dataset.id);
+});
 $('worldTabs').addEventListener('click', (e) => { const b = e.target.closest('button'); if (b) setWorld(b.dataset.w); });
 $('btnAdd').onclick = () => { if (!S.cfg.url) { openSettings(); return; } openEdit(null); };
 $('btnSettings').onclick = openSettings;
 $('btnBack').onclick = () => { show('list'); renderAll(); };
-$('btnEditChar').onclick = () => openEdit(S.current);
-$('btnEditBack').onclick = () => { if (edit && edit.id) openChat(edit.id); else { show('list'); renderAll(); } };
+$('btnEditChar').onclick = () => { editFrom = 'chat'; openEdit(S.current); };
+$('btnAdd').addEventListener('click', () => { editFrom = 'list'; });
+$('btnEditBack').onclick = () => { if (edit && edit.id && editFrom === 'chat') openChat(edit.id); else { show('list'); renderAll(); } };
 $('btnSetBack').onclick = () => { show('list'); renderAll(); };
 $('input').addEventListener('input', autosize);
 $('btnSend').onclick = sendMsg;

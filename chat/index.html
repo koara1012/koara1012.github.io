@@ -275,6 +275,11 @@ body.ura #list.tlMode{background:#efe9f0}
         <button data-v="slow">ゆっくり</button><button data-v="normal">ふつう</button><button data-v="fast">速い</button>
       </div>
     </div>
+    <div class="field">
+      <label class="t" for="edNewsKw">興味のあるニュース（任意）</label>
+      <input type="text" id="edNewsKw" maxlength="200" placeholder="例：ロシア料理、猫、天体観測">
+      <div class="hint">話題を切り替えるとき、ときどきこの言葉で最近のニュースを探して話題にします。空欄なら、キャラ設定の文章からAIが考えます。読点やスペースで区切ってください。</div>
+    </div>
     <div class="sec">タイムライン</div>
     <div class="field">
       <label class="t">あなたとの仲の良さ <span class="rangeval" id="edAffV"></span></label>
@@ -342,6 +347,7 @@ body.ura #list.tlMode{background:#efe9f0}
     <div class="btns" id="edDanger">
       <div class="sec">テスト・管理</div>
       <button class="btn sub" id="edPoke">今すぐ話しかけてもらう（表・テスト）</button>
+      <button class="btn sub" id="edNewsPoke">ニュースの話題で話しかけてもらう（表・テスト）</button>
       <button class="btn sub" id="edTlPoke">今すぐ表のタイムラインに投稿してもらう（テスト）</button>
       <button class="btn sub" id="edUraTlPoke">今すぐ裏のタイムラインに投稿してもらう（テスト）</button>
       <button class="btn danger" id="edClear">表のトーク履歴を消す</button>
@@ -389,6 +395,10 @@ body.ura #list.tlMode{background:#efe9f0}
     <div class="field" id="stGrokModelBox">
       <label class="t" for="stGrokModel">Grok のモデル名（空欄なら既定）</label>
       <input type="text" id="stGrokModel" placeholder="grok-4.7（X の Grok と同じ）" autocapitalize="off" autocorrect="off">
+    </div>
+    <div class="field">
+      <label class="chk"><input type="checkbox" id="stNews"> 話題を切り替えるとき、最近のニュースも話題にする</label>
+      <div class="hint">キャラが興味を持ちそうなニュースだけを選びます（表のトークだけ。裏は別の世界なので使いません）。</div>
     </div>
     <button class="btn sub" id="stAiSave">AIの設定を保存</button>
     <div class="card" id="stAiState" hidden></div>
@@ -469,7 +479,7 @@ body.ura #list.tlMode{background:#efe9f0}
 
 <script>
 'use strict';
-const APP_VERSION = '第8版（2026-10-14 20:00:00 更新・表と裏のタイムライン）';
+const APP_VERSION = '第9版（2026-10-14 22:40:00 更新・最近のニュースも話題に）';
 const $ = (id) => document.getElementById(id);
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 const esc = (s) => String(s).replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
@@ -1145,6 +1155,7 @@ function openEdit(id) {
   $('edAct').value = def(c && c.snsActivity, 50);
   $('edTlPer').value = def(c && c.tlPerDay, 2);
   $('edUraTlPer').value = def(c && c.uraTlPerDay, 1);
+  $('edNewsKw').value = c ? c.newsKeywords || '' : '';
   edit.uraNarration = c ? c.uraNarration !== false : true;
   $('edDanger').style.display = c ? '' : 'none';
   syncEditLabels(); drawEditIcon();
@@ -1198,6 +1209,7 @@ async function saveEdit() {
     uraName: $('edUraName').value.trim(), uraCharPrompt: $('edUraCharPrompt').value, uraPrompt: $('edUraPrompt').value, uraScene: $('edUraScene').value,
     uraNarration: edit.uraNarration, uraMaxSplit: +$('edUraSplit').value,
     affinity: +$('edAff').value, snsActivity: +$('edAct').value, tlPerDay: +$('edTlPer').value, uraTlPerDay: +$('edUraTlPer').value,
+    newsKeywords: $('edNewsKw').value.trim(),
   };
   if (edit.icon !== undefined) char.icon = edit.icon;
   if (edit.uraIcon !== undefined) char.uraIcon = edit.uraIcon;
@@ -1285,6 +1297,7 @@ function openSettings() {
   $('stQuietS').value = S.settings.quietStart; $('stQuietE').value = S.settings.quietEnd;
   aiProv = { omote: S.settings.omoteProvider === 'grok' ? 'grok' : 'gemini', ura: S.settings.uraProvider === 'gemini' ? 'gemini' : 'grok' };
   $('stGrokModel').value = S.settings.grokModel || '';
+  $('stNews').checked = S.settings.newsEnabled !== false;
   syncAiUI();
   const nf = S.settings.notify || {};
   $('nfComment').checked = nf.tlComment !== false; $('nfLike').checked = nf.tlLike !== false;
@@ -1546,6 +1559,18 @@ $('edPoke').onclick = async () => {
   } catch (e) { toast('失敗しました：' + e.message, 4000); }
   finally { $('edPoke').disabled = false; }
 };
+$('edNewsPoke').onclick = async () => {
+  const id = edit.id; $('edNewsPoke').disabled = true;
+  try {
+    toast('ニュースを探して、話しかけてもらっています…', 4000);
+    const d = await api('POST', '/poke', { charId: id, news: true });
+    d.messages.forEach((m) => { S.hidden.add(m.id); addMsg(m); });
+    setMode('talk'); openChat(id, 'omote');
+    queueReveal(d.messages, 0);
+    setTimeout(() => toast(d.news ? '使ったニュース：' + d.news : (d.newsCandidates ? 'このキャラに合うニュースがなかったので、別の話題にしました' : 'ニュースが見つかりませんでした（診断情報の記録を見てください）'), 5000), 1500);
+  } catch (e) { toast('失敗しました：' + e.message, 4000); }
+  finally { $('edNewsPoke').disabled = false; }
+};
 $('edClear').onclick = async () => {
   if (!confirm('表（トーク）の履歴をすべて消します。裏の履歴は残ります。よろしいですか？')) return;
   try { await api('POST', '/clear', { charId: edit.id }); S.msgs[edit.id] = []; toast('表の履歴を消しました'); openChat(edit.id, 'omote'); }
@@ -1586,7 +1611,7 @@ $('stProvUra').addEventListener('click', (e) => { const b = e.target.closest('bu
 $('stAiSave').onclick = async () => {
   const box = $('stAiState'); box.hidden = false; box.textContent = '保存中…';
   try {
-    const d = await api('POST', '/settings', { settings: { omoteProvider: aiProv.omote, uraProvider: aiProv.ura, grokModel: $('stGrokModel').value.trim() } });
+    const d = await api('POST', '/settings', { settings: { omoteProvider: aiProv.omote, uraProvider: aiProv.ura, grokModel: $('stGrokModel').value.trim(), newsEnabled: $('stNews').checked } });
     S.settings = d.settings;
     const p = await api('GET', '/ping'); lastPing = p;
     box.innerHTML = `✅ 保存しました<br>${aiLine(p)}${keyWarn(p)}`;

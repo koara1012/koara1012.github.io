@@ -10,10 +10,11 @@
 //    ※ Gemini / Grok は「表」「裏」それぞれアプリの設定画面で選ぶ（既定：表＝Gemini、裏＝Grok）
 //    ※ 裏（実際に会う場面）の会話は char_id に「#ura」を付けて保存し、表とは履歴・既読を完全に分ける
 //    ※ タイムライン（TL）も表と裏で完全に別（tl_posts.world が 'omote' / 'ura'）。AIは各世界の設定に従う。通知は表のTLだけ
+//    ※ 表で話題を切り替えるとき、ときどき Google ニュース（RSS）からキャラが興味を持ちそうな最近のニュースを探して話題にする
 //    ・Cron トリガー  * * * * *  （毎分。実際に動くのは13分おき）
 // =====================================================================
 
-const VERSION = '第8版（2026-10-14 22:10:00 更新・13分おきに起きる）';
+const VERSION = '第9版（2026-10-14 22:40:00 更新・話題の切り替えに最近のニュース）';
 const DEFAULT_MODEL = 'gemini-flash-latest';
 const DEFAULT_GROK_MODEL = 'grok-4.7';                 // X（Twitter）の Grok と同じ最新世代
 const FALLBACK_GROK_MODEL = 'grok-4-fast-non-reasoning'; // 上が使えないときの予備
@@ -107,6 +108,7 @@ const NOTIFY_DEFAULT = { tlComment: true, tlLike: true, tlCharPost: true, tlRepl
 const DEFAULT_SETTINGS = {
   quietEnabled: true, quietStart: 1, quietEnd: 7, omoteProvider: 'gemini', uraProvider: 'grok', grokModel: '',
   meName: '', meNameUra: '', meIconVer: 0, meUraIconVer: 0, // あなたのTLでの名前（表・裏）とアイコンの版
+  newsEnabled: true, // 表で話題を切り替えるとき、最近のニュースも話題にする
 };
 async function getSettings(env) {
   const s = { ...DEFAULT_SETTINGS, ...(await kvGet(env, 'settings', {})) };
@@ -138,6 +140,7 @@ function normChar(c) {
     snsActivity: clamp(Math.round(num(c.snsActivity, 50)), 0, 100), // SNSでの反応のしやすさ
     tlPerDay: clamp(num(c.tlPerDay, 2), 0, 12),                   // 表のTLに自分から投稿する回数（1日の目安）
     uraTlPerDay: clamp(num(c.uraTlPerDay, 1), 0, 12),             // 裏のTLに投稿する回数
+    newsKeywords: String(c.newsKeywords || '').slice(0, 200),     // 興味のあるニュースのキーワード（空ならキャラ設定からAIが考える）
   };
 }
 
@@ -320,10 +323,12 @@ async function route(key, url, body, env, ctx) {
       const c = await getChar(env, splitCid(body.charId).base);
       const hist = await recent(env, c.id, 60);
       const lastRead = await getRead(env, c.id);
-      const d = decide(c, hist, lastRead, Date.now(), await getSettings(env), true) || { mode: 'topic' };
+      let d = decide(c, hist, lastRead, Date.now(), await getSettings(env), true) || { mode: 'topic' };
+      if (body.news) d = { mode: 'topic', since: hist.length ? hist[hist.length - 1].at : Date.now(), forceNews: true };
+      if (d.mode === 'topic') await attachNews(env, c, d, await getSettings(env));
       const msgs = await generateAndStore(env, c, d, hist, lastRead);
       ctx.waitUntil(pushToAll(env, c, msgs).catch((e) => log(env, 'push: ' + e.message)));
-      return json({ messages: msgs, mode: d.mode });
+      return json({ messages: msgs, mode: d.mode, news: d.newsUsed || null, newsCandidates: (d.news || []).length });
     }
 
     case 'POST /settings': {
@@ -337,6 +342,7 @@ async function route(key, url, body, env, ctx) {
       if ('uraProvider' in s) v.uraProvider = s.uraProvider === 'gemini' ? 'gemini' : 'grok';
       delete v.provider; // 旧設定（表裏共通）は使わない
       if ('grokModel' in s) v.grokModel = String(s.grokModel || '').trim().slice(0, 80);
+      if ('newsEnabled' in s) v.newsEnabled = !!s.newsEnabled;
       if (s.notify && typeof s.notify === 'object') {
         for (const k of Object.keys(NOTIFY_DEFAULT)) if (k in s.notify) v.notify[k] = !!s.notify[k];
       }
@@ -523,6 +529,7 @@ async function tick(env) {
       const lastRead = await getRead(env, c.id);
       const d = decide(c, hist, lastRead, now, settings);
       if (!d) continue;
+      if (d.mode === 'topic') await attachNews(env, c, d, settings); // ときどき最近のニュースも話題の候補に
       const msgs = await generateAndStore(env, c, d, hist, lastRead);
       if (msgs.length) await pushToAll(env, c, msgs);
       done.push(c.name + ':' + d.mode);
@@ -586,7 +593,8 @@ function situation(d, hist, now) {
     case 'topic':
     default:
       return `最後のやり取りから${fmtDur(now - (hist.length ? hist[hist.length - 1].at : now))}たっています。` +
-        '直前の話題の催促はせず、キャラクターらしい別の新しい話題で話しかけてください（今していること、ふと思ったこと、時間帯や季節に合った話など）。' +
+        '直前の話題の催促はせず、キャラクターらしい別の新しい話題で話しかけてください（今していること、ふと思ったこと、時間帯や季節に合った話、ユーザーへの質問など）。' +
+        (d.news && d.news.length ? newsBlock(d.news, now) : '') +
         (lastMe ? '' : '');
   }
 }
@@ -761,8 +769,10 @@ function parseJsonLoose(text, label) {
 
 // その世界（表／裏）のAIに、決まった形のJSONで答えてもらう（タイムライン用）
 async function aiJson(env, world, system, userText, schema, schemaName) {
+  return callAIObj(env, world, system, [{ role: 'user', parts: [{ text: userText }] }], schema, schemaName);
+}
+async function callAIObj(env, world, system, contents, schema, schemaName) {
   const st = await getSettings(env);
-  const contents = [{ role: 'user', parts: [{ text: userText }] }];
   if (providerFor(st, world) === 'grok') {
     return parseJsonLoose(await grokText(env, grokModelFor(env, st), system, contents, schema, schemaName), 'Grok');
   }
@@ -826,7 +836,9 @@ async function generateAndStore(env, c, d, hist, lastRead, world = 'omote') {
   const texts = ura
     ? (await callAI(env, 'ura', buildUraSystem(c, tlInfo), buildContents(hist, 'ura'), c.uraMaxSplit + 4))
         .flatMap((t) => t.split(/\n(?=\s*[＊*])/)) // ナレーションとセリフが1つにまとまっていたら分ける
-    : await callAI(env, 'omote', buildSystem(c, d, hist, now, tlInfo), buildContents(hist), c.maxSplit);
+    : d.news && d.news.length
+      ? await callWithNews(env, c, d, buildSystem(c, d, hist, now, tlInfo), buildContents(hist))
+      : await callAI(env, 'omote', buildSystem(c, d, hist, now, tlInfo), buildContents(hist), c.maxSplit);
   // 裏では「＊」で始まる吹き出しをナレーションとして保存する
   const items = texts.map((t) => {
     const m = ura && t.match(/^\s*[＊*]+\s*([\s\S]*)$/);
@@ -1253,6 +1265,115 @@ async function pushTL(env, st, world, flag, { title, body, post, tag }) {
       tag: 'tl-' + (tag || post.id + '-' + Date.now()), badge: await totalUnread(env),
     });
   } catch (e) { await log(env, 'TL通知: ' + e.message); }
+}
+
+// ================================================================ 最近のニュース（表で話題を切り替えるとき）
+// キャラが興味を持ちそうなキーワードで Google ニュースを検索し、見出しの候補をAIに渡す。
+// AIは「このキャラが本当に食いつきそうなもの」だけを選んで話題にし、どれも合わなければ使わない。
+const NEWS_RATE = 0.4;          // 話題を切り替えるとき、ニュースを候補に入れる確率
+const NEWS_MAX_AGE = 3 * 24 * 3600e3;
+const NEWS_CACHE = 2 * 3600e3;  // 同じキーワードの検索は2時間使い回す
+
+function strHash(s) { let h = 0; for (const ch of String(s)) h = (h * 31 + ch.codePointAt(0)) | 0; return String(h); }
+function decodeXml(s) {
+  return String(s).replace(/<!\[CDATA\[([\s\S]*?)\]\]>/g, '$1')
+    .replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&quot;/g, '"').replace(/&#39;|&apos;/g, "'")
+    .replace(/&#(\d+);/g, (_, n) => String.fromCodePoint(+n)).replace(/&amp;/g, '&').trim();
+}
+function parseRss(xml) {
+  const items = [];
+  for (const m of String(xml).matchAll(/<item>([\s\S]*?)<\/item>/g)) {
+    const get = (tag) => { const r = m[1].match(new RegExp(`<${tag}[^>]*>([\\s\\S]*?)</${tag}>`)); return r ? decodeXml(r[1]) : ''; };
+    const source = get('source');
+    let title = get('title');
+    if (source && title.endsWith(' - ' + source)) title = title.slice(0, -(source.length + 3));
+    const at = Date.parse(get('pubDate')) || 0;
+    if (title) items.push({ title, source, at });
+  }
+  return items;
+}
+
+// キャラが興味を持ちそうなキーワード（自分で書いたもの優先。なければキャラ設定からAIが考えて、設定が変わるまで覚えておく）
+async function newsKeywords(env, c) {
+  const own = String(c.newsKeywords || '').split(/[、,，\s\n]+/).map((x) => x.trim()).filter(Boolean);
+  if (own.length) return own.slice(0, 6);
+  const key = 'newsKw:' + c.id, h = strHash(c.name + '\n' + (c.prompt || ''));
+  const cached = await kvGet(env, key, null);
+  if (cached && cached.h === h && Array.isArray(cached.kw) && cached.kw.length) return cached.kw;
+  const r = await aiJson(env, 'omote',
+    'あなたは、キャラクター設定を読んで、そのキャラクターが興味を持ちそうなニュースを探すための検索キーワードを考える係です。',
+    `# キャラクター: ${c.name}\n${trunc(c.prompt || '（設定なし）', 3000)}\n\n` +
+    'このキャラクターが思わず話題にしたくなりそうなニュースを、Googleニュースで探すための日本語の検索キーワードを4〜6個。' +
+    '好きなもの・趣味・出身地や縁のある場所・仕事や立場・関心ごとから、具体的な名詞で（例：「ロシア料理」「猫」「天体観測」）。1つのキーワードは短く。',
+    { type: 'object', properties: { keywords: { type: 'array', items: { type: 'string' } } }, required: ['keywords'], additionalProperties: false }, 'news_keywords');
+  const kw = ((r && r.keywords) || []).map((x) => String(x).trim()).filter(Boolean).slice(0, 6);
+  if (kw.length) await kvSet(env, key, { h, kw });
+  return kw;
+}
+
+async function searchNews(env, kw) {
+  const ck = 'news:' + kw;
+  const cached = await kvGet(env, ck, null);
+  if (cached && Date.now() - cached.at < NEWS_CACHE) return cached.items;
+  const url = 'https://news.google.com/rss/search?q=' + encodeURIComponent(kw + ' when:3d') + '&hl=ja&gl=JP&ceid=JP:ja';
+  const r = await fetch(url, { headers: { 'User-Agent': 'Mozilla/5.0 (chara-chat)', Accept: 'application/rss+xml, application/xml' } });
+  if (!r.ok) throw new Error('ニュースの取得に失敗しました（' + r.status + '）');
+  const items = parseRss(await r.text()).slice(0, 8).map((x) => ({ ...x, kw }));
+  await kvSet(env, ck, { at: Date.now(), items });
+  return items;
+}
+
+// 話題の切り替え（topic）のとき、ときどきニュースの候補を d.news に入れる
+async function attachNews(env, c, d, st) {
+  if (!st.newsEnabled && !d.forceNews) return;
+  if (!d.forceNews && Math.random() >= NEWS_RATE) return;
+  try {
+    const kws = await newsKeywords(env, c);
+    if (!kws.length) return;
+    const pick = kws.slice().sort(() => Math.random() - 0.5).slice(0, 3); // 毎回すこし違うキーワードで
+    const used = new Set(await kvGet(env, 'newsUsed:' + c.id, []));
+    const now = Date.now();
+    const seen = new Set();
+    let all = [];
+    for (const kw of pick) {
+      try { all = all.concat(await searchNews(env, kw)); } catch (e) { await log(env, `ニュース（${kw}）: ${e.message}`); }
+    }
+    all = all.filter((x) => x.at && now - x.at < NEWS_MAX_AGE && !used.has(x.title) && !seen.has(x.title) && seen.add(x.title))
+      .sort((a, b) => b.at - a.at).slice(0, 10);
+    if (all.length) d.news = all;
+  } catch (e) {
+    await log(env, 'ニュース: ' + e.message);
+  }
+}
+
+function newsBlock(news, now) {
+  return `
+
+# 話題の候補：ここ数日の実際のニュース（見出し）
+${news.map((x, i) => `${i}. ${x.title}（${x.source || '不明'}・${fmtDur(now - x.at)}前・検索語「${x.kw}」）`).join('\n')}
+
+- このキャラクターが本当に興味を持ちそうなもの・自分に関係のありそうなものが1つあれば、それをキャラクターらしい感想や質問と一緒に話題にしてよい（「ねえ、ニュースで見たんですけど…」のように自然に）。
+- どれもこのキャラクターらしくなければ、ニュースは使わず、キャラクターらしい別の話題や質問にする。無理にニュースを使わない。
+- 見出しに書かれていないことを事実として付け足さない。詳しくわからない部分は「詳しくは知らないけど」くらいにとどめる。
+- 使ったニュースの番号を used_news に入れる（使わなかったら -1）。`;
+}
+
+const NEWS_MSG_SCHEMA = {
+  type: 'object',
+  properties: { messages: { type: 'array', items: { type: 'string' } }, used_news: { type: 'integer' } },
+  required: ['messages', 'used_news'], additionalProperties: false,
+};
+async function callWithNews(env, c, d, system, contents) {
+  const r = await callAIObj(env, 'omote', system, contents, NEWS_MSG_SCHEMA, 'chat_reply_news');
+  const texts = parseMessages(JSON.stringify({ messages: (r && r.messages) || [] }), c.maxSplit, 'AI');
+  const i = Number(r && r.used_news);
+  if (Number.isInteger(i) && i >= 0 && d.news[i]) {
+    d.newsUsed = d.news[i].title;
+    const used = await kvGet(env, 'newsUsed:' + c.id, []);
+    used.push(d.newsUsed);
+    await kvSet(env, 'newsUsed:' + c.id, used.slice(-40)); // 同じニュースを何度も話さない
+  }
+  return texts;
 }
 
 // ---------------------------------------------------------------- Web Push（RFC 8291 / RFC 8292）

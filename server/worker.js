@@ -12,7 +12,7 @@
 //    ・Cron トリガー  */15 * * * *  （15分おき）
 // =====================================================================
 
-const VERSION = '第5版（2026-10-14 18:10:00 更新・裏の名前とアイコン）';
+const VERSION = '第6版（2026-10-14 18:10:00 更新・裏のプロンプトを別に設定）';
 const DEFAULT_MODEL = 'gemini-flash-latest';
 const DEFAULT_GROK_MODEL = 'grok-4-fast-non-reasoning';
 const JST = 9 * 3600 * 1000;
@@ -107,6 +107,7 @@ function normChar(c) {
     typing: ['slow', 'normal', 'fast'].includes(c.typing) ? c.typing : 'normal',
     // 裏（実際に会う場面）用
     uraName: String(c.uraName || '').trim().slice(0, 40),       // 裏での名前（空なら表と同じ）
+    uraCharPrompt: String(c.uraCharPrompt || '').slice(0, 20000), // 裏のキャラ設定（空なら表と同じ prompt を使う）
     uraPrompt: String(c.uraPrompt || '').slice(0, 20000),    // 裏だけの追加設定（関係性など）
     uraScene: String(c.uraScene || '').slice(0, 2000),       // いまの場面
     uraNarration: c.uraNarration !== false,                  // ナレーションを入れるか
@@ -480,7 +481,8 @@ function buildContents(hist, world = 'omote') {
 
 // 裏：実際に会っている場面のロールプレイ（表のSNSとは完全に別の時間軸・別の記憶）
 function buildUraSystem(c) {
-  const alias = c.uraName && c.uraName !== c.name ? `\n（キャラクター設定では「${c.name}」と書かれていますが、この場面では「${c.uraName}」として振る舞います）` : '';
+  const own = c.uraCharPrompt && c.uraCharPrompt.trim();
+  const alias = !own && c.uraName && c.uraName !== c.name ? `\n（キャラクター設定では「${c.name}」と書かれていますが、この場面では「${c.uraName}」として振る舞います）` : '';
   const narr = c.uraNarration
     ? `- 情景・キャラクターの動作・表情・しぐさなどの描写（ナレーション）は、先頭に「＊」を付けた別の吹き出しとして書く。三人称・現在形で、1〜3文程度の短さにする。
 - セリフの吹き出しには描写や（ ）書きを混ぜず、キャラクターが口にする言葉だけを書く。
@@ -490,7 +492,7 @@ function buildUraSystem(c) {
 これはスマホのメッセージアプリ（SNS）でのやり取りとは完全に別の時間軸・別の世界線の出来事です。SNSでの会話の内容は知らないものとして振る舞ってください。
 
 # キャラクター: ${c.uraName || c.name}${alias}
-${c.prompt || '（設定なし）'}
+${own ? c.uraCharPrompt : (c.prompt || '（設定なし）')}
 ${c.uraPrompt ? `
 # この場面（対面）での追加設定
 ${c.uraPrompt}

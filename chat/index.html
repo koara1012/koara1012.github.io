@@ -202,7 +202,7 @@ body.ura{--head:#3b2a3f;--chat-bg:#5a4a5e;--me:#f3d9e6;--me-fg:#2b1a24;--accent:
     </div>
     <div class="sec">裏（実際に会う場面）</div>
     <div class="uraBox">
-      <div class="hint" style="margin:0">裏は表とは完全に別の時間軸です。表のトークの内容は覚えていません。上の「キャラ設定」は共通で使い、ここには裏だけの設定を書きます。</div>
+      <div class="hint" style="margin:0">裏は表とは完全に別の時間軸です。表のトークの内容は覚えていません。アイコン・名前・キャラ設定は、空欄にしておくと表と同じものを使います。</div>
       <div class="field">
         <label class="t">裏のアイコン（任意）</label>
         <div class="iconpick">
@@ -219,7 +219,12 @@ body.ura{--head:#3b2a3f;--chat-bg:#5a4a5e;--me:#f3d9e6;--me-fg:#2b1a24;--accent:
         <input type="text" id="edUraName" maxlength="40" placeholder="空欄なら表と同じ名前">
       </div>
       <div class="field">
-        <label class="t" for="edUraPrompt">裏だけの追加設定（任意）</label>
+        <label class="t" for="edUraCharPrompt">裏のキャラ設定（プロンプト）</label>
+        <textarea id="edUraCharPrompt" placeholder="空欄なら表のキャラ設定をそのまま使います。書くと、裏ではこちらだけを使います。"></textarea>
+        <div class="hint">性格・口調・一人称・あなたとの関係など。表とまったく別のキャラにもできます。</div>
+      </div>
+      <div class="field">
+        <label class="t" for="edUraPrompt">裏の追加設定（任意）</label>
         <textarea id="edUraPrompt" style="min-height:120px" placeholder="例：幼なじみで、同じアパートの隣に住んでいる。会うと少し照れる。"></textarea>
       </div>
       <div class="field">
@@ -326,7 +331,7 @@ body.ura{--head:#3b2a3f;--chat-bg:#5a4a5e;--me:#f3d9e6;--me-fg:#2b1a24;--accent:
 
 <script>
 'use strict';
-const APP_VERSION = '第5版（2026-10-14 18:10:00 更新・裏の名前とアイコン）';
+const APP_VERSION = '第6版（2026-10-14 18:10:00 更新・裏のプロンプトを別に設定）';
 const $ = (id) => document.getElementById(id);
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 const esc = (s) => String(s).replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
@@ -734,6 +739,7 @@ function openEdit(id) {
   $('edNudge').value = c ? c.nudgeRate : 50;
   $('edSplit').value = c ? c.maxSplit : 3;
   $('edUraName').value = c ? c.uraName || '' : '';
+  $('edUraCharPrompt').value = c ? c.uraCharPrompt || '' : '';
   $('edUraPrompt').value = c ? c.uraPrompt || '' : '';
   $('edUraScene').value = c ? c.uraScene || '' : '';
   $('edUraSplit').value = c && c.uraMaxSplit ? c.uraMaxSplit : 5;
@@ -781,7 +787,7 @@ async function saveEdit() {
   const char = {
     id: edit.id || undefined, name, prompt: $('edPrompt').value,
     perDay: +$('edPerDay').value, nudgeRate: +$('edNudge').value, maxSplit: +$('edSplit').value, typing: edit.typing,
-    uraName: $('edUraName').value.trim(), uraPrompt: $('edUraPrompt').value, uraScene: $('edUraScene').value,
+    uraName: $('edUraName').value.trim(), uraCharPrompt: $('edUraCharPrompt').value, uraPrompt: $('edUraPrompt').value, uraScene: $('edUraScene').value,
     uraNarration: edit.uraNarration, uraMaxSplit: +$('edUraSplit').value,
   };
   if (edit.icon !== undefined) char.icon = edit.icon;

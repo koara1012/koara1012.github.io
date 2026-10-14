@@ -14,7 +14,7 @@
 //    ・Cron トリガー  * * * * *  （毎分。実際に動くのは13分おき）
 // =====================================================================
 
-const VERSION = '第9版（2026-10-14 22:40:00 更新・話題の切り替えに最近のニュース）';
+const VERSION = '第10版（2026-10-14 23:30:00 更新・記憶・毎日の様子・天気・写真・記念日）';
 const DEFAULT_MODEL = 'gemini-flash-latest';
 const DEFAULT_GROK_MODEL = 'grok-4.7';                 // X（Twitter）の Grok と同じ最新世代
 const FALLBACK_GROK_MODEL = 'grok-4-fast-non-reasoning'; // 上が使えないときの予備
@@ -83,7 +83,16 @@ async function ensureSchema(env) {
     env.DB.prepare('CREATE TABLE IF NOT EXISTS tl_jobs (id INTEGER PRIMARY KEY AUTOINCREMENT, world TEXT NOT NULL, char_id TEXT NOT NULL, kind TEXT NOT NULL, post_id INTEGER NOT NULL, comment_id INTEGER, due INTEGER NOT NULL, note TEXT)'),
     env.DB.prepare('CREATE INDEX IF NOT EXISTS idx_tl_jobs ON tl_jobs(due)'),
     env.DB.prepare('CREATE TABLE IF NOT EXISTS me_icons (world TEXT PRIMARY KEY, icon TEXT, ver INTEGER NOT NULL)'), // あなたのTL用アイコン
+    // くらし（表）
+    env.DB.prepare("CREATE TABLE IF NOT EXISTS memories (id INTEGER PRIMARY KEY AUTOINCREMENT, char_id TEXT NOT NULL, kind TEXT NOT NULL, text TEXT NOT NULL, due TEXT NOT NULL DEFAULT '', status TEXT NOT NULL DEFAULT 'open', created INTEGER NOT NULL, followed INTEGER NOT NULL DEFAULT 0)"),
+    env.DB.prepare('CREATE INDEX IF NOT EXISTS idx_memories ON memories(char_id, id)'),
+    env.DB.prepare('CREATE TABLE IF NOT EXISTS char_state (char_id TEXT PRIMARY KEY, data TEXT NOT NULL)'),
+    env.DB.prepare('CREATE TABLE IF NOT EXISTS images (id TEXT NOT NULL, part INTEGER NOT NULL, mime TEXT NOT NULL, data TEXT NOT NULL, PRIMARY KEY (id, part))'),
   ]);
+  // 既存の messages に写真・送信取り消し用の列を足す（2回目以降は「もうある」で失敗するので無視）
+  for (const col of ['image TEXT', 'alt TEXT', 'retracted INTEGER NOT NULL DEFAULT 0', 'retract_at INTEGER']) {
+    try { await env.DB.prepare('ALTER TABLE messages ADD COLUMN ' + col).run(); } catch (_) {}
+  }
   schemaReady = true;
 }
 
@@ -109,6 +118,8 @@ const DEFAULT_SETTINGS = {
   quietEnabled: true, quietStart: 1, quietEnd: 7, omoteProvider: 'gemini', uraProvider: 'grok', grokModel: '',
   meName: '', meNameUra: '', meIconVer: 0, meUraIconVer: 0, // あなたのTLでの名前（表・裏）とアイコンの版
   newsEnabled: true, // 表で話題を切り替えるとき、最近のニュースも話題にする
+  lifeEnabled: true, imagesEnabled: true, birthday: '', // くらし（記憶・毎日の様子など）、写真、あなたの誕生日 MM-DD
+  weatherLat: 35.927, weatherLon: 139.604, weatherPlace: '埼玉県さいたま市北区日進町',
 };
 async function getSettings(env) {
   const s = { ...DEFAULT_SETTINGS, ...(await kvGet(env, 'settings', {})) };
@@ -141,6 +152,7 @@ function normChar(c) {
     tlPerDay: clamp(num(c.tlPerDay, 2), 0, 12),                   // 表のTLに自分から投稿する回数（1日の目安）
     uraTlPerDay: clamp(num(c.uraTlPerDay, 1), 0, 12),             // 裏のTLに投稿する回数
     newsKeywords: String(c.newsKeywords || '').slice(0, 200),     // 興味のあるニュースのキーワード（空ならキャラ設定からAIが考える）
+    jealous: ['yes', 'no'].includes(c.jealous) ? c.jealous : 'auto', // 嫉妬する：おまかせ（設定から判断）／する／しない
   };
 }
 
@@ -163,10 +175,12 @@ async function getChar(env, id) {
   if (!r) throw new HttpError(404, 'キャラが見つかりません');
   return rowToChar(r);
 }
-const rowToMsg = (r) => ({ id: r.id, charId: r.char_id, sender: r.sender, text: r.text, at: r.at });
+const rowToMsg = (r) => ({ id: r.id, charId: r.char_id, sender: r.sender, text: r.retracted ? '' : r.text, at: r.at,
+  ...(r.image && !r.retracted ? { image: r.image } : {}), ...(r.alt ? { alt: r.alt } : {}), ...(r.retracted ? { retracted: 1, origText: r.text } : {}) });
+const MSG_COLS = 'id,char_id,sender,text,at,image,alt,retracted';
 
 async function recent(env, charId, n) {
-  const { results } = await env.DB.prepare('SELECT id,char_id,sender,text,at FROM messages WHERE char_id=? ORDER BY id DESC LIMIT ?').bind(charId, n).all();
+  const { results } = await env.DB.prepare(`SELECT ${MSG_COLS} FROM messages WHERE char_id=? ORDER BY id DESC LIMIT ?`).bind(charId, n).all();
   return results.reverse().map(rowToMsg);
 }
 async function getRead(env, charId) {
@@ -199,6 +213,7 @@ async function route(key, url, body, env, ctx) {
     }
 
     case 'GET /sync': {
+      await applyRetracts(env); // 時間が来た送信取り消しを先に反映
       const since = num(url.searchParams.get('since'), 0);
       const chars = await loadChars(env);
       let messages = [], more = false;
@@ -208,13 +223,16 @@ async function route(key, url, body, env, ctx) {
           messages.push(...(await recent(env, c.id + URA, 200)));
         }
       } else {
-        const { results } = await env.DB.prepare('SELECT id,char_id,sender,text,at FROM messages WHERE id>? ORDER BY id LIMIT 501').bind(since).all();
+        const { results } = await env.DB.prepare(`SELECT ${MSG_COLS} FROM messages WHERE id>? ORDER BY id LIMIT 501`).bind(since).all();
         more = results.length > 500;
         messages = results.slice(0, 500).map(rowToMsg);
       }
       const { results: rr } = await env.DB.prepare('SELECT char_id,at FROM reads').all();
       const reads = Object.fromEntries(rr.map((r) => [r.char_id, r.at]));
-      return json({ chars, messages, more, reads, settings: await getSettings(env), now: Date.now(), version: VERSION });
+      const { results: rt } = await env.DB.prepare('SELECT id FROM messages WHERE retracted=1 AND at>?').bind(Date.now() - 7 * 864e5).all();
+      // アプリの表示用に、記憶ではない原文は返さない
+      messages = messages.map((m) => { const { origText, ...rest } = m; return rest; });
+      return json({ chars, messages, more, reads, retracted: rt.map((r) => r.id), settings: await getSettings(env), now: Date.now(), version: VERSION });
     }
 
     case 'GET /icons': {
@@ -295,11 +313,16 @@ async function route(key, url, body, env, ctx) {
       const { base, key } = splitCid(body.charId);
       await getChar(env, base);
       const text = String(body.text || '').trim().slice(0, 4000);
-      if (!text) throw new HttpError(400, 'メッセージが空です');
+      let image = null;
+      if (typeof body.image === 'string' && body.image) {
+        if (body.image.length > 4000000) throw new HttpError(400, '写真が大きすぎます');
+        image = await saveImage(env, body.image);
+      }
+      if (!text && !image) throw new HttpError(400, 'メッセージが空です');
       const at = Date.now();
-      const r = await env.DB.prepare('INSERT INTO messages (char_id,sender,text,at) VALUES (?,?,?,?)').bind(key, 'me', text, at).run();
+      const r = await env.DB.prepare('INSERT INTO messages (char_id,sender,text,at,image) VALUES (?,?,?,?,?)').bind(key, 'me', text, at, image).run();
       await setRead(env, key, at); // 返信する＝それまでの相手のメッセージは読んだ
-      return json({ message: { id: r.meta.last_row_id, charId: key, sender: 'me', text, at } });
+      return json({ message: { id: r.meta.last_row_id, charId: key, sender: 'me', text, at, ...(image ? { image } : {}) } });
     }
 
     case 'POST /reply': {
@@ -308,6 +331,23 @@ async function route(key, url, body, env, ctx) {
       const hist = await recent(env, key, 60);
       const last = hist[hist.length - 1];
       if (!last || last.sender !== 'me') return json({ messages: [] });
+      // 表：ときどき、忙しくてすぐには読めない（あとでサーバーが返事をする）
+      if (world === 'omote') {
+        const st = await getSettings(env);
+        const state = await getState(env, c.id);
+        const now = Date.now();
+        if (state.busyUntil && now < state.busyUntil) return json({ messages: [], delayed: true });
+        const firstOfBurst = hist.length - 1 - hist.map((m) => m.sender).lastIndexOf('char') === 1; // 続けて送られた最初のメッセージのときだけ
+        if (st.lifeEnabled && firstOfBurst && !last.image && hist.some((m) => m.sender === 'char')) {
+          const h = jstParts(now).h;
+          const pBusy = 0.1 + nz(state.busy, 30) / 100 * 0.2 + (h >= 1 && h < 7 ? 0.25 : 0);
+          if (Math.random() < pBusy) {
+            state.busyUntil = now + (4 + Math.random() * 40) * MIN;
+            await setState(env, c.id, state);
+            return json({ messages: [], delayed: true });
+          }
+        }
+      }
       const msgs = await generateAndStore(env, c, { mode: 'reply' }, hist, await getRead(env, key), world);
       return json({ messages: msgs });
     }
@@ -325,10 +365,13 @@ async function route(key, url, body, env, ctx) {
       const lastRead = await getRead(env, c.id);
       let d = decide(c, hist, lastRead, Date.now(), await getSettings(env), true) || { mode: 'topic' };
       if (body.news) d = { mode: 'topic', since: hist.length ? hist[hist.length - 1].at : Date.now(), forceNews: true };
-      if (d.mode === 'topic') await attachNews(env, c, d, await getSettings(env));
+      if (body.flavor) d = { mode: 'topic', since: hist.length ? hist[hist.length - 1].at : Date.now(), flavor: String(body.flavor) };
+      if (d.mode === 'topic' && !d.flavor) await attachNews(env, c, d, await getSettings(env));
+      if (d.mode === 'topic' && !d.flavor) await chooseFlavor(env, c, d, await getSettings(env), Date.now());
       const msgs = await generateAndStore(env, c, d, hist, lastRead);
+      await lifeAfterSend(env, c, d, Date.now());
       ctx.waitUntil(pushToAll(env, c, msgs).catch((e) => log(env, 'push: ' + e.message)));
-      return json({ messages: msgs, mode: d.mode, news: d.newsUsed || null, newsCandidates: (d.news || []).length });
+      return json({ messages: msgs, mode: d.mode, flavor: d.flavor || null, news: d.newsUsed || null, newsCandidates: (d.news || []).length });
     }
 
     case 'POST /settings': {
@@ -343,6 +386,9 @@ async function route(key, url, body, env, ctx) {
       delete v.provider; // 旧設定（表裏共通）は使わない
       if ('grokModel' in s) v.grokModel = String(s.grokModel || '').trim().slice(0, 80);
       if ('newsEnabled' in s) v.newsEnabled = !!s.newsEnabled;
+      if ('lifeEnabled' in s) v.lifeEnabled = !!s.lifeEnabled;
+      if ('imagesEnabled' in s) v.imagesEnabled = !!s.imagesEnabled;
+      if ('birthday' in s) v.birthday = /^\d{2}-\d{2}$/.test(String(s.birthday)) ? String(s.birthday) : '';
       if (s.notify && typeof s.notify === 'object') {
         for (const k of Object.keys(NOTIFY_DEFAULT)) if (k in s.notify) v.notify[k] = !!s.notify[k];
       }
@@ -442,6 +488,31 @@ async function route(key, url, body, env, ctx) {
       return json({ post });
     }
 
+    // ---- 写真
+    case 'GET /img': {
+      const im = await loadImage(env, url.searchParams.get('id'));
+      if (!im) throw new HttpError(404, '写真が見つかりません');
+      const bin = Uint8Array.from(atob(im.b64), (ch) => ch.charCodeAt(0));
+      return new Response(bin, { headers: { ...CORS, 'Content-Type': im.mime, 'Cache-Control': 'private, max-age=31536000, immutable' } });
+    }
+
+    // ---- キャラが覚えていること・今日の様子（キャラ編集画面で見る・消す）
+    case 'GET /life': {
+      const c = await getChar(env, url.searchParams.get('charId'));
+      const mems = await loadMemories(env, c.id, 200);
+      const state = await getState(env, c.id);
+      return json({
+        memories: mems.map((m) => ({ id: m.id, kind: m.kind, label: MEM_LABEL[m.kind] || m.kind, text: m.text, due: m.due, status: m.status, at: m.created })),
+        today: state.day ? { day: state.day, mood: state.mood, moodReason: state.moodReason, today: state.today, story: state.story || null, diary: (state.diary || []).slice(-5) } : null,
+        affinity: nz(c.affinity, 60),
+      });
+    }
+
+    case 'POST /memory/delete': {
+      await env.DB.prepare('DELETE FROM memories WHERE id=?').bind(num(body.id, 0)).run();
+      return json({ ok: true });
+    }
+
     case 'GET /vapid': {
       const v = await getVapid(env);
       return json({ publicKey: v.pub });
@@ -523,16 +594,35 @@ async function tick(env) {
   const settings = await getSettings(env);
   const chars = await loadChars(env);
   const done = [];
+  await applyRetracts(env).catch(() => {});
+  // くらし：毎日の様子と記憶の整理（話しかける前に）
+  const ctxAll = { chars, lastUserActive: 0 };
+  if (settings.lifeEnabled) {
+    const a = await env.DB.prepare("SELECT MAX(at) AS t FROM messages WHERE sender='me' AND char_id NOT LIKE '%#ura'").first();
+    const b = await env.DB.prepare("SELECT MAX(at) AS t FROM reads WHERE char_id NOT LIKE '%#ura'").first();
+    ctxAll.lastUserActive = Math.max((a && a.t) || 0, (b && b.t) || 0);
+    for (const c of chars) {
+      try { if (!isQuiet(now, settings) && (await dailyUpdate(env, c, settings, now))) done.push(c.name + ':今日の様子'); } catch (e) { await log(env, `今日の様子（${c.name}）: ${e.message}`); }
+      try { if (await extractMemories(env, c, settings, now)) done.push(c.name + ':記憶'); } catch (e) { await log(env, `記憶（${c.name}）: ${e.message}`); }
+    }
+  }
   for (const c of chars) {
     try {
       const hist = await recent(env, c.id, 60);
       const lastRead = await getRead(env, c.id);
-      const d = decide(c, hist, lastRead, now, settings);
+      let d = await lifeDecide(env, c, hist, lastRead, now, settings, ctxAll).catch((e) => { log(env, `くらし（${c.name}）: ${e.message}`); return null; });
+      if (!d) {
+        const state = await getState(env, c.id);
+        d = decide(c, hist, lastRead, now, settings);
+        if (d && d.mode === 'reply' && state.busyUntil && now < state.busyUntil) d = null; // まだ忙しい
+      }
       if (!d) continue;
       if (d.mode === 'topic') await attachNews(env, c, d, settings); // ときどき最近のニュースも話題の候補に
+      if (d.mode === 'topic' && settings.lifeEnabled) await chooseFlavor(env, c, d, settings, now);
       const msgs = await generateAndStore(env, c, d, hist, lastRead);
       if (msgs.length) await pushToAll(env, c, msgs);
-      done.push(c.name + ':' + d.mode);
+      await lifeAfterSend(env, c, d, now);
+      done.push(c.name + ':' + d.mode + (d.flavor ? '/' + d.flavor : ''));
     } catch (e) {
       await log(env, `自動送信（${c.name}）: ${e.message}`);
     }
@@ -590,21 +680,23 @@ function situation(d, hist, now) {
     case 'nudge':
       return `ユーザーはあなたの最後のメッセージを読みましたが、返信がありません（既読スルー、${fmtDur(now - d.since)}経過）。` +
         'キャラクターらしく返信を催促してください。ただし直前の会話が自然に終わっていた場合（おやすみ・またね等）は、催促ではなく新しい話題で話しかけてください。';
+    case 'special': case 'absent': case 'followup': case 'jealous':
+      return lifeSituation(d, now);
     case 'topic':
     default:
-      return `最後のやり取りから${fmtDur(now - (hist.length ? hist[hist.length - 1].at : now))}たっています。` +
+      return (d.flavor && flavorText(d) ? flavorText(d) + '\n' : '') + `最後のやり取りから${fmtDur(now - (hist.length ? hist[hist.length - 1].at : now))}たっています。` +
         '直前の話題の催促はせず、キャラクターらしい別の新しい話題で話しかけてください（今していること、ふと思ったこと、時間帯や季節に合った話、ユーザーへの質問など）。' +
         (d.news && d.news.length ? newsBlock(d.news, now) : '') +
         (lastMe ? '' : '');
   }
 }
 
-function buildSystem(c, d, hist, now, tlInfo = '') {
+function buildSystem(c, d, hist, now, tlInfo = '', lifeInfo = '') {
   return `あなたは次のキャラクターになりきって、ユーザーとスマホのメッセージアプリ（LINEのようなチャット）でやり取りしています。
 
 # キャラクター: ${c.name}
 ${c.prompt || '（設定なし）'}
-${tlInfo}
+${tlInfo}${lifeInfo}
 # やり取りのルール（キャラクター設定に別の指示があればそちらを優先）
 - 実際にスマホでメッセージを打っているように、短く自然な話し言葉で書く。
 - 返答は1〜${c.maxSplit}個の吹き出しに分ける。一言で済むなら1個でよい。何個に分けるかはキャラクターの性格と内容に合わせる。
@@ -622,15 +714,23 @@ ${situation(d, hist, now)}
 出力は {"messages": ["吹き出し1", "吹き出し2"]} の形のJSONのみ。`;
 }
 
-function buildContents(hist, world = 'omote') {
+function buildContents(hist, world = 'omote', images = {}) {
   const turns = [];
   for (const m of hist) {
     const role = m.sender === 'me' ? 'user' : 'model';
+    let body = m.retracted ? `（送信を取り消したメッセージ：${m.origText || ''}）` : m.text;
+    if (m.image || (m.alt && !m.retracted)) body = (m.sender === 'me' ? '（写真を送りました）' : `（写真を送った：${m.alt || ''}）`) + (body ? ' ' + body : '');
     // 裏は現実の時刻とは別の時間軸なので時刻は付けない。ナレーションは「＊」付きで渡す
-    const line = world === 'ura' ? (m.sender === 'narr' ? '＊' + m.text : m.text) : `[${fmtTime(m.at)}] ${m.text}`;
+    const line = world === 'ura' ? (m.sender === 'narr' ? '＊' + body : body) : `[${fmtTime(m.at)}] ${body}`;
     const t = turns[turns.length - 1];
-    if (t && t.role === role) t.parts[0].text += '\n' + line;
-    else turns.push({ role, parts: [{ text: line }] });
+    const parts = [];
+    if (m.image && images[m.image]) parts.push({ inlineData: { mimeType: images[m.image].mime, data: images[m.image].b64 } });
+    parts.push({ text: line });
+    if (t && t.role === role) {
+      const lastText = t.parts[t.parts.length - 1];
+      if (parts.length === 1 && lastText.text != null) lastText.text += '\n' + line;
+      else t.parts.push(...parts);
+    } else turns.push({ role, parts });
   }
   if (turns.length && turns[0].role === 'model') turns.unshift({ role: 'user', parts: [{ text: '（会話の始まり）' }] });
   if (!turns.length || turns[turns.length - 1].role === 'model') {
@@ -710,7 +810,12 @@ async function callGrok(env, model, system, contents, maxSplit) {
 async function grokText(env, model, system, contents, schema, schemaName) {
   if (!env.XAI_API_KEY) throw new Error('シークレット XAI_API_KEY が設定されていません');
   const messages = [{ role: 'system', content: system }].concat(
-    contents.map((t) => ({ role: t.role === 'model' ? 'assistant' : 'user', content: t.parts.map((p) => p.text).join('\n') })));
+    contents.map((t) => ({
+      role: t.role === 'model' ? 'assistant' : 'user',
+      content: t.parts.some((p) => p.inlineData)
+        ? t.parts.map((p) => (p.inlineData ? { type: 'image_url', image_url: { url: `data:${p.inlineData.mimeType};base64,${p.inlineData.data}` } } : { type: 'text', text: p.text }))
+        : t.parts.map((p) => p.text).join('\n'),
+    })));
   const schemaFormat = { type: 'json_schema', json_schema: { name: schemaName, strict: true, schema } };
   let format = schemaFormat, data, lastErr;
   // 考えるモデル（grok-4.7 など）は、チャットの返事が遅くならないよう思考を軽めにする
@@ -833,22 +938,71 @@ async function generateAndStore(env, c, d, hist, lastRead, world = 'omote') {
   const key = ura ? c.id + URA : c.id;
   // 同じ世界のタイムラインでの出来事も伝える（トークとTLはつながっている）
   const tlInfo = await tlContextForTalk(env, c, world).catch(() => '');
-  const texts = ura
-    ? (await callAI(env, 'ura', buildUraSystem(c, tlInfo), buildContents(hist, 'ura'), c.uraMaxSplit + 4))
-        .flatMap((t) => t.split(/\n(?=\s*[＊*])/)) // ナレーションとセリフが1つにまとまっていたら分ける
-    : d.news && d.news.length
-      ? await callWithNews(env, c, d, buildSystem(c, d, hist, now, tlInfo), buildContents(hist))
-      : await callAI(env, 'omote', buildSystem(c, d, hist, now, tlInfo), buildContents(hist), c.maxSplit);
+  let texts, rich = null;
+  if (ura) {
+    texts = (await callAI(env, 'ura', buildUraSystem(c, tlInfo), buildContents(hist, 'ura'), c.uraMaxSplit + 4))
+      .flatMap((t) => t.split(/\n(?=\s*[＊*])/)); // ナレーションとセリフが1つにまとまっていたら分ける
+  } else {
+    const st = await getSettings(env);
+    const lifeInfo = await lifeContext(env, c, st, now).catch(() => '');
+    // ユーザーが送ったばかりの写真は、AIに見せる
+    const lastCharIdx = hist.map((m) => m.sender).lastIndexOf('char');
+    const newPhotos = hist.slice(lastCharIdx + 1).filter((m) => m.sender === 'me' && m.image).slice(-2);
+    const images = {};
+    for (const m of newPhotos) { const im = await loadImage(env, m.image); if (im) images[m.image] = im; }
+    const special = d.mode === 'special';
+    const opt = {
+      news: !!(d.news && d.news.length),
+      photo: st.imagesEnabled && d.flavor === 'photo',
+      edit: st.imagesEnabled && newPhotos.length > 0 && Object.keys(images).length > 0,
+      typo: st.lifeEnabled && !special && Math.random() < 0.05,
+      retract: st.lifeEnabled && !special && Math.random() < 0.05,
+    };
+    const system = buildSystem(c, special ? { ...d } : d, hist, now, tlInfo, lifeInfo);
+    const contents = buildContents(hist, 'omote', images);
+    if (opt.news || opt.photo || opt.edit || opt.typo || opt.retract || special) {
+      rich = await callOmoteRich(env, { ...c, maxSplit: special ? 2 : c.maxSplit }, d, system, contents, opt);
+      texts = rich.texts;
+      rich.srcImage = newPhotos.length ? images[newPhotos[newPhotos.length - 1].image] : null;
+      if (opt.news && Number.isInteger(rich.usedNews) && rich.usedNews >= 0 && d.news[rich.usedNews]) {
+        d.newsUsed = d.news[rich.usedNews].title;
+        const used = await kvGet(env, 'newsUsed:' + c.id, []);
+        used.push(d.newsUsed);
+        await kvSet(env, 'newsUsed:' + c.id, used.slice(-40)); // 同じニュースを何度も話さない
+      }
+    } else {
+      texts = await callAI(env, 'omote', system, contents, c.maxSplit);
+    }
+  }
   // 裏では「＊」で始まる吹き出しをナレーションとして保存する
   const items = texts.map((t) => {
     const m = ura && t.match(/^\s*[＊*]+\s*([\s\S]*)$/);
     return m ? { sender: 'narr', text: m[1].trim() } : { sender: 'char', text: ura ? t.replace(/^「([\s\S]*)」$/, '$1') : t };
   }).filter((x) => x.text);
   if (!items.length) throw new Error('返答が空でした');
+  // 写真（表）：料理や景色の写真、送られた写真の加工。人物は写さない
+  if (rich && (rich.photo || (rich.edit && rich.srcImage))) {
+    try {
+      const dataUrl = rich.photo ? await makeCharPhoto(env, rich.photo) : await editUserPhoto(env, rich.srcImage, rich.edit);
+      const imgId = await saveImage(env, dataUrl);
+      const pos = rich.photo ? Math.min(1, items.length) : items.length; // 自分の写真は最初のひとことのあと、加工した写真は最後
+      items.splice(pos, 0, { sender: 'char', text: '', image: imgId, alt: rich.photo || '加工した写真：' + rich.edit });
+    } catch (e) { await log(env, '写真: ' + e.message); }
+  }
   const t0 = Date.now();
   const res = await env.DB.batch(items.map((x, i) =>
-    env.DB.prepare('INSERT INTO messages (char_id,sender,text,at) VALUES (?,?,?,?)').bind(key, x.sender, x.text, t0 + i)));
-  return items.map((x, i) => ({ id: res[i].meta.last_row_id, charId: key, sender: x.sender, text: x.text, at: t0 + i }));
+    env.DB.prepare('INSERT INTO messages (char_id,sender,text,at,image,alt) VALUES (?,?,?,?,?,?)').bind(key, x.sender, x.text, t0 + i, x.image || null, x.alt || null)));
+  const out = items.map((x, i) => ({ id: res[i].meta.last_row_id, charId: key, sender: x.sender, text: x.text, at: t0 + i, ...(x.image ? { image: x.image, alt: x.alt } : {}) }));
+  // 送信取り消し（数分後に取り消す）
+  if (rich && Number.isInteger(rich.retract) && rich.retract >= 0) {
+    const target = out.filter((m) => !m.image)[rich.retract];
+    if (target) await env.DB.prepare('UPDATE messages SET retract_at=? WHERE id=?').bind(Date.now() + (1 + Math.random() * 5) * MIN, target.id).run();
+  }
+  return out;
+}
+
+async function applyRetracts(env) {
+  await env.DB.prepare('UPDATE messages SET retracted=1 WHERE retract_at IS NOT NULL AND retract_at<=? AND retracted=0').bind(Date.now()).run();
 }
 
 // ================================================================ タイムライン（表／裏）
@@ -1265,6 +1419,510 @@ async function pushTL(env, st, world, flag, { title, body, post, tag }) {
       tag: 'tl-' + (tag || post.id + '-' + Date.now()), badge: await totalUnread(env),
     });
   } catch (e) { await log(env, 'TL通知: ' + e.message); }
+}
+
+// ================================================================ くらし（表のトークだけ）
+// ・記憶：やり取りから、ユーザーの好み・予定・約束・出来事、キャラの相談・おすすめを覚え、あとで聞く
+// ・キャラの毎日：1日1回、気分・今日していること・日記・何日も続く出来事を更新
+// ・天気（ユーザーの地域）、季節・行事、曜日
+// ・特別な日（誕生日・出会って◯日・行事）には長めの手紙
+// ・しばらく来ないときの反応、嫉妬（嫉妬しやすいキャラだけ）、仲の良さの変化
+// ・写真（ユーザーの写真に反応・加工して返す、料理や景色の写真。人物は写さない）
+// ・本物っぽい振る舞い（打ち間違いの訂正、送信取り消し、忙しくて返信が遅れる）
+const jstDay = (ts) => { const p = jstParts(ts); return `${p.y}-${String(p.mo).padStart(2, '0')}-${String(p.d).padStart(2, '0')}`; };
+const dayDiff = (a, b) => Math.round((Date.parse(b + 'T00:00:00Z') - Date.parse(a + 'T00:00:00Z')) / 864e5); // b − a（日）
+const addDays = (day, n) => jstDay(Date.parse(day + 'T00:00:00+09:00') + n * 864e5);
+const fmtDay = (day) => { const [, m, d] = String(day).split('-'); return `${+m}/${+d}`; };
+
+async function getState(env, id) {
+  const r = await env.DB.prepare('SELECT data FROM char_state WHERE char_id=?').bind(id).first();
+  try { return r ? JSON.parse(r.data) : {}; } catch (_) { return {}; }
+}
+async function setState(env, id, s) {
+  await env.DB.prepare('INSERT INTO char_state (char_id,data) VALUES (?,?) ON CONFLICT(char_id) DO UPDATE SET data=excluded.data').bind(id, JSON.stringify(s)).run();
+}
+
+// ---- 天気（Open-Meteo・キー不要。1時間使い回す）
+const WCODE = { 0: '快晴', 1: '晴れ', 2: '晴れ時々くもり', 3: 'くもり', 45: '霧', 48: '霧', 51: '弱い霧雨', 53: '霧雨', 55: '強い霧雨', 56: '冷たい霧雨', 57: '冷たい霧雨',
+  61: '小雨', 63: '雨', 65: '大雨', 66: '冷たい雨', 67: '冷たい雨', 71: '小雪', 73: '雪', 75: '大雪', 77: '霧雪', 80: 'にわか雨', 81: 'にわか雨', 82: '激しいにわか雨',
+  85: 'にわか雪', 86: '激しいにわか雪', 95: '雷雨', 96: 'ひょうを伴う雷雨', 99: 'ひょうを伴う雷雨' };
+async function getWeather(env, st) {
+  const c = await kvGet(env, 'weather', null);
+  if (c && Date.now() - c.at < 3600e3 && c.lat === st.weatherLat && c.lon === st.weatherLon) return c.w;
+  const url = `https://api.open-meteo.com/v1/forecast?latitude=${st.weatherLat}&longitude=${st.weatherLon}` +
+    '&current=temperature_2m,weather_code&daily=weather_code,temperature_2m_max,temperature_2m_min,precipitation_probability_max&timezone=Asia%2FTokyo&forecast_days=2';
+  const r = await fetch(url);
+  if (!r.ok) throw new Error('天気の取得に失敗しました（' + r.status + '）');
+  const j = await r.json();
+  const d = j.daily || {};
+  const day = (i) => ({ w: WCODE[(d.weather_code || [])[i]] || '不明', max: (d.temperature_2m_max || [])[i], min: (d.temperature_2m_min || [])[i], rain: (d.precipitation_probability_max || [])[i] });
+  const w = { now: { w: WCODE[(j.current || {}).weather_code] || '不明', t: (j.current || {}).temperature_2m }, today: day(0), tomorrow: day(1) };
+  await kvSet(env, 'weather', { at: Date.now(), lat: st.weatherLat, lon: st.weatherLon, w });
+  return w;
+}
+function weatherText(w, st) {
+  return `${st.weatherPlace}　いま：${w.now.w}・${w.now.t}℃／今日：${w.today.w}（最高${w.today.max}℃・最低${w.today.min}℃・降水確率${w.today.rain}%）／明日：${w.tomorrow.w}（最高${w.tomorrow.max}℃・降水確率${w.tomorrow.rain}%）`;
+}
+function weatherNotable(w) {
+  return !!w && (w.today.rain >= 60 || w.tomorrow.rain >= 70 || w.today.max >= 32 || w.today.min <= 3 || /雪|雷/.test(w.today.w + w.tomorrow.w));
+}
+
+// ---- 季節・行事・曜日
+const EVENTS = [['01-01', 'お正月'], ['02-03', '節分'], ['02-14', 'バレンタインデー'], ['03-03', 'ひな祭り'], ['03-14', 'ホワイトデー'], ['04-01', 'エイプリルフール'],
+  ['05-05', 'こどもの日'], ['07-07', '七夕'], ['08-13', 'お盆'], ['10-31', 'ハロウィン'], ['11-11', 'ポッキーの日'], ['12-24', 'クリスマスイブ'], ['12-25', 'クリスマス'], ['12-31', '大晦日']];
+function seasonText(now) {
+  const p = jstParts(now), m = p.mo, today = jstDay(now);
+  const season = m === 12 || m <= 2 ? '冬' : m <= 5 ? '春' : m <= 8 ? '夏' : '秋';
+  const near = EVENTS.map(([d, n]) => {
+    let diff = dayDiff(today, `${p.y}-${d}`);
+    if (diff < -180) diff = dayDiff(today, `${p.y + 1}-${d}`);
+    return { n, diff };
+  }).filter((x) => x.diff >= -1 && x.diff <= 5);
+  return `季節：${season}` + (near.length ? '／近い行事：' + near.map((x) => (x.diff === 0 ? `今日は${x.n}` : x.diff > 0 ? `${x.diff}日後に${x.n}` : `昨日は${x.n}`)).join('、') : '');
+}
+function weekdayText(now) {
+  return { 日: '日曜日（休日。明日から週明け）', 月: '月曜日（週の始まり）', 火: '火曜日', 水: '水曜日（週の真ん中）', 木: '木曜日（週末が近い）', 金: '金曜日（週末の前）', 土: '土曜日（休日）' }[jstParts(now).w];
+}
+
+// ---- 記憶
+const MEM_KINDS = ['fact', 'plan', 'promise', 'consult', 'recommend', 'event'];
+const MEM_LABEL = { fact: 'ユーザーのこと', plan: 'ユーザーの予定', promise: '約束', consult: 'あなたがユーザーにした相談', recommend: 'あなたが勧めたもの', event: 'ユーザーに起きたこと', user_state: 'ユーザーの様子' };
+async function loadMemories(env, cid, limit = 200) {
+  const { results } = await env.DB.prepare('SELECT * FROM memories WHERE char_id=? ORDER BY id DESC LIMIT ?').bind(cid, limit).all();
+  return results;
+}
+function memoryText(mems, today) {
+  const open = mems.filter((m) => m.status === 'open' && m.kind !== 'fact' && m.kind !== 'user_state').slice(0, 15);
+  const facts = mems.filter((m) => m.kind === 'fact').slice(0, 30);
+  const states = mems.filter((m) => m.kind === 'user_state' && dayDiff(jstDay(m.created), today) <= 4).slice(0, 4);
+  if (!open.length && !facts.length && !states.length) return '';
+  const lines = [];
+  if (facts.length) lines.push('## ユーザーについて覚えていること', ...facts.map((m) => '- ' + m.text));
+  if (open.length) lines.push('## 予定・約束・まだ結果を聞いていないこと', ...open.map((m) => `- [${MEM_LABEL[m.kind] || m.kind}] ${m.text}${m.due ? `（${fmtDay(m.due)}）` : ''}`));
+  if (states.length) lines.push('## 最近のユーザーの様子', ...states.map((m) => `- ${m.text}（${fmtDay(jstDay(m.created))}）`));
+  return lines.join('\n');
+}
+
+const EXTRACT_SCHEMA = {
+  type: 'object',
+  properties: {
+    new: { type: 'array', items: { type: 'object', properties: { kind: { type: 'string' }, text: { type: 'string' }, due: { type: 'string' } }, required: ['kind', 'text', 'due'], additionalProperties: false } },
+    done: { type: 'array', items: { type: 'integer' } },
+    user_state: { type: 'string' },
+    affinity_delta: { type: 'integer' },
+    birthday: { type: 'string' },
+  },
+  required: ['new', 'done', 'user_state', 'affinity_delta', 'birthday'], additionalProperties: false,
+};
+
+// やり取りがひと段落したら、覚えておくことを取り出す
+async function extractMemories(env, c, st, now, force = false) {
+  const state = await getState(env, c.id);
+  const { results: msgs } = await env.DB.prepare('SELECT id,sender,text,at,alt FROM messages WHERE char_id=? AND id>? ORDER BY id LIMIT 60').bind(c.id, state.lastExtractId || 0).all();
+  if (!msgs.length) return false;
+  const last = msgs[msgs.length - 1];
+  const hasMe = msgs.some((m) => m.sender === 'me');
+  const settled = now - last.at > 20 * MIN;
+  if (!force && !((hasMe && (msgs.length >= 10 || settled)) || (!hasMe && state.pendingMemo && settled))) return false;
+  if (!hasMe && !state.pendingMemo) { state.lastExtractId = last.id; await setState(env, c.id, state); return false; }
+  const today = jstDay(now);
+  const mems = await loadMemories(env, c.id, 80);
+  const open = mems.filter((m) => m.status === 'open' && m.kind !== 'fact' && m.kind !== 'user_state');
+  const facts = mems.filter((m) => m.kind === 'fact').slice(0, 40);
+  const system = 'あなたは、キャラクターとユーザーのメッセージのやり取りを読んで、キャラクターがあとで話題にするために覚えておくべきことを整理する係です。事実だけを、短く具体的に書きます。';
+  const user = `# 今日の日付
+${today}（${jstParts(now).w}曜日）
+
+# キャラクター
+${c.name}（${trunc(c.prompt || '', 300)}）
+
+# すでに覚えていること（重ねて書かない）
+${facts.map((m) => '- ' + m.text).join('\n') || '（なし）'}
+
+# まだ結果を聞いていない予定・約束など（id付き）
+${open.map((m) => `- id ${m.id}: [${m.kind}] ${m.text}${m.due ? `（${m.due}）` : ''}`).join('\n') || '（なし）'}
+
+# 新しいやり取り
+${msgs.map((m) => `[${fmtTime(m.at)}] ${m.sender === 'me' ? 'ユーザー' : c.name}: ${m.text || ''}${m.alt ? `（写真：${m.alt}）` : ''}`).join('\n')}
+
+# 書き出すこと
+new：新しく覚えること。kind は次のどれか。
+- fact：ユーザーの好み・苦手・家族・仕事や学校・趣味など、長く役立つ事実（例「猫が好き」「数学が苦手」）。due は ""。
+- plan：ユーザーの予定（例「土曜に友達と映画」）。due はその予定の日（YYYY-MM-DD）。日付が曖昧なら近い日を推測。
+- promise：ユーザーとキャラクターの約束（例「今度一緒にブリヌイを作る」）。due は約束の日、決まっていなければ ""。
+- consult：キャラクターがユーザーにした相談（例「友達とケンカした件」）。due は ${addDays(today, 2)} ごろ（結果を報告する日）。
+- recommend：キャラクターがユーザーに勧めたもの（例「ボルシチのレシピ」）。due は ${addDays(today, 3)} ごろ（感想を聞く日）。
+- event：ユーザーに起きた、あとで様子を聞くとよい出来事（例「風邪をひいた」「面接を受けた」）。due は ${addDays(today, 1)} ごろ。
+done：上の「まだ結果を聞いていない」もののうち、今回のやり取りで結果がわかった・話し終えた id。
+user_state：今回のやり取りから見えるユーザーの様子（疲れている・元気がない・忙しそう・機嫌がいい・夜更かし など）を1文。特になければ ""。
+affinity_delta：今回のやり取りで、キャラクターから見たユーザーとの距離がどう変わったか。-3〜+3（ふつうは 0 か +1。冷たくされたら −）。
+birthday：ユーザーが自分の誕生日を言っていれば "MM-DD"、なければ ""。`;
+  const r = await aiJson(env, 'omote', system, user, EXTRACT_SCHEMA, 'memory_extract');
+  const stmts = [];
+  for (const m of (r && r.new) || []) {
+    const kind = MEM_KINDS.includes(m.kind) ? m.kind : null;
+    const text = String(m.text || '').trim().slice(0, 200);
+    if (!kind || !text) continue;
+    const due = /^\d{4}-\d{2}-\d{2}$/.test(m.due || '') ? m.due : '';
+    stmts.push(env.DB.prepare("INSERT INTO memories (char_id,kind,text,due,status,created,followed) VALUES (?,?,?,?, 'open', ?, 0)").bind(c.id, kind, text, due, now));
+  }
+  for (const id of (r && r.done) || []) {
+    if (open.some((m) => m.id === Number(id))) stmts.push(env.DB.prepare("UPDATE memories SET status='done' WHERE id=? AND char_id=?").bind(Number(id), c.id));
+  }
+  const us = String((r && r.user_state) || '').trim();
+  if (us) stmts.push(env.DB.prepare("INSERT INTO memories (char_id,kind,text,due,status,created,followed) VALUES (?, 'user_state', ?, '', 'done', ?, 0)").bind(c.id, us.slice(0, 120), now));
+  if (stmts.length) await env.DB.batch(stmts);
+  // 古いものを片付ける（1キャラ200件まで。予定・約束などの未完了は残す）
+  await env.DB.prepare("DELETE FROM memories WHERE char_id=? AND id NOT IN (SELECT id FROM memories WHERE char_id=? ORDER BY (status='open') DESC, id DESC LIMIT 200)").bind(c.id, c.id).run();
+  // 仲の良さが少しずつ変わる
+  const delta = clamp(Math.round(nz(r && r.affinity_delta, 0)), -3, 3);
+  if (delta) {
+    const row = await env.DB.prepare('SELECT data FROM chars WHERE id=?').bind(c.id).first();
+    if (row) {
+      const data = JSON.parse(row.data);
+      data.affinity = clamp(nz(data.affinity, 60) + delta, 0, 100);
+      await env.DB.prepare('UPDATE chars SET data=? WHERE id=?').bind(JSON.stringify(data), c.id).run();
+    }
+  }
+  const bd = String((r && r.birthday) || '');
+  if (/^\d{2}-\d{2}$/.test(bd) && !st.birthday) { const v = await getSettings(env); v.birthday = bd; await kvSet(env, 'settings', v); }
+  state.lastExtractId = last.id;
+  state.pendingMemo = false;
+  await setState(env, c.id, state);
+  return true;
+}
+
+// ---- キャラの毎日（1日1回）：気分・今日していること・日記・何日も続く出来事
+const DAILY_SCHEMA = {
+  type: 'object',
+  properties: {
+    mood: { type: 'string' }, mood_reason: { type: 'string' }, today: { type: 'string' }, diary: { type: 'string' },
+    story_title: { type: 'string' }, story_update: { type: 'string' }, story_finished: { type: 'boolean' }, busy: { type: 'integer' },
+  },
+  required: ['mood', 'mood_reason', 'today', 'diary', 'story_title', 'story_update', 'story_finished', 'busy'], additionalProperties: false,
+};
+async function dailyUpdate(env, c, st, now, force = false) {
+  const today = jstDay(now);
+  const state = await getState(env, c.id);
+  if (!force && (state.day === today || jstParts(now).h < 6)) return false;
+  let weather = '';
+  try { weather = weatherText(await getWeather(env, st), st); } catch (_) {}
+  const story = state.story && !state.story.finished ? state.story : null;
+  const mayStart = !story && Math.random() < 0.3;
+  const mems = await loadMemories(env, c.id, 40);
+  const system = 'あなたは、キャラクターの日々の暮らしを考える係です。キャラクター設定に合った、自然で小さな日常を考えます。大事件は起こしません。';
+  const user = `# キャラクター: ${c.name}
+${trunc(c.prompt || '（設定なし）', 2500)}
+
+# 今日
+${today}（${weekdayText(now)}）／${seasonText(now)}
+${weather ? '天気：' + weather : ''}
+
+# 昨日までの様子
+気分：${state.mood || '（不明）'}${state.moodReason ? `（${state.moodReason}）` : ''}
+昨日していたこと：${state.today || '（不明）'}
+最近の日記：
+${(state.diary || []).slice(-5).map((x) => `- ${fmtDay(x.d)} ${x.t}`).join('\n') || '（なし）'}
+
+# 続いている出来事
+${story ? `「${story.title}」（${fmtDay(story.start)}から）\n${story.log.map((x) => `- ${fmtDay(x.d)} ${x.t}`).join('\n')}` : '（なし）'}
+
+# ユーザーについて覚えていること（参考）
+${mems.filter((m) => m.kind === 'fact').slice(0, 10).map((m) => '- ' + m.text).join('\n') || '（なし）'}
+
+# 書き出すこと
+- mood：今日の気分や体調をひとこと（例「少し眠い」「風邪気味」「ご機嫌」）。昨日の気分を少し引き継ぎ、急に変えすぎない。たまに体調をくずしたり、いいことがあったりしてよい。
+- mood_reason：その理由をひとこと。
+- today：今日していること・予定を1〜2文。曜日や季節、天気に合わせる。
+- diary：昨日あった小さな出来事を1文（昨日していたことと矛盾しない）。
+- story_title / story_update / story_finished：${story
+    ? `続いている出来事「${story.title}」の今日の進み具合を story_update に1文。story_title は同じ題名。始まってから3〜7日たって区切りがよければ story_finished を true に。`
+    : mayStart
+      ? 'キャラクターの身の回りで、何日かかけて進む小さな出来事を新しく始める（例「猫を拾った」「料理の練習を始めた」「友達の誕生日プレゼントを選んでいる」）。story_title に題名、story_update に最初の様子。story_finished は false。'
+      : '今日は新しい出来事を始めない。story_title と story_update は ""、story_finished は false。'}
+- busy：今日の忙しさ 0〜100。`;
+  const r = await aiJson(env, 'omote', system, user, DAILY_SCHEMA, 'daily_life');
+  state.day = today;
+  state.mood = String(r.mood || '').slice(0, 60);
+  state.moodReason = String(r.mood_reason || '').slice(0, 80);
+  state.today = String(r.today || '').slice(0, 200);
+  state.busy = clamp(Math.round(nz(r.busy, 30)), 0, 100);
+  if (r.diary) state.diary = (state.diary || []).concat({ d: addDays(today, -1), t: String(r.diary).slice(0, 160) }).slice(-14);
+  const title = String(r.story_title || '').trim();
+  if (title && String(r.story_update || '').trim()) {
+    if (!story || story.title !== title) state.story = { title: title.slice(0, 60), start: today, log: [] };
+    state.story.log = state.story.log.concat({ d: today, t: String(r.story_update).slice(0, 160) }).slice(-10);
+    state.story.finished = !!r.story_finished;
+  } else if (state.story && state.story.finished) {
+    state.story = null;
+  }
+  await setState(env, c.id, state);
+  return true;
+}
+
+// 話しかけるときにAIへ渡す「くらし」の情報
+async function lifeContext(env, c, st, now) {
+  if (!st.lifeEnabled) return '';
+  const state = await getState(env, c.id);
+  const today = jstDay(now);
+  const out = [];
+  if (state.day) {
+    out.push(`# あなた（${c.name}）の今日の様子
+気分：${state.mood}${state.moodReason ? `（${state.moodReason}）` : ''}
+今日：${state.today}
+${(state.diary || []).slice(-2).map((x) => `${fmtDay(x.d)}の出来事：${x.t}`).join('\n')}${state.story ? `
+続いている出来事「${state.story.title}」：${state.story.log.map((x) => `${fmtDay(x.d)} ${x.t}`).join(' → ')}${state.story.finished ? '（区切りがついた）' : ''}` : ''}
+（気分や体調は話し方に自然ににじませる。毎回説明しなくてよい）`);
+  }
+  let w = '';
+  try { w = weatherText(await getWeather(env, st), st); } catch (_) {}
+  out.push(`# 天気・季節・曜日（ユーザーの住んでいる地域）
+${w ? '天気：' + w + '\n' : ''}${seasonText(now)}／${weekdayText(now)}`);
+  const mt = memoryText(await loadMemories(env, c.id, 120), today);
+  if (mt) out.push(`# あなたが覚えているユーザーとのこと
+${mt}
+（会話に自然に活かす。予定や約束の日付を意識する。毎回すべてに触れなくてよい）`);
+  return '\n' + out.join('\n\n') + '\n';
+}
+
+// ---- 嫉妬（嫉妬しやすいキャラだけ）
+async function isJealous(env, c) {
+  if (c.jealous === 'yes') return true;
+  if (c.jealous === 'no') return false;
+  const h = strHash(c.name + '\n' + (c.prompt || ''));
+  const cached = await kvGet(env, 'jealous:' + c.id, null);
+  if (cached && cached.h === h) return cached.score >= 60;
+  const r = await aiJson(env, 'omote', 'キャラクター設定を読んで、そのキャラクターがどれくらい嫉妬しやすいかを判定する係です。',
+    `# キャラクター: ${c.name}\n${trunc(c.prompt || '（設定なし）', 3000)}\n\nユーザーがほかの人と仲良くしているとき、このキャラクターが嫉妬したり拗ねたりする度合いを0〜100で。ヤンデレ・独占欲が強い・構ってほしがりなら高く、さっぱり・クール・大人の余裕があるなら低く。`,
+    { type: 'object', properties: { score: { type: 'integer' } }, required: ['score'], additionalProperties: false }, 'jealousy');
+  const score = clamp(nz(r && r.score, 0), 0, 100);
+  await kvSet(env, 'jealous:' + c.id, { h, score });
+  return score >= 60;
+}
+async function jealousySignal(env, c, chars, now) {
+  const since = now - 6 * 3600e3;
+  const others = chars.filter((x) => x.id !== c.id);
+  if (!others.length) return null;
+  const counts = [];
+  for (const o of others) {
+    const t = await env.DB.prepare("SELECT COUNT(*) AS n FROM messages WHERE char_id=? AND sender='me' AND at>?").bind(o.id, since).first();
+    const tl = await env.DB.prepare("SELECT (SELECT COUNT(*) FROM tl_likes l JOIN tl_posts p ON p.id=l.post_id WHERE l.author='me' AND p.author=? AND p.world='omote' AND l.at>?) + (SELECT COUNT(*) FROM tl_comments cm JOIN tl_posts p ON p.id=cm.post_id WHERE cm.author='me' AND p.author=? AND p.world='omote' AND cm.at>?) AS n").bind(o.id, since, o.id, since).first();
+    const score = (t ? t.n : 0) + 2 * (tl ? tl.n : 0);
+    if (score) counts.push({ name: o.name, talk: t ? t.n : 0, tl: tl ? tl.n : 0, score });
+  }
+  const mine = await env.DB.prepare("SELECT COUNT(*) AS n FROM messages WHERE char_id=? AND sender='me' AND at>?").bind(c.id, since).first();
+  const total = counts.reduce((s, x) => s + x.score, 0);
+  if (total < 4 || total <= 2 * (mine ? mine.n : 0) + 1) return null;
+  counts.sort((a, b) => b.score - a.score);
+  return { names: counts.slice(0, 2).map((x) => x.name), detail: counts.slice(0, 2).map((x) => `${x.name}さんとトーク${x.talk}回${x.tl ? `・タイムラインで${x.tl}回反応` : ''}`).join('、'), mine: mine ? mine.n : 0 };
+}
+
+// ---- 特別な日（誕生日・出会って◯日・行事）
+function occasionsToday(c, st, now) {
+  const today = jstDay(now), md = today.slice(5);
+  const out = [];
+  if (st.birthday && st.birthday === md) out.push({ key: 'birthday', label: 'ユーザーの誕生日' });
+  const days = dayDiff(jstDay(c.created || now), today);
+  if ([30, 100, 200, 300, 500, 1000].includes(days) || (days > 0 && days % 365 === 0)) {
+    out.push({ key: 'meet' + days, label: days % 365 === 0 ? `初めて話してから${days / 365}年の記念日` : `初めて話してから${days}日目の記念日` });
+  }
+  for (const [d, n] of [['12-24', 'クリスマスイブ'], ['01-01', 'お正月'], ['02-14', 'バレンタインデー']]) if (md === d) out.push({ key: 'ev' + d, label: n });
+  return out;
+}
+
+// ---- 15分ごと（13分ごと）の判定に加える「くらし」の話しかけ
+async function lifeDecide(env, c, hist, lastRead, now, st, ctxAll) {
+  if (!st.lifeEnabled || isQuiet(now, st)) return null;
+  const last = hist[hist.length - 1];
+  if (!last || last.sender === 'me') return null;
+  if (now - last.at < 20 * MIN) return null;
+  const today = jstDay(now), h = jstParts(now).h;
+  const state = await getState(env, c.id);
+  const unread = hist.filter((m) => m.sender === 'char' && m.at > lastRead).length;
+  // 特別な日：1日1回、朝のうちに届くことが多い
+  for (const occ of occasionsToday(c, st, now)) {
+    const k = occ.key + ':' + today;
+    if ((state.specials || {})[k]) continue;
+    if (Math.random() < 0.3) return { mode: 'special', occ, stateKey: k };
+  }
+  // しばらく来ない（2日以上）：1日1回まで
+  const away = now - ctxAll.lastUserActive;
+  if (ctxAll.lastUserActive && away > 48 * 3600e3 && state.lastAbsentDay !== today && Math.random() < 0.15) {
+    return { mode: 'absent', days: Math.floor(away / 864e5) };
+  }
+  if (unread >= 3) return null;
+  // 予定・約束・相談・おすすめのフォロー（1日2回まで）
+  if ((state.followDay === today ? state.followCount || 0 : 0) < 2) {
+    const mems = (await loadMemories(env, c.id, 120)).filter((m) => m.status === 'open' && m.kind !== 'fact' && m.kind !== 'user_state' && m.due);
+    for (const m of mems) {
+      const tomorrow = addDays(today, 1);
+      if (m.kind === 'promise' && m.due === tomorrow && m.followed < 1 && Math.random() < 0.25) return { mode: 'followup', mem: m, phase: 'remind' };
+      const ripe = today > m.due || (today === m.due && h >= 19);
+      if (ripe && m.followed < 2 && Math.random() < 0.2) return { mode: 'followup', mem: m, phase: 'after' };
+    }
+  }
+  // 嫉妬（嫉妬しやすいキャラだけ。12時間に1回まで）
+  if (now - (state.lastJealousAt || 0) > 12 * 3600e3 && Math.random() < 0.3) {
+    const sig = await jealousySignal(env, c, ctxAll.chars, now);
+    if (sig && (await isJealous(env, c))) return { mode: 'jealous', sig };
+  }
+  return null;
+}
+
+// 話しかけたあとの記録
+async function lifeAfterSend(env, c, d, now) {
+  const today = jstDay(now);
+  const state = await getState(env, c.id);
+  if (d.mode === 'special') state.specials = { ...(state.specials || {}), [d.stateKey]: true };
+  if (d.mode === 'absent') state.lastAbsentDay = today;
+  if (d.mode === 'jealous') state.lastJealousAt = now;
+  if (d.mode === 'followup') {
+    state.followCount = (state.followDay === today ? state.followCount || 0 : 0) + 1;
+    state.followDay = today;
+    await env.DB.prepare('UPDATE memories SET followed=? WHERE id=?').bind(d.phase === 'remind' ? 1 : 2, d.mem.id).run();
+  }
+  if (d.flavor === 'consult' || d.flavor === 'recommend') state.pendingMemo = true;
+  // specials は直近のものだけ残す
+  if (state.specials) state.specials = Object.fromEntries(Object.entries(state.specials).slice(-30));
+  await setState(env, c.id, state);
+}
+
+// 話題を切り替えるとき（topic）の「何を話すか」
+async function chooseFlavor(env, c, d, st, now) {
+  if (d.news && d.news.length) { d.flavor = 'news'; return; }
+  const state = await getState(env, c.id);
+  let w = null;
+  try { w = await getWeather(env, st); } catch (_) {}
+  const facts = (await loadMemories(env, c.id, 60)).filter((m) => m.kind === 'fact');
+  const wd = jstParts(now).w;
+  const table = [
+    ['free', 28],
+    ['weather', w ? (weatherNotable(w) ? 22 : 8) : 0],
+    ['story', state.story ? 16 : 0],
+    ['question', 12],
+    ['weekday', ['月', '金', '土', '日'].includes(wd) ? 9 : 0],
+    ['consult', 7],
+    ['recommend', 7],
+    ['memory', facts.length ? 10 : 0],
+    ['photo', st.imagesEnabled ? 8 : 0],
+  ];
+  const total = table.reduce((s, x) => s + x[1], 0);
+  let r = Math.random() * total;
+  for (const [k, wgt] of table) { if ((r -= wgt) < 0) { d.flavor = k; break; } }
+  if (d.flavor === 'memory' && facts.length) d.memFact = facts[Math.floor(Math.random() * Math.min(facts.length, 20))].text;
+}
+function flavorText(d) {
+  switch (d.flavor) {
+    case 'weather': return '今回は、天気や気温の話題で話しかけてください（「傘、持ちましたか？」「今日は冷えますね」のように、ユーザーを気づかう形で）。';
+    case 'story': return '今回は、あなたの「続いている出来事」の今日の進み具合を話題にしてください。ユーザーの意見を聞くのもよい。';
+    case 'question': return '今回は、ユーザーのことをもっと知るための質問を、キャラクターらしい聞き方で1つしてください（好きなもの、子どもの頃のこと、最近ハマっていること、など。覚えていることと重ならないもの）。';
+    case 'weekday': return '今回は、曜日に合った話題にしてください（月曜なら週の始まりの気づかい、金曜なら週末の予定を聞く、休日なら何をしているか聞く、など）。';
+    case 'consult': return '今回は、あなた自身の小さな悩みごとをユーザーに相談してください（キャラクターの暮らしや続いている出来事に合ったもの。深刻すぎない）。';
+    case 'recommend': return '今回は、あなたが好きなもの（料理・本・音楽・場所など、キャラクター設定に合うもの）をユーザーに具体的に勧めてください。';
+    case 'memory': return `今回は、あなたが覚えているユーザーのこと「${d.memFact}」につながる話題で話しかけてください。`;
+    case 'photo': return '今回は、あなたが作った料理や、見かけた景色・物の写真を送る流れで話しかけてください。写真の内容は photo に書く（人物は写っていない写真）。';
+    default: return '';
+  }
+}
+
+function lifeSituation(d, now) {
+  switch (d.mode) {
+    case 'special':
+      return d.occ.key === 'birthday'
+        ? '今日はユーザーの誕生日です。キャラクターらしく心をこめて、いつもより長い手紙のようなメッセージを送ってください（1つの吹き出しに200〜450字。最後に短い吹き出しを1つ添えてもよい）。'
+        : `今日は「${d.occ.label}」です。キャラクターらしく、その日にちなんだ、いつもより長めの手紙のようなメッセージを送ってください（1つの吹き出しに150〜400字）。`;
+    case 'absent':
+      return `ユーザーが約${d.days}日間、アプリを開いていません。キャラクターらしく、心配・寂しさ・拗ね・怒りなどを伝えてください。日数が長いほど気持ちを強く。ただし責めすぎず、最後はユーザーを気づかう。`;
+    case 'followup': {
+      const m = d.mem;
+      if (d.phase === 'remind') return `明日は、ユーザーと約束した「${m.text}」の日です。楽しみにしている気持ちや確認を、キャラクターらしく伝えてください。`;
+      return {
+        plan: `ユーザーの予定「${m.text}」（${fmtDay(m.due)}）について、どうだったかを自然に聞いてください。`,
+        event: `ユーザーに起きた「${m.text}」について、その後どうなったか・大丈夫かを自然に聞いてください。`,
+        promise: `約束した「${m.text}」（${fmtDay(m.due)}）の日が過ぎました。会話から果たされたとわかればその話を、わからなければどうだったかを聞いてください。果たされていなさそうなら、キャラクターらしく拗ねてもよい。`,
+        consult: `あなたが前にユーザーに相談した「${m.text}」について、その後どうなったかを報告してください（うまくいった／いかなかった、アドバイスへのお礼など）。`,
+        recommend: `あなたが前にユーザーに勧めた「${m.text}」を、試してみたか・どうだったかを聞いてください。`,
+      }[m.kind] || `「${m.text}」について、その後どうなったか話題にしてください。`;
+    }
+    case 'jealous':
+      return `ユーザーは最近、あなた以外（${d.sig.names.join('、')}）とよくやり取りしています（${d.sig.detail}。あなたとのトークは${d.sig.mine}回）。キャラクターらしく嫉妬して、拗ねたり、気を引こうとしたりしてください。相手を傷つけたり脅したりはしない。`;
+    default: return '';
+  }
+}
+
+// ---- 写真の保存（D1に分けて保存）
+const IMG_CHUNK = 700000;
+async function saveImage(env, dataUrl) {
+  const m = String(dataUrl).match(/^data:(image\/[\w+.-]+);base64,([A-Za-z0-9+/=]+)$/);
+  if (!m) throw new HttpError(400, '画像の形式が正しくありません');
+  const id = crypto.randomUUID();
+  const stmts = [];
+  for (let i = 0, n = 0; i < m[2].length; i += IMG_CHUNK, n++) {
+    stmts.push(env.DB.prepare('INSERT INTO images (id,part,mime,data) VALUES (?,?,?,?)').bind(id, n, m[1], m[2].slice(i, i + IMG_CHUNK)));
+  }
+  await env.DB.batch(stmts);
+  return id;
+}
+async function loadImage(env, id) {
+  const { results } = await env.DB.prepare('SELECT mime,data FROM images WHERE id=? ORDER BY part').bind(String(id || '')).all();
+  if (!results.length) return null;
+  return { mime: results[0].mime, b64: results.map((r) => r.data).join('') };
+}
+
+// Gemini の画像モデルで作る／加工する
+const IMAGE_MODELS = ['gemini-2.5-flash-image', 'gemini-2.5-flash-image-preview'];
+async function geminiImage(env, prompt, src) {
+  if (!env.GEMINI_API_KEY) throw new Error('GEMINI_API_KEY がありません');
+  const models = env.GEMINI_IMAGE_MODEL ? [env.GEMINI_IMAGE_MODEL] : IMAGE_MODELS;
+  let lastErr = '';
+  for (const model of models) {
+    const parts = [{ text: prompt }];
+    if (src) parts.unshift({ inlineData: { mimeType: src.mime, data: src.b64 } });
+    const r = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(model)}:generateContent`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'x-goog-api-key': env.GEMINI_API_KEY },
+      body: JSON.stringify({ contents: [{ role: 'user', parts }], generationConfig: { responseModalities: ['TEXT', 'IMAGE'] } }),
+    });
+    const data = await r.json().catch(() => null);
+    if (!r.ok) { lastErr = `画像 ${model} ${r.status}: ${(data && data.error && data.error.message) || ''}`; if ([400, 403, 404].includes(r.status)) continue; throw new Error(lastErr); }
+    const ps = (((data || {}).candidates || [])[0] || {}).content;
+    const img = ((ps && ps.parts) || []).find((p) => p.inlineData && p.inlineData.data);
+    if (img) return `data:${img.inlineData.mimeType || 'image/png'};base64,${img.inlineData.data}`;
+    lastErr = '画像が返ってきませんでした';
+  }
+  throw new Error(lastErr);
+}
+const NO_PEOPLE = '人物・キャラクター・人の顔や手足・イラストの人物は一切写さない。文字やロゴは入れない。';
+async function makeCharPhoto(env, desc) {
+  return geminiImage(env, `スマートフォンで撮った自然な写真を1枚作ってください。内容：${desc}。${NO_PEOPLE}`);
+}
+async function editUserPhoto(env, src, how) {
+  return geminiImage(env, `この写真を次のように加工した画像を1枚作ってください：${how}。写っているものは保ったまま。${NO_PEOPLE.replace('写さない', '新しく描き足さない')}`, src);
+}
+
+// ---- 返事を作る（表）：ニュース・写真・打ち間違い・送信取り消しの指示を必要に応じて加える
+async function callOmoteRich(env, c, d, system, contents, opt) {
+  const props = { messages: { type: 'array', items: { type: 'string' } } };
+  let extra = '';
+  if (opt.news) { props.used_news = { type: 'integer' }; }
+  if (opt.photo) { props.photo = { type: 'string' }; extra += '\n- photo：送る写真の内容を具体的に1文（例「焼きたてのブリヌイ、ジャムを添えて」）。人物は写っていないもの。写真を送らないなら ""。'; }
+  if (opt.edit) { props.photo_edit = { type: 'string' }; extra += '\n- photo_edit：ユーザーが送ってくれた写真を、遊び心で加工して送り返したくなったら、加工の内容を1文（例「花の冠を描き足す」「レトロなフィルムカメラ風にする」）。人物やキャラクターは描き足さない。ほとんどの場合は加工しない（""）。'; }
+  if (opt.retract) { props.retract = { type: 'integer' }; extra += '\n- retract：書いた吹き出しのうち、照れくさかったり言い過ぎたりして「やっぱり送信取り消し」したくなるものがあれば、その番号（0から）。なければ -1。'; }
+  if (opt.typo) extra += '\n- 今回は、吹き出しのどれか1か所で、スマホらしい自然な打ち間違い（変換ミスなど）をして、次の吹き出しで「＊正しい言葉」と短く訂正する。キャラクターに合わなければしなくてよい。';
+  const keys = Object.keys(props);
+  const sys = system.replace(/出力は \{"messages"[\s\S]*$/, '') + (extra ? `\n# 追加の出力${extra}\n` : '') +
+    `\n出力は ${JSON.stringify(Object.fromEntries(keys.map((k) => [k, k === 'messages' ? ['吹き出し1'] : props[k].type === 'integer' ? -1 : ''])))} の形のJSONのみ。`;
+  const schema = { type: 'object', properties: props, required: keys, additionalProperties: false };
+  const r = await callAIObj(env, 'omote', sys, contents, schema, 'chat_reply_rich');
+  const maxSplit = c.maxSplit + (opt.typo ? 1 : 0);
+  const texts = parseMessages(JSON.stringify({ messages: (r && r.messages) || [] }), maxSplit, 'AI');
+  return {
+    texts,
+    usedNews: opt.news ? Number(r && r.used_news) : -1,
+    photo: opt.photo ? String((r && r.photo) || '').trim() : '',
+    edit: opt.edit ? String((r && r.photo_edit) || '').trim() : '',
+    retract: opt.retract ? Number(r && r.retract) : -1,
+  };
 }
 
 // ================================================================ 最近のニュース（表で話題を切り替えるとき）

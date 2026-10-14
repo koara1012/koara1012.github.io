@@ -220,6 +220,20 @@ pre.diag{white-space:pre-wrap;word-break:break-all;font-size:11px;background:#f3
     <button class="btn" id="stSave">保存して接続テスト</button>
     <div class="card" id="stPing" hidden></div>
 
+    <div class="sec">AI（返事を作るモデル）</div>
+    <div class="field">
+      <div class="seg" id="stProvider">
+        <button data-v="gemini">Gemini</button><button data-v="grok">Grok</button>
+      </div>
+      <div class="hint">切り替えても会話の履歴はそのまま引き継がれます。Grok を使うには、Cloudflare のシークレットに XAI_API_KEY が必要です。</div>
+    </div>
+    <div class="field" id="stGrokModelBox">
+      <label class="t" for="stGrokModel">Grok のモデル名（空欄なら既定）</label>
+      <input type="text" id="stGrokModel" placeholder="grok-4-fast-non-reasoning" autocapitalize="off" autocorrect="off">
+    </div>
+    <button class="btn sub" id="stAiSave">AIの設定を保存</button>
+    <div class="card" id="stAiState" hidden></div>
+
     <div class="sec">通知</div>
     <div class="card warn" id="stNotStandalone" hidden>
       iPhoneで通知を受け取るには、Safariの共有ボタン →「ホーム画面に追加」をして、ホーム画面のアイコンから開いてください。
@@ -255,7 +269,7 @@ pre.diag{white-space:pre-wrap;word-break:break-all;font-size:11px;background:#f3
 
 <script>
 'use strict';
-const APP_VERSION = '第1版（2026-10-14 03:55:00 更新）';
+const APP_VERSION = '第2版（2026-10-14 17:05:00 更新・Gemini/Grok切り替え）';
 const $ = (id) => document.getElementById(id);
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 const esc = (s) => String(s).replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
@@ -735,6 +749,9 @@ function openSettings() {
   $('stQuietS').innerHTML = opts; $('stQuietE').innerHTML = opts;
   $('stQuietOn').checked = !!S.settings.quietEnabled;
   $('stQuietS').value = S.settings.quietStart; $('stQuietE').value = S.settings.quietEnd;
+  aiProvider = S.settings.provider === 'grok' ? 'grok' : 'gemini';
+  $('stGrokModel').value = S.settings.grokModel || '';
+  syncAiUI();
   show('set');
   refreshPushState(); renderDiag();
 }
@@ -745,7 +762,7 @@ async function saveSettings() {
   try {
     const d = await api('GET', '/ping');
     lastPing = d;
-    box.innerHTML = `✅ つながりました<br>サーバー ${esc(d.version)}<br>モデル: ${esc(d.model)}${d.hasGeminiKey ? '' : '<br>⚠️ GEMINI_API_KEY が未設定です'}<br>通知の登録数: ${d.subs}`;
+    box.innerHTML = `✅ つながりました<br>サーバー ${esc(d.version)}<br>AI: ${esc(providerLabel(d.provider))}（${esc(d.model)}）${keyWarn(d)}<br>通知の登録数: ${d.subs}`;
     S.synced = false; S.maxId = 0; S.msgs = {};
     sync();
   } catch (e) { box.textContent = '❌ ' + e.message; }
@@ -753,6 +770,16 @@ async function saveSettings() {
 }
 
 let lastPing = null;
+let aiProvider = 'gemini';
+function providerLabel(p) { return p === 'grok' ? 'Grok' : 'Gemini'; }
+function keyWarn(d) {
+  if (d.provider === 'grok') return d.hasXaiKey ? '' : '<br>⚠️ XAI_API_KEY が未設定です（Cloudflare のシークレットに追加してください）';
+  return d.hasGeminiKey ? '' : '<br>⚠️ GEMINI_API_KEY が未設定です';
+}
+function syncAiUI() {
+  $('stProvider').querySelectorAll('button').forEach((b) => b.classList.toggle('on', b.dataset.v === aiProvider));
+  $('stGrokModelBox').hidden = aiProvider !== 'grok';
+}
 async function diagText() {
   let server = lastPing;
   if (S.cfg.url) { try { server = await api('GET', '/ping'); lastPing = server; } catch (e) { server = { error: e.message }; } }
@@ -770,7 +797,7 @@ async function diagText() {
     '--- サーバー ---',
   ];
   if (server && !server.error) {
-    lines.push('サーバー版: ' + server.version, 'モデル: ' + server.model, 'Geminiキー: ' + (server.hasGeminiKey ? 'あり' : 'なし'), '通知登録数: ' + server.subs);
+    lines.push('サーバー版: ' + server.version, 'AI: ' + providerLabel(server.provider) + '（' + server.model + '）', 'Geminiキー: ' + (server.hasGeminiKey ? 'あり' : 'なし'), 'xAI(Grok)キー: ' + (server.hasXaiKey ? 'あり' : 'なし'), '通知登録数: ' + server.subs);
     if (server.lastTick) lines.push('最後の自動チェック: ' + fmt(server.lastTick.at) + ' ' + (server.lastTick.done.join(', ') || '（送信なし）'));
     else lines.push('最後の自動チェック: まだ動いていません（Cronトリガーを確認）');
     lines.push('サーバーの記録:');
@@ -885,6 +912,16 @@ $('stQuietSave').onclick = async () => {
     const d = await api('POST', '/settings', { settings: { quietEnabled: $('stQuietOn').checked, quietStart: +$('stQuietS').value, quietEnd: +$('stQuietE').value } });
     S.settings = d.settings; toast('保存しました');
   } catch (e) { toast(e.message); }
+};
+$('stProvider').addEventListener('click', (e) => { const b = e.target.closest('button'); if (b) { aiProvider = b.dataset.v; syncAiUI(); } });
+$('stAiSave').onclick = async () => {
+  const box = $('stAiState'); box.hidden = false; box.textContent = '保存中…';
+  try {
+    const d = await api('POST', '/settings', { settings: { provider: aiProvider, grokModel: $('stGrokModel').value.trim() } });
+    S.settings = d.settings;
+    const p = await api('GET', '/ping'); lastPing = p;
+    box.innerHTML = `✅ 保存しました<br>いまのAI: ${esc(providerLabel(p.provider))}（${esc(p.model)}）${keyWarn(p)}`;
+  } catch (e) { box.textContent = '❌ ' + e.message; }
 };
 $('dgCopy').onclick = copyDiag;
 $('dgImage').onclick = imageDiag;

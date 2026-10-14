@@ -5,11 +5,15 @@
 //    ・シークレット GEMINI_API_KEY … GeminiのAPIキー
 //    ・シークレット APP_TOKEN      … アプリとサーバーの合言葉（自分で決めた文字列）
 //    ・（任意）変数 GEMINI_MODEL   … 使うモデル名。未設定なら gemini-flash-latest
+//    ・（Grokを使うとき）シークレット XAI_API_KEY … xAI（Grok）のAPIキー
+//    ・（任意）変数 XAI_MODEL      … Grokのモデル名。アプリの設定画面で指定したものが優先
+//    ※ Gemini / Grok の切り替えはアプリの設定画面から（会話履歴はどちらでもそのまま使われる）
 //    ・Cron トリガー  */15 * * * *  （15分おき）
 // =====================================================================
 
-const VERSION = '第2版（2026-10-14 15:35:00 更新・GitHubから自動Deploy）';
+const VERSION = '第3版（2026-10-14 17:05:00 更新・Gemini/Grok切り替え）';
 const DEFAULT_MODEL = 'gemini-flash-latest';
+const DEFAULT_GROK_MODEL = 'grok-4-fast-non-reasoning';
 const JST = 9 * 3600 * 1000;
 const TICK_MIN = 15;              // Cronの間隔（分）
 const MAX_UNREAD = 8;             // 未読がこれ以上たまったら送らない
@@ -81,7 +85,7 @@ async function log(env, msg) {
   } catch (_) {}
 }
 
-const DEFAULT_SETTINGS = { quietEnabled: true, quietStart: 1, quietEnd: 7 };
+const DEFAULT_SETTINGS = { quietEnabled: true, quietStart: 1, quietEnd: 7, provider: 'gemini', grokModel: '' };
 async function getSettings(env) {
   return { ...DEFAULT_SETTINGS, ...(await kvGet(env, 'settings', {})) };
 }
@@ -133,9 +137,11 @@ async function route(key, url, body, env, ctx) {
   switch (key) {
     case 'GET /ping': {
       const subs = await env.DB.prepare('SELECT COUNT(*) AS n FROM subs').first();
+      const st = await getSettings(env);
       return json({
-        ok: true, version: VERSION, model: env.GEMINI_MODEL || DEFAULT_MODEL,
-        hasGeminiKey: !!env.GEMINI_API_KEY, subs: subs.n,
+        ok: true, version: VERSION, provider: st.provider, model: modelFor(env, st),
+        geminiModel: env.GEMINI_MODEL || DEFAULT_MODEL, grokModel: grokModelFor(env, st),
+        hasGeminiKey: !!env.GEMINI_API_KEY, hasXaiKey: !!env.XAI_API_KEY, subs: subs.n,
         log: await kvGet(env, 'log', []), lastTick: await kvGet(env, 'lastTick', null),
       });
     }
@@ -233,12 +239,14 @@ async function route(key, url, body, env, ctx) {
     }
 
     case 'POST /settings': {
+      // 送られてきた項目だけ更新する（静かな時間とAIの設定は別々に保存される）
       const s = body.settings || {};
-      const v = {
-        quietEnabled: !!s.quietEnabled,
-        quietStart: clamp(Math.round(num(s.quietStart, 1)), 0, 23),
-        quietEnd: clamp(Math.round(num(s.quietEnd, 7)), 0, 23),
-      };
+      const v = await getSettings(env);
+      if ('quietEnabled' in s) v.quietEnabled = !!s.quietEnabled;
+      if ('quietStart' in s) v.quietStart = clamp(Math.round(num(s.quietStart, 1)), 0, 23);
+      if ('quietEnd' in s) v.quietEnd = clamp(Math.round(num(s.quietEnd, 7)), 0, 23);
+      if ('provider' in s) v.provider = s.provider === 'grok' ? 'grok' : 'gemini';
+      if ('grokModel' in s) v.grokModel = String(s.grokModel || '').trim().slice(0, 80);
       await kvSet(env, 'settings', v);
       return json({ settings: v });
     }
@@ -418,6 +426,72 @@ function buildContents(hist) {
   return turns;
 }
 
+function modelFor(env, st) {
+  return st.provider === 'grok' ? grokModelFor(env, st) : (env.GEMINI_MODEL || DEFAULT_MODEL);
+}
+function grokModelFor(env, st) {
+  return (st && st.grokModel) || env.XAI_MODEL || DEFAULT_GROK_MODEL;
+}
+
+// AIの返答テキスト（JSON）→ 吹き出しの配列
+function parseMessages(text, maxSplit, label) {
+  let arr;
+  try { arr = JSON.parse(text).messages; } catch (_) {
+    const m = String(text).match(/\{[\s\S]*\}/);
+    try { arr = m ? JSON.parse(m[0]).messages : null; } catch (_) { arr = null; }
+    if (!arr) arr = String(text).split(/\n+/);
+  }
+  if (!Array.isArray(arr)) arr = [String(arr || '')];
+  arr = arr.map((s) => String(s).replace(/^\s*\[[^\]]{1,30}\]\s*/, '').trim()).filter(Boolean);
+  if (arr.length > maxSplit) arr = arr.slice(0, maxSplit - 1).concat(arr.slice(maxSplit - 1).join('\n'));
+  if (!arr.length) throw new Error(label + 'の返答からメッセージを取り出せませんでした');
+  return arr;
+}
+
+// ---------------------------------------------------------------- Grok（xAI・OpenAI互換API）
+// 会話履歴は Gemini 用の contents と同じものを受け取り、OpenAI 形式（user / assistant）に変換して送る
+async function callGrok(env, model, system, contents, maxSplit) {
+  if (!env.XAI_API_KEY) throw new Error('シークレット XAI_API_KEY が設定されていません');
+  const messages = [{ role: 'system', content: system }].concat(
+    contents.map((t) => ({ role: t.role === 'model' ? 'assistant' : 'user', content: t.parts.map((p) => p.text).join('\n') })));
+  const schemaFormat = {
+    type: 'json_schema',
+    json_schema: {
+      name: 'chat_reply', strict: true,
+      schema: { type: 'object', properties: { messages: { type: 'array', items: { type: 'string' } } }, required: ['messages'], additionalProperties: false },
+    },
+  };
+  let format = schemaFormat, data, lastErr;
+  for (let attempt = 0; attempt < 3; attempt++) {
+    const r = await fetch('https://api.x.ai/v1/chat/completions', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Authorization: 'Bearer ' + env.XAI_API_KEY },
+      body: JSON.stringify({ model, messages, temperature: 1.0, response_format: format }),
+    });
+    data = await r.json().catch(() => null);
+    if (r.ok) break;
+    const msg = (data && ((data.error && (data.error.message || data.error)) || data.message)) || '不明なエラー';
+    lastErr = `Grok ${r.status}: ${typeof msg === 'string' ? msg : JSON.stringify(msg)}`;
+    // 構造化出力に対応していないモデルなら、JSON指定をゆるめて再試行
+    if (r.status === 400 && format === schemaFormat && /response_format|json_schema|schema/i.test(lastErr)) { format = { type: 'json_object' }; data = null; continue; }
+    if (![429, 500, 502, 503, 504].includes(r.status)) throw new Error(lastErr);
+    await new Promise((res) => setTimeout(res, 1500 * (attempt + 1)));
+    data = null;
+  }
+  if (!data) throw new Error(lastErr);
+  const ch = data.choices && data.choices[0];
+  const text = ch && ch.message && typeof ch.message.content === 'string' ? ch.message.content : '';
+  if (!text) throw new Error('Grokの返答が空でした（' + ((ch && ch.finish_reason) || '理由不明') + '）');
+  return parseMessages(text, maxSplit, 'Grok');
+}
+
+// ---------------------------------------------------------------- 使うAIを選んで呼ぶ
+async function callAI(env, system, contents, maxSplit) {
+  const st = await getSettings(env);
+  if (st.provider === 'grok') return callGrok(env, grokModelFor(env, st), system, contents, maxSplit);
+  return callGemini(env, system, contents, maxSplit);
+}
+
 async function callGemini(env, system, contents, maxSplit) {
   if (!env.GEMINI_API_KEY) throw new Error('シークレット GEMINI_API_KEY が設定されていません');
   const model = env.GEMINI_MODEL || DEFAULT_MODEL;
@@ -451,18 +525,12 @@ async function callGemini(env, system, contents, maxSplit) {
   const parts = (cand && cand.content && cand.content.parts) || [];
   const text = parts.filter((p) => !p.thought && typeof p.text === 'string').map((p) => p.text).join('');
   if (!text) throw new Error('Geminiの返答が空でした（' + ((cand && cand.finishReason) || (data.promptFeedback && data.promptFeedback.blockReason) || '理由不明') + '）');
-  let arr;
-  try { arr = JSON.parse(text).messages; } catch (_) { arr = text.split(/\n+/); }
-  if (!Array.isArray(arr)) arr = [String(arr || '')];
-  arr = arr.map((s) => String(s).replace(/^\s*\[[^\]]{1,30}\]\s*/, '').trim()).filter(Boolean);
-  if (arr.length > maxSplit) arr = arr.slice(0, maxSplit - 1).concat(arr.slice(maxSplit - 1).join('\n'));
-  if (!arr.length) throw new Error('Geminiの返答からメッセージを取り出せませんでした');
-  return arr;
+  return parseMessages(text, maxSplit, 'Gemini');
 }
 
 async function generateAndStore(env, c, d, hist, lastRead) {
   const now = Date.now();
-  const texts = await callGemini(env, buildSystem(c, d, hist, now), buildContents(hist), c.maxSplit);
+  const texts = await callAI(env, buildSystem(c, d, hist, now), buildContents(hist), c.maxSplit);
   const t0 = Date.now();
   const res = await env.DB.batch(texts.map((t, i) =>
     env.DB.prepare('INSERT INTO messages (char_id,sender,text,at) VALUES (?,?,?,?)').bind(c.id, 'char', t, t0 + i)));

@@ -10,15 +10,15 @@
 //    ※ Gemini / Grok は「表」「裏」それぞれアプリの設定画面で選ぶ（既定：表＝Gemini、裏＝Grok）
 //    ※ 裏（実際に会う場面）の会話は char_id に「#ura」を付けて保存し、表とは履歴・既読を完全に分ける
 //    ※ タイムライン（TL）も表と裏で完全に別（tl_posts.world が 'omote' / 'ura'）。AIは各世界の設定に従う。通知は表のTLだけ
-//    ・Cron トリガー  */15 * * * *  （15分おき）
+//    ・Cron トリガー  * * * * *  （毎分。実際に動くのは13分おき）
 // =====================================================================
 
-const VERSION = '第7版（2026-10-14 20:00:00 更新・表と裏のタイムライン）';
+const VERSION = '第8版（2026-10-14 22:10:00 更新・13分おきに起きる）';
 const DEFAULT_MODEL = 'gemini-flash-latest';
 const DEFAULT_GROK_MODEL = 'grok-4.7';                 // X（Twitter）の Grok と同じ最新世代
 const FALLBACK_GROK_MODEL = 'grok-4-fast-non-reasoning'; // 上が使えないときの予備
 const JST = 9 * 3600 * 1000;
-const TICK_MIN = 15;              // Cronの間隔（分）
+const TICK_MIN = 13;              // 起きる間隔（分）。Cronは毎分鳴らし、ちょうど13分ごとのときだけ動く
 const MAX_UNREAD = 8;             // 未読がこれ以上たまったら送らない
 const REPLY_WAIT = 90 * 1000;
 const URA = '#ura';              // 裏タブの会話は char_id にこれを付けて別に保存する     // ユーザーの送信後、アプリが返信を取りに来なかった場合にサーバーが代わりに返すまでの時間
@@ -54,6 +54,9 @@ export default {
   },
 
   async scheduled(event, env, ctx) {
+    // Cronの書き方では「13分ごと」をぴったり指定できないので、毎分呼ばれて13分おきのときだけ動く
+    const minute = Math.floor(Number(event && event.scheduledTime) / 60000);
+    if (Number.isFinite(minute) && minute % TICK_MIN !== 0) return;
     ctx.waitUntil(tick(env).catch((e) => log(env, 'tick全体: ' + e.message)));
   },
 };

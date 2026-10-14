@@ -120,6 +120,60 @@ body.ura{--head:#3b2a3f;--chat-bg:#5a4a5e;--me:#f3d9e6;--me-fg:#2b1a24;--accent:
 .uraMode .msg{margin:6px 0}
 .uraBox{border:1px dashed #d8c3d3;border-radius:12px;padding:12px;display:flex;flex-direction:column;gap:14px}
 
+/* 下のタブ（トーク／タイムライン） */
+.bnav{flex:none;display:flex;border-top:1px solid var(--line);background:#fafbfc;padding-bottom:env(safe-area-inset-bottom)}
+.bnav button{flex:1;padding:10px 0 9px;font-size:12px;font-weight:700;color:var(--sub);display:flex;flex-direction:column;align-items:center;gap:2px;position:relative}
+.bnav button .ic{font-size:20px;line-height:1}
+.bnav button.on{color:var(--accent)}
+.bnav .dot{position:absolute;top:7px;left:calc(50% + 10px);width:9px;height:9px;border-radius:50%;background:var(--badge);display:none}
+.bnav .dot.on{display:block}
+
+/* タイムライン */
+#list.tlMode{background:#f2f4f7}
+body.ura #list.tlMode{background:#efe9f0}
+.compose{background:var(--bg);margin:10px;border-radius:14px;padding:12px;display:flex;gap:10px;align-items:flex-start;border:1px solid var(--line)}
+.compose .mid{flex:1;min-width:0;display:flex;flex-direction:column;gap:8px}
+.compose textarea{width:100%;border:0;resize:none;outline:none;min-height:44px;max-height:160px;line-height:1.5;background:transparent;font-size:15px}
+.compose .act{display:flex;justify-content:flex-end}
+.pill{padding:7px 16px;border-radius:999px;background:var(--accent);color:#fff;font-weight:700;font-size:14px}
+.pill:disabled{background:#c5cbd5}
+.post{background:var(--bg);margin:0 10px 10px;border-radius:14px;padding:12px;display:flex;gap:10px;border:1px solid var(--line);cursor:pointer}
+.post .av{width:42px;height:42px;font-size:17px}
+.post .mid{flex:1;min-width:0}
+.post .hd{display:flex;gap:6px;align-items:baseline;min-width:0}
+.post .nm{font-weight:700;font-size:14.5px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.post .tm{color:var(--sub);font-size:12px;white-space:nowrap}
+.post .tx{font-size:15px;line-height:1.6;white-space:pre-wrap;word-break:break-word;margin-top:3px}
+.post .acts{display:flex;gap:22px;margin-top:8px;color:var(--sub);font-size:13px}
+.post .acts button{display:flex;align-items:center;gap:5px;color:var(--sub);font-variant-numeric:tabular-nums}
+.post .acts button.liked{color:#e0245e}
+.post .who{color:var(--sub);font-size:12px;margin-top:6px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.post.big{cursor:default;margin-top:10px}
+.post.big .tx{font-size:16px}
+.cmts{margin:0 10px 16px;display:flex;flex-direction:column;gap:8px}
+.cmt{background:var(--bg);border-radius:12px;padding:10px 12px;display:flex;gap:9px;border:1px solid var(--line)}
+.cmt.rep{margin-left:28px}
+.cmt .mid{flex:1;min-width:0}
+.cmt .hd{display:flex;gap:6px;align-items:baseline}
+.cmt .nm{font-weight:700;font-size:13.5px}
+.cmt .tm{color:var(--sub);font-size:11px}
+.cmt .to{color:var(--sub);font-size:11.5px}
+.cmt .tx{font-size:14.5px;line-height:1.55;white-space:pre-wrap;word-break:break-word;margin-top:2px}
+.cmt .ops{display:flex;gap:16px;margin-top:5px}
+.cmt .ops button{color:var(--accent);font-size:12.5px;font-weight:700}
+.cmt .ops button.del{color:var(--sub);font-weight:400}
+.likers{margin:0 10px 10px;color:var(--sub);font-size:12.5px;line-height:1.6}
+.replyChip{display:none;align-items:center;gap:8px;padding:6px 12px;background:#eef1f6;font-size:12.5px;color:var(--fg)}
+.replyChip.on{display:flex}
+.replyChip button{margin-left:auto;color:var(--sub);font-size:16px}
+.chk{display:flex;gap:10px;align-items:center;padding:6px 0;font-size:14.5px}
+.chk input{width:20px;height:20px}
+.meRow{display:flex;gap:12px;align-items:center}
+.meRow .av{width:56px;height:56px;font-size:22px}
+.meRow .mid{flex:1;min-width:0;display:flex;flex-direction:column;gap:6px}
+.meRow .mini{display:flex;gap:6px}
+.meRow .mini .btn{padding:7px;font-size:13px}
+
 #toast{position:fixed;left:50%;bottom:calc(env(safe-area-inset-bottom) + 80px);transform:translateX(-50%);
   background:rgba(20,26,38,.9);color:#fff;padding:10px 16px;border-radius:12px;font-size:13px;max-width:86vw;
   opacity:0;pointer-events:none;transition:opacity .2s;z-index:50;line-height:1.5}
@@ -131,7 +185,7 @@ body.ura{--head:#3b2a3f;--chat-bg:#5a4a5e;--me:#f3d9e6;--me-fg:#2b1a24;--accent:
 <!-- トーク一覧 -->
 <section class="view on" id="listView">
   <header class="bar">
-    <h1>トーク</h1>
+    <h1 id="listTitle">トーク</h1>
     <button class="ib" id="btnAdd" aria-label="キャラを追加">＋</button>
     <button class="ib" id="btnSettings" aria-label="設定">⚙</button>
   </header>
@@ -139,6 +193,24 @@ body.ura{--head:#3b2a3f;--chat-bg:#5a4a5e;--me:#f3d9e6;--me-fg:#2b1a24;--accent:
     <button data-w="omote">表（トーク）</button><button data-w="ura">裏（会う）</button>
   </div>
   <div class="scroll" id="list"></div>
+  <nav class="bnav" id="modeNav">
+    <button data-m="talk"><span class="ic">💬</span>トーク</button>
+    <button data-m="tl"><span class="ic">🕊</span>タイムライン<span class="dot" id="tlDot"></span></button>
+  </nav>
+</section>
+
+<!-- タイムラインの投稿（コメント） -->
+<section class="view" id="postView">
+  <header class="bar">
+    <button class="ib" id="btnPostBack" aria-label="戻る">‹</button>
+    <h1 id="postTitle">投稿</h1>
+  </header>
+  <div class="scroll" id="postBox" style="background:#f2f4f7"></div>
+  <div class="replyChip" id="replyChip"><span id="replyChipText"></span><button id="replyChipX" aria-label="返信をやめる">×</button></div>
+  <div class="inbar">
+    <textarea id="cInput" rows="1" placeholder="コメントを書く"></textarea>
+    <button class="send" id="btnCSend" aria-label="コメントを送る" disabled>➤</button>
+  </div>
 </section>
 
 <!-- トーク画面 -->
@@ -203,6 +275,21 @@ body.ura{--head:#3b2a3f;--chat-bg:#5a4a5e;--me:#f3d9e6;--me-fg:#2b1a24;--accent:
         <button data-v="slow">ゆっくり</button><button data-v="normal">ふつう</button><button data-v="fast">速い</button>
       </div>
     </div>
+    <div class="sec">タイムライン</div>
+    <div class="field">
+      <label class="t">あなたとの仲の良さ <span class="rangeval" id="edAffV"></span></label>
+      <input type="range" id="edAff" min="0" max="100" step="5">
+      <div class="hint">高いほど、あなたの投稿にいいね・コメントしやすく、反応も早くなります。</div>
+    </div>
+    <div class="field">
+      <label class="t">SNSでの反応のしやすさ <span class="rangeval" id="edActV"></span></label>
+      <input type="range" id="edAct" min="0" max="100" step="5">
+      <div class="hint">性格の目安です。実際には、キャラ設定の文章から読み取った性格や、投稿の話題への食いつきもあわせて決まります。</div>
+    </div>
+    <div class="field">
+      <label class="t">表のタイムラインに投稿する回数 <span class="rangeval" id="edTlPerV"></span></label>
+      <input type="range" id="edTlPer" min="0" max="8" step="1">
+    </div>
     <div class="sec">裏（実際に会う場面）</div>
     <div class="uraBox">
       <div class="hint" style="margin:0">裏は表とは完全に別の時間軸です。表のトークの内容は覚えていません。アイコン・名前・キャラ設定は、空欄にしておくと表と同じものを使います。</div>
@@ -243,6 +330,11 @@ body.ura{--head:#3b2a3f;--chat-bg:#5a4a5e;--me:#f3d9e6;--me-fg:#2b1a24;--accent:
         <label class="t">吹き出しの最大数（裏） <span class="rangeval" id="edUraSplitV"></span></label>
         <input type="range" id="edUraSplit" min="1" max="8" step="1">
       </div>
+      <div class="field">
+        <label class="t">裏のタイムラインに投稿する回数 <span class="rangeval" id="edUraTlPerV"></span></label>
+        <input type="range" id="edUraTlPer" min="0" max="8" step="1">
+        <div class="hint">裏のタイムラインは表とは別の世界です。通知は来ません。</div>
+      </div>
     </div>
     <div class="btns">
       <button class="btn" id="edSave">保存</button>
@@ -250,6 +342,8 @@ body.ura{--head:#3b2a3f;--chat-bg:#5a4a5e;--me:#f3d9e6;--me-fg:#2b1a24;--accent:
     <div class="btns" id="edDanger">
       <div class="sec">テスト・管理</div>
       <button class="btn sub" id="edPoke">今すぐ話しかけてもらう（表・テスト）</button>
+      <button class="btn sub" id="edTlPoke">今すぐ表のタイムラインに投稿してもらう（テスト）</button>
+      <button class="btn sub" id="edUraTlPoke">今すぐ裏のタイムラインに投稿してもらう（テスト）</button>
       <button class="btn danger" id="edClear">表のトーク履歴を消す</button>
       <button class="btn danger" id="edClearUra">裏の履歴を消す</button>
       <button class="btn danger" id="edDelete">このキャラを削除</button>
@@ -308,6 +402,41 @@ body.ura{--head:#3b2a3f;--chat-bg:#5a4a5e;--me:#f3d9e6;--me-fg:#2b1a24;--accent:
       <button class="btn sub" id="stPushTest">テスト通知を送る</button>
     </div>
     <div class="card" id="stPushState"></div>
+    <div class="field">
+      <label class="t">表のタイムラインの通知</label>
+      <label class="chk"><input type="checkbox" id="nfComment"> 自分の投稿へのコメント</label>
+      <label class="chk"><input type="checkbox" id="nfLike"> 自分の投稿へのいいね</label>
+      <label class="chk"><input type="checkbox" id="nfCharPost"> キャラの新しい投稿</label>
+      <label class="chk"><input type="checkbox" id="nfReply"> 自分のコメントへの返信</label>
+      <div class="hint">裏のトークと裏のタイムラインは、通知しません。</div>
+      <button class="btn sub" id="nfSave" style="margin-top:10px">通知の設定を保存</button>
+    </div>
+
+    <div class="sec">あなたのプロフィール（タイムライン）</div>
+    <div class="field">
+      <label class="t">表</label>
+      <div class="meRow">
+        <div class="av" id="meIcon"></div>
+        <div class="mid">
+          <input type="text" id="meName" maxlength="40" placeholder="表での名前">
+          <div class="mini"><button class="btn sub" id="meIconPick">画像を選ぶ</button><button class="btn sub" id="meIconClear">外す</button></div>
+        </div>
+        <input type="file" id="meIconFile" accept="image/*" hidden>
+      </div>
+    </div>
+    <div class="field">
+      <label class="t">裏</label>
+      <div class="meRow">
+        <div class="av" id="meUraIcon"></div>
+        <div class="mid">
+          <input type="text" id="meUraName" maxlength="40" placeholder="空欄なら表と同じ名前">
+          <div class="mini"><button class="btn sub" id="meUraIconPick">画像を選ぶ</button><button class="btn sub" id="meUraIconClear">外す</button></div>
+        </div>
+        <input type="file" id="meUraIconFile" accept="image/*" hidden>
+      </div>
+      <div class="hint">裏のアイコンを外すと、表と同じアイコンになります。</div>
+      <button class="btn sub" id="meSave" style="margin-top:10px">プロフィールを保存</button>
+    </div>
 
     <div class="sec">静かな時間（自分から話しかけない時間帯）</div>
     <div class="field">
@@ -317,6 +446,12 @@ body.ura{--head:#3b2a3f;--chat-bg:#5a4a5e;--me:#f3d9e6;--me-fg:#2b1a24;--accent:
       </div>
       <div class="hint">この間はキャラから話しかけてきません（あなたへの返信はします）。</div>
       <button class="btn sub" id="stQuietSave" style="margin-top:10px">静かな時間を保存</button>
+    </div>
+
+    <div class="sec">タイムラインの管理</div>
+    <div class="btns">
+      <button class="btn danger" id="tlClearOmote">表のタイムラインを全部消す</button>
+      <button class="btn danger" id="tlClearUra">裏のタイムラインを全部消す</button>
     </div>
 
     <div class="sec">困ったとき</div>
@@ -334,7 +469,7 @@ body.ura{--head:#3b2a3f;--chat-bg:#5a4a5e;--me:#f3d9e6;--me-fg:#2b1a24;--accent:
 
 <script>
 'use strict';
-const APP_VERSION = '第7版（2026-10-14 18:15:00 更新・一覧からキャラを編集）';
+const APP_VERSION = '第8版（2026-10-14 20:00:00 更新・表と裏のタイムライン）';
 const $ = (id) => document.getElementById(id);
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 const esc = (s) => String(s).replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
@@ -372,6 +507,9 @@ const S = {
   typingFor: null,        // 入力中表示を出しているキャラ
   replyBusy: {}, replyAgain: {}, synced: false,
   world: store.get('chat.world', 'omote') === 'ura' ? 'ura' : 'omote', // 表 / 裏
+  mode: store.get('chat.mode', 'talk') === 'tl' ? 'tl' : 'talk',      // トーク / タイムライン
+  tl: { omote: null, ura: null },  // タイムライン（世界ごとに完全に別）
+  postId: null, replyTo: null,     // 開いている投稿・返信先コメント
 };
 const URA = '#ura';
 const baseId = (id) => (String(id || '').endsWith(URA) ? String(id).slice(0, -URA.length) : String(id || ''));
@@ -451,7 +589,10 @@ function revealIncoming(fresh) {
 async function loadIcons() {
   const need = S.chars.filter((c) => (S.icons[c.id] ? S.icons[c.id].ver : -1) !== c.iconVer).map((c) => c.id);
   for (const c of S.chars) { const k = c.id + URA; if ((S.icons[k] ? S.icons[k].ver : -1) !== (c.uraIconVer || 0)) need.push(k); }
-  for (const id of Object.keys(S.icons)) if (!charById(id)) delete S.icons[id];
+  // あなたのTL用アイコン（表・裏）
+  if ((S.icons['@me'] ? S.icons['@me'].ver : -1) !== (S.settings.meIconVer || 0)) need.push('@me');
+  if ((S.icons['@me' + URA] ? S.icons['@me' + URA].ver : -1) !== (S.settings.meUraIconVer || 0)) need.push('@me' + URA);
+  for (const id of Object.keys(S.icons)) if (!id.startsWith('@') && !charById(id)) delete S.icons[id];
   if (need.length) {
     try {
       const d = await api('GET', '/icons?ids=' + need.map(encodeURIComponent).join(','));
@@ -617,6 +758,8 @@ const visibleMsgs = (id) => (S.msgs[id] || []).filter((m) => !S.hidden.has(m.id)
 
 function renderList() {
   const el = $('list');
+  el.classList.toggle('tlMode', S.mode === 'tl');
+  if (S.mode === 'tl' && S.cfg.url) { renderTL(); return; }
   if (!S.cfg.url) {
     el.innerHTML = `<div class="empty">はじめに右上の ⚙ から<br>サーバーURLと合言葉を設定してください。</div>`;
     return;
@@ -693,7 +836,14 @@ function renderChat(keepPos, forceBottom) {
 
 function applyWorld() {
   document.body.classList.toggle('ura', S.world === 'ura');
-  $('worldTabs').querySelectorAll('button').forEach((b) => b.classList.toggle('on', b.dataset.w === S.world));
+  const tl = S.mode === 'tl';
+  $('worldTabs').querySelectorAll('button').forEach((b) => {
+    b.classList.toggle('on', b.dataset.w === S.world);
+    b.textContent = b.dataset.w === 'ura' ? (tl ? '裏のタイムライン' : '裏（会う）') : (tl ? '表のタイムライン' : '表（トーク）');
+  });
+  $('modeNav').querySelectorAll('button').forEach((b) => b.classList.toggle('on', b.dataset.m === S.mode));
+  $('listTitle').textContent = tl ? 'タイムライン' : 'トーク';
+  $('btnAdd').style.display = tl ? 'none' : '';
   $('input').placeholder = S.world === 'ura' ? 'セリフ／（行動）を入力' : 'メッセージを入力';
   const meta = document.querySelector('meta[name=theme-color]'); if (meta) meta.content = S.world === 'ura' ? '#3b2a3f' : '#24324a';
 }
@@ -703,15 +853,24 @@ function setWorld(w) {
   if (S.view === 'chat') { if (revealQ.length) { revealQ.forEach((m) => S.hidden.delete(m.id)); revealQ.length = 0; } S.typingFor = null; }
   S.world = w; store.set('chat.world', w);
   applyWorld(); renderAll();
+  if (S.mode === 'tl') loadTL(w);
+}
+function setMode(m) {
+  m = m === 'tl' ? 'tl' : 'talk';
+  S.mode = m; store.set('chat.mode', m);
+  applyWorld(); renderAll();
+  $('list').scrollTop = 0;
+  if (m === 'tl') loadTL(S.world);
 }
 function renderAll(keepPos, forceBottom) {
   renderList();
   if (S.view === 'chat') renderChat(keepPos, forceBottom);
+  if (S.view === 'post') renderPost();
 }
 
 function show(view) {
   S.view = view;
-  for (const [v, id] of [['list', 'listView'], ['chat', 'chatView'], ['edit', 'editView'], ['set', 'setView']]) $(id).classList.toggle('on', v === view);
+  for (const [v, id] of [['list', 'listView'], ['chat', 'chatView'], ['edit', 'editView'], ['set', 'setView'], ['post', 'postView']]) $(id).classList.toggle('on', v === view);
   if (view !== 'chat') {
     // 別画面に移ったら、待ち中の吹き出しはすぐ出す
     if (revealQ.length) { revealQ.forEach((m) => S.hidden.delete(m.id)); revealQ.length = 0; }
@@ -731,6 +890,239 @@ function openChat(id, world) {
   if (arr.length && arr[arr.length - 1].sender === 'me' && !S.replyBusy[k]) scheduleReply(k);
 }
 
+// ------------------------------------------------ タイムライン（表と裏は完全に別）
+const ME = 'me';
+function meDispName(world) {
+  const s = S.settings;
+  return (world === 'ura' ? s.meNameUra || s.meName : s.meName) || 'あなた';
+}
+function meIcon(world) {
+  const u = world === 'ura' && S.icons['@me' + URA];
+  if (u && u.data) return u.data;
+  return S.icons['@me'] && S.icons['@me'].data ? S.icons['@me'].data : null;
+}
+function authorName(a, world) {
+  if (a === ME) return meDispName(world);
+  const c = charById(a);
+  return c ? dispName(c, world) : '（削除されたキャラ）';
+}
+function authorAvatar(a, world, cls = '') {
+  if (a !== ME) { const c = charById(a); if (c) return avatarHTML(c, cls, world); }
+  const data = a === ME ? meIcon(world) : null;
+  if (data) return `<img class="av ${cls}" src="${data}" alt="">`;
+  const nm = authorName(a, world);
+  const hue = a === ME ? 210 : 0;
+  return `<div class="av ${cls}" style="background:hsl(${hue} ${a === ME ? '30%' : '0%'} 62%)">${esc([...nm][0] || '?')}</div>`;
+}
+function tlTime(ts, world) {
+  if (world === 'ura') return ''; // 裏は現実とは別の時間軸なので時刻を出さない
+  const m = Math.round((Date.now() - ts) / 60000);
+  if (m < 1) return 'たった今';
+  if (m < 60) return m + '分前';
+  if (m < 24 * 60) return Math.floor(m / 60) + '時間前';
+  return listTime(ts);
+}
+
+let tlLoading = {};
+async function loadTL(world = S.world, quiet) {
+  if (!S.cfg.url || tlLoading[world]) return;
+  tlLoading[world] = true;
+  try {
+    const d = await api('GET', '/tl?world=' + world);
+    const tmp = (S.tl[world] || []).filter((p) => p.pending);
+    S.tl[world] = tmp.concat(d.posts);
+    if (S.mode === 'tl' && S.world === world && S.view === 'list') markTlSeen(world);
+    updateTlDot();
+    if (S.view === 'post' || (S.view === 'list' && S.mode === 'tl' && S.world === world)) renderAll();
+  } catch (e) { if (!quiet) toast(e.message); }
+  finally { tlLoading[world] = false; }
+}
+
+// 表のタイムラインの「新しいこと」：キャラの投稿、自分の投稿へのいいね・コメント、自分への返信
+function tlEvents(world) {
+  const posts = S.tl[world] || [];
+  const myComments = new Set();
+  for (const p of posts) for (const c of p.comments) if (c.author === ME) myComments.add(c.id);
+  const ev = [];
+  for (const p of posts) {
+    if (p.pending) continue;
+    if (p.author !== ME) ev.push(p.at);
+    else { for (const l of p.likes) if (l.author !== ME) ev.push(l.at); for (const c of p.comments) if (c.author !== ME) ev.push(c.at); }
+    for (const c of p.comments) if (c.author !== ME && c.replyTo && myComments.has(c.replyTo)) ev.push(c.at);
+  }
+  return ev;
+}
+function markTlSeen(world) {
+  const ev = tlEvents(world);
+  if (ev.length) store.set('tl.seen.' + world, Math.max(store.get('tl.seen.' + world, 0), ...ev));
+}
+function updateTlDot() {
+  const seen = store.get('tl.seen.omote', 0);
+  const n = S.tl.omote ? tlEvents('omote').filter((t) => t > seen).length : 0;
+  $('tlDot').classList.toggle('on', n > 0 && !(S.mode === 'tl' && S.world === 'omote' && S.view === 'list'));
+}
+
+function likersLine(p, world) {
+  const names = p.likes.filter((l) => l.author !== ME).map((l) => authorName(l.author, world));
+  const me = p.likes.some((l) => l.author === ME);
+  if (!names.length) return me ? 'あなたがいいねしました' : '';
+  const head = names.slice(0, 2).join('、') + (names.length > 2 ? ` ほか${names.length - 2}人` : '');
+  return `${head}${me ? '、あなた' : ''}がいいねしました`;
+}
+function postHTML(p, world, big) {
+  const liked = p.likes.some((l) => l.author === ME);
+  const t = tlTime(p.at, world);
+  const lk = likersLine(p, world);
+  return `<div class="post ${big ? 'big' : ''}" data-post="${p.id}">
+    ${authorAvatar(p.author, world)}
+    <div class="mid">
+      <div class="hd"><span class="nm">${esc(authorName(p.author, world))}</span>${t ? `<span class="tm">${t}</span>` : ''}</div>
+      <div class="tx">${esc(p.text)}</div>
+      ${!big && lk ? `<div class="who">${esc(lk)}</div>` : ''}
+      <div class="acts">
+        <button class="${liked ? 'liked' : ''}" data-like="${p.id}" ${p.pending ? 'disabled' : ''} aria-label="いいね">${liked ? '♥' : '♡'} ${p.likes.length || ''}</button>
+        <button data-open="${p.id}" ${p.pending ? 'disabled' : ''} aria-label="コメント">💬 ${p.comments.length || ''}</button>
+        ${big && p.author === ME ? `<button data-delpost="${p.id}" style="margin-left:auto">削除</button>` : ''}
+      </div>
+    </div>
+  </div>`;
+}
+function renderTL() {
+  const el = $('list'), w = S.world;
+  const posts = S.tl[w];
+  // 入力欄は作り直さない（日本語入力の途中で消えないように）。世界を切り替えたときだけ作る
+  let wrap = el.querySelector('#tlWrap');
+  if (!wrap || wrap.dataset.w !== w) {
+    const draft = store.get('tl.draft.' + w, '');
+    el.innerHTML = `<div id="tlWrap" data-w="${w}">
+      <div class="compose">
+        <span id="tlMeAv"></span>
+        <div class="mid">
+          <textarea id="tlInput" placeholder="${w === 'ura' ? '裏のタイムラインに投稿' : 'いまどうしてる？'}" maxlength="1000">${esc(draft)}</textarea>
+          <div class="act"><button class="pill" id="tlPost" ${draft.trim() ? '' : 'disabled'}>投稿</button></div>
+        </div>
+      </div>
+      <div id="tlPosts"></div>
+    </div>`;
+    wrap = el.querySelector('#tlWrap');
+    const ta = el.querySelector('#tlInput');
+    ta.style.height = 'auto'; ta.style.height = Math.min(160, Math.max(44, ta.scrollHeight)) + 'px';
+  }
+  const av = authorAvatar(ME, w);
+  if (el.querySelector('#tlMeAv').innerHTML !== av) el.querySelector('#tlMeAv').innerHTML = av;
+  let html;
+  if (!posts) html = `<div class="empty">読み込み中…</div>`;
+  else if (!posts.length) html = `<div class="empty">まだ投稿がありません。<br>${w === 'ura' ? '裏の世界のタイムラインです。表とは別の時間が流れています。' : '最初の投稿をしてみましょう。キャラたちも、そのうちつぶやき始めます。'}</div>`;
+  else html = posts.map((p) => postHTML(p, w, false)).join('');
+  html += `<div class="foot">${esc(APP_VERSION)}</div>`;
+  const box = el.querySelector('#tlPosts');
+  if (box.innerHTML !== html) box.innerHTML = html;
+}
+
+async function postTL() {
+  const ta = $('tlInput'); if (!ta) return;
+  const text = ta.value.trim(); if (!text) return;
+  const w = S.world;
+  const tmp = { id: 'tmp' + Date.now(), world: w, author: ME, text, at: Date.now(), likes: [], comments: [], pending: true };
+  S.tl[w] = [tmp].concat(S.tl[w] || []);
+  ta.value = ''; store.del('tl.draft.' + w); ta.style.height = '44px'; $('tlPost').disabled = true; ta.blur();
+  renderAll();
+  try {
+    const d = await api('POST', '/tl/post', { world: w, text });
+    S.tl[w] = (S.tl[w] || []).map((p) => (p === tmp ? d.post : p));
+    renderAll();
+    setTimeout(() => loadTL(w, true), 6000); // 早い子は数分で反応するので、少ししたら読み直す
+  } catch (e) {
+    S.tl[w] = (S.tl[w] || []).filter((p) => p !== tmp);
+    store.set('tl.draft.' + w, text); ta.value = text; $('tlPost').disabled = false; renderAll();
+    toast('投稿できませんでした：' + e.message, 4000);
+  }
+}
+
+function findPost(id) {
+  for (const w of ['omote', 'ura']) { const p = (S.tl[w] || []).find((x) => String(x.id) === String(id)); if (p) return { p, w }; }
+  return null;
+}
+async function toggleLike(id) {
+  const f = findPost(id); if (!f) return;
+  const on = !f.p.likes.some((l) => l.author === ME);
+  f.p.likes = on ? f.p.likes.concat({ author: ME, at: Date.now() }) : f.p.likes.filter((l) => l.author !== ME);
+  renderAll();
+  try { await api('POST', '/tl/like', { postId: f.p.id, on }); }
+  catch (e) { toast(e.message); loadTL(f.w, true); }
+}
+
+function openPost(id) {
+  S.postId = Number(id); S.replyTo = null;
+  show('post'); renderPost();
+  $('postBox').scrollTop = 0;
+}
+function renderPost() {
+  const f = findPost(S.postId);
+  const box = $('postBox');
+  document.body.classList.toggle('ura', (f ? f.w : S.world) === 'ura');
+  if (!f) { box.innerHTML = '<div class="empty">この投稿は見つかりませんでした</div>'; return; }
+  const { p, w } = f;
+  $('postTitle').textContent = w === 'ura' ? '裏のタイムライン' : 'タイムライン';
+  // コメントを「最初のコメント → その下に返信」の順に並べる
+  const byId = Object.fromEntries(p.comments.map((c) => [c.id, c]));
+  const rootOf = (c) => { let cur = c; for (let i = 0; cur.replyTo && byId[cur.replyTo] && i < 50; i++) cur = byId[cur.replyTo]; return cur.id; };
+  const tops = p.comments.filter((c) => !c.replyTo || !byId[c.replyTo]);
+  const ordered = [];
+  for (const t of tops) { ordered.push(t); for (const c of p.comments) if (c !== t && c.replyTo && rootOf(c) === t.id) ordered.push(c); }
+  const lk = likersLine(p, w);
+  const sc = box.scrollTop;
+  box.innerHTML = postHTML(p, w, true)
+    + (lk ? `<div class="likers">♥ ${esc(lk)}</div>` : '')
+    + `<div class="cmts">${ordered.length ? ordered.map((c) => {
+      const rep = c.replyTo && byId[c.replyTo];
+      const t = tlTime(c.at, w);
+      return `<div class="cmt ${rep ? 'rep' : ''}">
+        ${authorAvatar(c.author, w, 'sm')}
+        <div class="mid">
+          <div class="hd"><span class="nm">${esc(authorName(c.author, w))}</span>${t ? `<span class="tm">${t}</span>` : ''}</div>
+          ${rep ? `<div class="to">↳ ${esc(authorName(rep.author, w))}さんへの返信</div>` : ''}
+          <div class="tx">${esc(c.text)}</div>
+          <div class="ops">${c.author !== ME && !c.pending ? `<button data-reply="${c.id}">返信</button>` : ''}${c.author === ME && !c.pending ? `<button class="del" data-delc="${c.id}">削除</button>` : ''}</div>
+        </div>
+      </div>`;
+    }).join('') : '<div class="empty" style="padding:24px">まだコメントはありません</div>'}</div>`;
+  box.scrollTop = sc;
+  const rc = S.replyTo && byId[S.replyTo];
+  $('replyChip').classList.toggle('on', !!rc);
+  $('replyChipText').textContent = rc ? `${authorName(rc.author, w)}さんに返信` : '';
+  $('cInput').placeholder = rc ? '返信を書く' : 'コメントを書く';
+}
+async function sendComment() {
+  const ta = $('cInput');
+  const text = ta.value.trim();
+  const f = findPost(S.postId);
+  if (!text || !f) return;
+  const replyTo = S.replyTo;
+  const tmp = { id: 'tmp' + Date.now(), author: ME, text, replyTo, at: Date.now(), pending: true };
+  f.p.comments = f.p.comments.concat(tmp);
+  ta.value = ''; cAutosize(); S.replyTo = null;
+  renderPost();
+  $('postBox').scrollTop = $('postBox').scrollHeight;
+  try {
+    const d = await api('POST', '/tl/comment', { postId: f.p.id, text, replyTo });
+    f.p.comments = f.p.comments.map((c) => (c === tmp ? d.comment : c));
+    renderPost();
+    setTimeout(() => loadTL(f.w, true), 6000);
+  } catch (e) {
+    f.p.comments = f.p.comments.filter((c) => c !== tmp);
+    ta.value = text; cAutosize(); renderPost();
+    toast('送れませんでした：' + e.message, 4000);
+  }
+}
+function cAutosize() {
+  const ta = $('cInput'); ta.style.height = 'auto'; ta.style.height = Math.min(120, ta.scrollHeight) + 'px';
+  $('btnCSend').disabled = !ta.value.trim();
+}
+
+// 確認（confirm が使えない環境でも動くように）
+function ask(msg) { try { return window.confirm(msg); } catch (_) { return true; } }
+
 // ------------------------------------------------ キャラ編集
 let editFrom = 'list'; // 編集画面をどこから開いたか（戻り先）
 let edit = null; // {id?, iconData?: string|null|undefined, typing}
@@ -748,6 +1140,11 @@ function openEdit(id) {
   $('edUraPrompt').value = c ? c.uraPrompt || '' : '';
   $('edUraScene').value = c ? c.uraScene || '' : '';
   $('edUraSplit').value = c && c.uraMaxSplit ? c.uraMaxSplit : 5;
+  const def = (v, d) => (v == null || v === '' ? d : v);
+  $('edAff').value = def(c && c.affinity, 60);
+  $('edAct').value = def(c && c.snsActivity, 50);
+  $('edTlPer').value = def(c && c.tlPerDay, 2);
+  $('edUraTlPer').value = def(c && c.uraTlPerDay, 1);
   edit.uraNarration = c ? c.uraNarration !== false : true;
   $('edDanger').style.display = c ? '' : 'none';
   syncEditLabels(); drawEditIcon();
@@ -761,6 +1158,12 @@ function syncEditLabels() {
   $('edNudgeV').textContent = `催促 ${n}% / 別の話題 ${100 - n}%`;
   $('edSplitV').textContent = `${$('edSplit').value}個まで`;
   $('edUraSplitV').textContent = `${$('edUraSplit').value}個まで`;
+  const lv = (v) => (v >= 85 ? 'とても高い' : v >= 65 ? '高い' : v >= 40 ? 'ふつう' : v >= 20 ? '低い' : 'とても低い');
+  $('edAffV').textContent = `${$('edAff').value}（${lv(+$('edAff').value)}）`;
+  $('edActV').textContent = `${$('edAct').value}（${lv(+$('edAct').value)}）`;
+  const per = (v) => (+v ? `1日 ${v}回くらい` : '投稿しない');
+  $('edTlPerV').textContent = per($('edTlPer').value);
+  $('edUraTlPerV').textContent = per($('edUraTlPer').value);
   $('edUraNarr').querySelectorAll('button').forEach((b) => b.classList.toggle('on', (b.dataset.v === '1') === edit.uraNarration));
   $('edTyping').querySelectorAll('button').forEach((b) => b.classList.toggle('on', b.dataset.v === edit.typing));
 }
@@ -794,6 +1197,7 @@ async function saveEdit() {
     perDay: +$('edPerDay').value, nudgeRate: +$('edNudge').value, maxSplit: +$('edSplit').value, typing: edit.typing,
     uraName: $('edUraName').value.trim(), uraCharPrompt: $('edUraCharPrompt').value, uraPrompt: $('edUraPrompt').value, uraScene: $('edUraScene').value,
     uraNarration: edit.uraNarration, uraMaxSplit: +$('edUraSplit').value,
+    affinity: +$('edAff').value, snsActivity: +$('edAct').value, tlPerDay: +$('edTlPer').value, uraTlPerDay: +$('edUraTlPer').value,
   };
   if (edit.icon !== undefined) char.icon = edit.icon;
   if (edit.uraIcon !== undefined) char.uraIcon = edit.uraIcon;
@@ -882,6 +1286,13 @@ function openSettings() {
   aiProv = { omote: S.settings.omoteProvider === 'grok' ? 'grok' : 'gemini', ura: S.settings.uraProvider === 'gemini' ? 'gemini' : 'grok' };
   $('stGrokModel').value = S.settings.grokModel || '';
   syncAiUI();
+  const nf = S.settings.notify || {};
+  $('nfComment').checked = nf.tlComment !== false; $('nfLike').checked = nf.tlLike !== false;
+  $('nfCharPost').checked = nf.tlCharPost !== false; $('nfReply').checked = nf.tlReply !== false;
+  meEdit = { icon: undefined, uraIcon: undefined };
+  $('meName').value = S.settings.meName || ''; $('meUraName').value = S.settings.meNameUra || '';
+  drawMeIcons();
+  document.body.classList.remove('ura');
   show('set');
   refreshPushState(); renderDiag();
 }
@@ -897,6 +1308,32 @@ async function saveSettings() {
     sync();
   } catch (e) { box.textContent = '❌ ' + e.message; }
   renderDiag();
+}
+
+let meEdit = { icon: undefined, uraIcon: undefined };
+function drawMeIcons() {
+  const o = meEdit.icon !== undefined ? meEdit.icon : (S.icons['@me'] && S.icons['@me'].data) || null;
+  const u = meEdit.uraIcon !== undefined ? meEdit.uraIcon : (S.icons['@me' + URA] && S.icons['@me' + URA].data) || null;
+  $('meIcon').innerHTML = o ? `<img src="${o}" style="width:100%;height:100%;object-fit:cover">` : '＋';
+  $('meUraIcon').innerHTML = u || o ? `<img src="${u || o}" style="width:100%;height:100%;object-fit:cover;${u ? '' : 'opacity:.45'}">` : '＋';
+}
+async function saveMe() {
+  $('meSave').disabled = true;
+  try {
+    const a = { world: 'omote', name: $('meName').value.trim() };
+    if (meEdit.icon !== undefined) a.icon = meEdit.icon;
+    const b = { world: 'ura', name: $('meUraName').value.trim() };
+    if (meEdit.uraIcon !== undefined) b.icon = meEdit.uraIcon;
+    await api('POST', '/me', a);
+    const d = await api('POST', '/me', b);
+    S.settings = d.settings;
+    if (meEdit.icon !== undefined) S.icons['@me'] = { ver: d.settings.meIconVer, data: meEdit.icon };
+    if (meEdit.uraIcon !== undefined) S.icons['@me' + URA] = { ver: d.settings.meUraIconVer, data: meEdit.uraIcon };
+    store.set('chat.icons', S.icons);
+    meEdit = { icon: undefined, uraIcon: undefined };
+    toast('プロフィールを保存しました');
+  } catch (e) { toast('保存できませんでした：' + e.message); }
+  finally { $('meSave').disabled = false; }
 }
 
 let lastPing = null;
@@ -997,7 +1434,81 @@ $('btnBack').onclick = () => { show('list'); renderAll(); };
 $('btnEditChar').onclick = () => { editFrom = 'chat'; openEdit(S.current); };
 $('btnAdd').addEventListener('click', () => { editFrom = 'list'; });
 $('btnEditBack').onclick = () => { if (edit && edit.id && editFrom === 'chat') openChat(edit.id); else { show('list'); renderAll(); } };
-$('btnSetBack').onclick = () => { show('list'); renderAll(); };
+$('btnSetBack').onclick = () => { show('list'); applyWorld(); renderAll(); };
+
+// ---- タイムライン
+$('modeNav').addEventListener('click', (e) => { const b = e.target.closest('button'); if (b) setMode(b.dataset.m); });
+$('list').addEventListener('input', (e) => {
+  if (e.target.id !== 'tlInput') return;
+  const ta = e.target; store.set('tl.draft.' + S.world, ta.value);
+  ta.style.height = 'auto'; ta.style.height = Math.min(160, Math.max(44, ta.scrollHeight)) + 'px';
+  const b = $('tlPost'); if (b) b.disabled = !ta.value.trim();
+});
+$('list').addEventListener('click', (e) => {
+  if (S.mode !== 'tl') return;
+  if (e.target.closest('#tlPost')) { postTL(); return; }
+  const lk = e.target.closest('[data-like]'); if (lk) { e.stopPropagation(); toggleLike(lk.dataset.like); return; }
+  if (e.target.closest('.compose')) return;
+  const op = e.target.closest('[data-open]') || e.target.closest('.post');
+  if (op) { const id = op.dataset.open || op.dataset.post; if (!String(id).startsWith('tmp')) openPost(id); }
+}, true);
+$('btnPostBack').onclick = () => { S.postId = null; S.replyTo = null; show('list'); applyWorld(); renderAll(); };
+$('postBox').addEventListener('click', async (e) => {
+  const lk = e.target.closest('[data-like]'); if (lk) { toggleLike(lk.dataset.like); return; }
+  if (e.target.closest('[data-open]')) { $('cInput').focus(); return; }
+  const rp = e.target.closest('[data-reply]'); if (rp) { S.replyTo = Number(rp.dataset.reply); renderPost(); $('cInput').focus(); return; }
+  const dc = e.target.closest('[data-delc]');
+  if (dc) {
+    if (!ask('このコメントを消しますか？（このコメントへの返信も消えます）')) return;
+    try { await api('POST', '/tl/delete', { commentId: Number(dc.dataset.delc) }); await loadTL(findPost(S.postId).w, true); } catch (err) { toast(err.message); }
+    return;
+  }
+  const dp = e.target.closest('[data-delpost]');
+  if (dp) {
+    if (!ask('この投稿を消しますか？（いいねやコメントも消えます）')) return;
+    const f = findPost(dp.dataset.delpost);
+    try { await api('POST', '/tl/delete', { postId: Number(dp.dataset.delpost) }); if (f) S.tl[f.w] = S.tl[f.w].filter((p) => p !== f.p); $('btnPostBack').onclick(); toast('消しました'); } catch (err) { toast(err.message); }
+  }
+});
+$('replyChipX').onclick = () => { S.replyTo = null; renderPost(); };
+$('cInput').addEventListener('input', cAutosize);
+$('btnCSend').onclick = sendComment;
+['edAff', 'edAct', 'edTlPer', 'edUraTlPer'].forEach((id) => $(id).addEventListener('input', syncEditLabels));
+async function tlPoke(world, btn) {
+  const id = edit.id; btn.disabled = true;
+  try {
+    toast('投稿してもらっています…');
+    await api('POST', '/tl/poke', { charId: id, world });
+    show('list'); setWorld(world); setMode('tl');
+    toast('投稿しました。ほかのキャラの反応は、少しずつ届きます', 3500);
+  } catch (e) { toast('失敗しました：' + e.message, 4000); }
+  finally { btn.disabled = false; }
+}
+$('edTlPoke').onclick = () => tlPoke('omote', $('edTlPoke'));
+$('edUraTlPoke').onclick = () => tlPoke('ura', $('edUraTlPoke'));
+$('nfSave').onclick = async () => {
+  try {
+    const d = await api('POST', '/settings', { settings: { notify: { tlComment: $('nfComment').checked, tlLike: $('nfLike').checked, tlCharPost: $('nfCharPost').checked, tlReply: $('nfReply').checked } } });
+    S.settings = d.settings; toast('通知の設定を保存しました');
+  } catch (e) { toast(e.message); }
+};
+$('meIconPick').onclick = () => $('meIconFile').click();
+$('meUraIconPick').onclick = () => $('meUraIconFile').click();
+$('meIconFile').onchange = async (e) => { const f = e.target.files[0]; e.target.value = ''; if (!f) return; try { meEdit.icon = await resizeImage(f); drawMeIcons(); } catch (err) { toast(err.message); } };
+$('meUraIconFile').onchange = async (e) => { const f = e.target.files[0]; e.target.value = ''; if (!f) return; try { meEdit.uraIcon = await resizeImage(f); drawMeIcons(); } catch (err) { toast(err.message); } };
+$('meIconClear').onclick = () => { meEdit.icon = null; drawMeIcons(); };
+$('meUraIconClear').onclick = () => { meEdit.uraIcon = null; drawMeIcons(); };
+$('meSave').onclick = saveMe;
+async function clearTl(world) {
+  if (!ask(`${world === 'ura' ? '裏' : '表'}のタイムラインの投稿・いいね・コメントを全部消します。よろしいですか？`)) return;
+  try { await api('POST', '/tl/clear', { world }); S.tl[world] = []; toast('消しました'); } catch (e) { toast(e.message); }
+}
+$('tlClearOmote').onclick = () => clearTl('omote');
+$('tlClearUra').onclick = () => clearTl('ura');
+function openTlFromNotice(world, postId) {
+  show('list'); setWorld(world || 'omote'); setMode('tl');
+  if (postId) loadTL(world || 'omote', true).then(() => { if (findPost(postId)) openPost(postId); });
+}
 $('input').addEventListener('input', autosize);
 $('btnSend').onclick = sendMsg;
 $('msgs').addEventListener('click', (e) => {
@@ -1085,14 +1596,26 @@ $('dgCopy').onclick = copyDiag;
 $('dgImage').onclick = imageDiag;
 $('dgClear').onclick = () => { diagLog = []; store.set('chat.log', []); renderDiag(); toast('アプリの記録を消しました'); };
 
-document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'visible') { sync(); markReadIfOpen(); } });
-setInterval(() => { if (document.visibilityState === 'visible') sync(); }, 20000);
+function pollTL() {
+  if (!S.cfg.url || document.visibilityState !== 'visible') return;
+  if (S.view === 'post') { const f = findPost(S.postId); loadTL(f ? f.w : S.world, true); }
+  else if (S.mode === 'tl' && S.view === 'list') loadTL(S.world, true);
+}
+let tlBg = 0;
+document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'visible') { sync(); markReadIfOpen(); pollTL(); } });
+setInterval(() => {
+  if (document.visibilityState !== 'visible') return;
+  sync(); pollTL();
+  // タイムラインを見ていないときも、表のTLの新着（緑の点）のためにときどき読む
+  if (++tlBg % 3 === 0 && !(S.mode === 'tl' && S.world === 'omote')) loadTL('omote', true);
+}, 20000);
 
 if (navigator.serviceWorker) {
   navigator.serviceWorker.addEventListener('message', (e) => {
     const d = e.data || {};
     if (d.type === 'sync') sync();
-    if (d.type === 'open' && d.charId) { sync().then(() => openChat(d.charId, 'omote')); }
+    if (d.type === 'open' && d.charId) { setMode('talk'); sync().then(() => openChat(d.charId, 'omote')); }
+    if (d.type === 'openTl') openTlFromNotice(d.world, d.postId);
   });
 }
 
@@ -1101,11 +1624,15 @@ if (navigator.serviceWorker) {
   registerSW();
   applyWorld();
   renderAll();
-  const openId = new URLSearchParams(location.search).get('chat');
-  if (openId) history.replaceState(null, '', location.pathname);
+  const qs = new URLSearchParams(location.search);
+  const openId = qs.get('chat'), openTl = qs.get('tl'), openPostId = qs.get('post');
+  if (openId || openTl) history.replaceState(null, '', location.pathname);
   if (!S.cfg.url) return;
   await sync();
-  if (openId && charById(openId)) openChat(openId, 'omote');
+  if (openTl) openTlFromNotice(openTl, openPostId);
+  else if (openId && charById(openId)) { setMode('talk'); openChat(openId, 'omote'); }
+  else if (S.mode === 'tl') loadTL(S.world, true);
+  else loadTL('omote', true); // 緑の点のため
 })();
 </script>
 </body>

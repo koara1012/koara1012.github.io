@@ -204,6 +204,21 @@ body.ura{--head:#3b2a3f;--chat-bg:#5a4a5e;--me:#f3d9e6;--me-fg:#2b1a24;--accent:
     <div class="uraBox">
       <div class="hint" style="margin:0">裏は表とは完全に別の時間軸です。表のトークの内容は覚えていません。上の「キャラ設定」は共通で使い、ここには裏だけの設定を書きます。</div>
       <div class="field">
+        <label class="t">裏のアイコン（任意）</label>
+        <div class="iconpick">
+          <div class="av" id="edUraIcon"></div>
+          <div class="btns" style="flex:1">
+            <button class="btn sub" id="edUraIconPick">画像を選ぶ</button>
+            <button class="btn sub" id="edUraIconClear" style="padding:8px">画像を外す（表と同じにする）</button>
+          </div>
+          <input type="file" id="edUraIconFile" accept="image/*" hidden>
+        </div>
+      </div>
+      <div class="field">
+        <label class="t" for="edUraName">裏での名前（任意）</label>
+        <input type="text" id="edUraName" maxlength="40" placeholder="空欄なら表と同じ名前">
+      </div>
+      <div class="field">
         <label class="t" for="edUraPrompt">裏だけの追加設定（任意）</label>
         <textarea id="edUraPrompt" style="min-height:120px" placeholder="例：幼なじみで、同じアパートの隣に住んでいる。会うと少し照れる。"></textarea>
       </div>
@@ -311,7 +326,7 @@ body.ura{--head:#3b2a3f;--chat-bg:#5a4a5e;--me:#f3d9e6;--me-fg:#2b1a24;--accent:
 
 <script>
 'use strict';
-const APP_VERSION = '第4版（2026-10-14 18:20:00 更新・表/裏タブ）';
+const APP_VERSION = '第5版（2026-10-14 18:10:00 更新・裏の名前とアイコン）';
 const $ = (id) => document.getElementById(id);
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 const esc = (s) => String(s).replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
@@ -427,6 +442,7 @@ function revealIncoming(fresh) {
 
 async function loadIcons() {
   const need = S.chars.filter((c) => (S.icons[c.id] ? S.icons[c.id].ver : -1) !== c.iconVer).map((c) => c.id);
+  for (const c of S.chars) { const k = c.id + URA; if ((S.icons[k] ? S.icons[k].ver : -1) !== (c.uraIconVer || 0)) need.push(k); }
   for (const id of Object.keys(S.icons)) if (!charById(id)) delete S.icons[id];
   if (need.length) {
     try {
@@ -561,11 +577,20 @@ function updateBadge() {
 }
 
 // ------------------------------------------------ 表示
-function avatarHTML(c, cls = '') {
+// 表と裏で名前・アイコンを分けられる（裏が未設定なら表と同じ）
+function dispName(c, world = S.world) { return world === 'ura' && c.uraName ? c.uraName : c.name; }
+function iconData(c, world = S.world) {
+  const u = world === 'ura' && S.icons[c.id + URA];
+  if (u && u.data) return u.data;
   const ic = S.icons[c.id];
-  if (ic && ic.data) return `<img class="av ${cls}" src="${ic.data}" alt="">`;
-  const hue = [...(c.name || '?')].reduce((h, ch) => (h * 31 + ch.codePointAt(0)) % 360, 7);
-  return `<div class="av ${cls}" style="background:hsl(${hue} 45% 62%)">${esc([...(c.name || '?')][0])}</div>`;
+  return ic && ic.data ? ic.data : null;
+}
+function avatarHTML(c, cls = '', world = S.world) {
+  const data = iconData(c, world);
+  if (data) return `<img class="av ${cls}" src="${data}" alt="">`;
+  const nm = dispName(c, world) || '?';
+  const hue = [...nm].reduce((h, ch) => (h * 31 + ch.codePointAt(0)) % 360, 7);
+  return `<div class="av ${cls}" style="background:hsl(${hue} 45% 62%)">${esc([...nm][0])}</div>`;
 }
 function hm(ts) { const d = new Date(ts); return d.getHours() + ':' + String(d.getMinutes()).padStart(2, '0'); }
 function dayKey(ts) { const d = new Date(ts); return d.getFullYear() + '-' + d.getMonth() + '-' + d.getDate(); }
@@ -603,7 +628,7 @@ function renderList() {
     const empty = ura ? 'まだ会っていません' : 'メッセージはまだありません';
     const pv = S.typingFor === k ? '入力中…' : last ? (last.sender === 'me' ? 'あなた: ' : last.sender === 'narr' ? '＊' : '') + last.text.replace(/\s+/g, ' ') : empty;
     return `<button class="row" data-id="${esc(c.id)}">${avatarHTML(c)}
-      <div class="mid"><div class="nm">${esc(c.name)}</div><div class="pv ${S.typingFor === k ? 'typing' : ''}">${esc(pv)}</div></div>
+      <div class="mid"><div class="nm">${esc(dispName(c))}</div><div class="pv ${S.typingFor === k ? 'typing' : ''}">${esc(pv)}</div></div>
       <div class="rt"><div class="tm">${last && !ura ? listTime(last.at) : ''}</div>${n ? `<div class="bdg">${n > 99 ? '99+' : n}</div>` : ''}</div>
     </button>`;
   }).join('') + `<div class="foot">${esc(APP_VERSION)}</div>`;
@@ -613,7 +638,8 @@ function renderChat(keepPos, forceBottom) {
   const c = charById(S.current);
   if (!c) return;
   const k = curKey(), ura = isUraKey(k);
-  $('chatTitle').textContent = ura ? c.name + '（裏）' : c.name;
+  const nm = dispName(c, ura ? 'ura' : 'omote');
+  $('chatTitle').textContent = ura ? nm + '（裏）' : nm;
   const box = $('msgs');
   box.classList.toggle('uraMode', ura);
   const nearBottom = box.scrollHeight - box.scrollTop - box.clientHeight < 120;
@@ -638,7 +664,7 @@ function renderChat(keepPos, forceBottom) {
     } else {
       html += `<div class="msg them ${cont ? 'cont' : ''}" data-id="${esc(m.id)}">
         <div class="who">${cont ? '' : avatarHTML(c, 'sm')}</div>
-        <div class="col">${cont ? '' : `<div class="name">${esc(c.name)}</div>`}<div class="bub">${esc(m.text)}</div></div>
+        <div class="col">${cont ? '' : `<div class="name">${esc(nm)}</div>`}<div class="bub">${esc(m.text)}</div></div>
         <div class="meta"><span>${hm(m.at)}</span></div></div>`;
     }
     prev = m;
@@ -647,8 +673,8 @@ function renderChat(keepPos, forceBottom) {
     html += `<div class="msg them typing"><div class="who">${prev && prev.sender === 'char' ? '' : avatarHTML(c, 'sm')}</div><div class="col"><div class="bub"><i></i><i></i><i></i></div></div></div>`;
   }
   if (!v.length && S.typingFor !== k) html = ura
-    ? `<div class="empty" style="color:#fff">${esc(c.name)}と会っている場面です。<br>セリフを送ってみましょう。<br>（ ）で書くと、あなたの行動になります。<br>例：（手を振って）おまたせ！</div>`
-    : `<div class="empty" style="color:#fff">${esc(c.name)}にメッセージを送ってみましょう</div>`;
+    ? `<div class="empty" style="color:#fff">${esc(nm)}と会っている場面です。<br>セリフを送ってみましょう。<br>（ ）で書くと、あなたの行動になります。<br>例：（手を振って）おまたせ！</div>`
+    : `<div class="empty" style="color:#fff">${esc(nm)}にメッセージを送ってみましょう</div>`;
   const before = box.querySelectorAll('.msg:not(.typing), .narr').length;
   box.innerHTML = html;
   const after = box.querySelectorAll('.msg:not(.typing), .narr');
@@ -700,13 +726,14 @@ function openChat(id, world) {
 let edit = null; // {id?, iconData?: string|null|undefined, typing}
 function openEdit(id) {
   const c = id ? charById(id) : null;
-  edit = { id: c ? c.id : null, icon: undefined, typing: c ? c.typing : 'normal' };
+  edit = { id: c ? c.id : null, icon: undefined, uraIcon: undefined, typing: c ? c.typing : 'normal' };
   $('editTitle').textContent = c ? 'キャラ設定' : 'キャラを追加';
   $('edName').value = c ? c.name : '';
   $('edPrompt').value = c ? c.prompt : '';
   $('edPerDay').value = c ? c.perDay : 3;
   $('edNudge').value = c ? c.nudgeRate : 50;
   $('edSplit').value = c ? c.maxSplit : 3;
+  $('edUraName').value = c ? c.uraName || '' : '';
   $('edUraPrompt').value = c ? c.uraPrompt || '' : '';
   $('edUraScene').value = c ? c.uraScene || '' : '';
   $('edUraSplit').value = c && c.uraMaxSplit ? c.uraMaxSplit : 5;
@@ -731,6 +758,12 @@ function drawEditIcon() {
   const data = edit.icon !== undefined ? edit.icon : edit.id && S.icons[edit.id] ? S.icons[edit.id].data : null;
   if (data) el.innerHTML = `<img src="${data}" style="width:100%;height:100%;object-fit:cover">`;
   else { el.innerHTML = '＋'; el.style.background = '#cfd8e6'; }
+  // 裏のアイコン（未設定なら表のアイコンを薄く表示）
+  const ue = $('edUraIcon');
+  const ud = edit.uraIcon !== undefined ? edit.uraIcon : edit.id && S.icons[edit.id + URA] ? S.icons[edit.id + URA].data : null;
+  const shown = ud || data;
+  ue.innerHTML = shown ? `<img src="${shown}" style="width:100%;height:100%;object-fit:cover;${ud ? '' : 'opacity:.45'}">` : '＋';
+  ue.style.background = '#cfd8e6';
 }
 async function resizeImage(file) {
   const url = URL.createObjectURL(file);
@@ -748,16 +781,18 @@ async function saveEdit() {
   const char = {
     id: edit.id || undefined, name, prompt: $('edPrompt').value,
     perDay: +$('edPerDay').value, nudgeRate: +$('edNudge').value, maxSplit: +$('edSplit').value, typing: edit.typing,
-    uraPrompt: $('edUraPrompt').value, uraScene: $('edUraScene').value,
+    uraName: $('edUraName').value.trim(), uraPrompt: $('edUraPrompt').value, uraScene: $('edUraScene').value,
     uraNarration: edit.uraNarration, uraMaxSplit: +$('edUraSplit').value,
   };
   if (edit.icon !== undefined) char.icon = edit.icon;
+  if (edit.uraIcon !== undefined) char.uraIcon = edit.uraIcon;
   $('edSave').disabled = true;
   try {
     const d = await api('POST', '/char', { char });
     const i = S.chars.findIndex((c) => c.id === d.char.id);
     if (i >= 0) S.chars[i] = d.char; else S.chars.push(d.char);
     if (edit.icon !== undefined) { S.icons[d.char.id] = { ver: d.char.iconVer, data: edit.icon }; store.set('chat.icons', S.icons); }
+    if (edit.uraIcon !== undefined) { S.icons[d.char.id + URA] = { ver: d.char.uraIconVer || 0, data: edit.uraIcon }; store.set('chat.icons', S.icons); }
     toast('保存しました');
     if (edit.id) { openChat(d.char.id); } else { show('list'); renderAll(); }
   } catch (e) { toast('保存できませんでした：' + e.message); }
@@ -965,6 +1000,13 @@ $('edIconFile').onchange = async (e) => {
   try { edit.icon = await resizeImage(f); drawEditIcon(); } catch (err) { toast(err.message); }
 };
 $('edIconClear').onclick = () => { edit.icon = null; drawEditIcon(); };
+$('edUraIconPick').onclick = () => $('edUraIconFile').click();
+$('edUraIconFile').onchange = async (e) => {
+  const f = e.target.files[0]; e.target.value = '';
+  if (!f) return;
+  try { edit.uraIcon = await resizeImage(f); drawEditIcon(); } catch (err) { toast(err.message); }
+};
+$('edUraIconClear').onclick = () => { edit.uraIcon = null; drawEditIcon(); };
 $('edSave').onclick = saveEdit;
 $('edPoke').onclick = async () => {
   const id = edit.id; $('edPoke').disabled = true;
@@ -993,7 +1035,7 @@ $('edDelete').onclick = async () => {
   if (!c || !confirm(`「${c.name}」を削除します。トーク履歴も消えます。よろしいですか？`)) return;
   try {
     await api('DELETE', '/char?id=' + encodeURIComponent(c.id));
-    S.chars = S.chars.filter((x) => x.id !== c.id); delete S.msgs[c.id]; delete S.msgs[c.id + URA]; delete S.icons[c.id]; store.set('chat.icons', S.icons);
+    S.chars = S.chars.filter((x) => x.id !== c.id); delete S.msgs[c.id]; delete S.msgs[c.id + URA]; delete S.icons[c.id]; delete S.icons[c.id + URA]; store.set('chat.icons', S.icons);
     S.current = null; show('list'); renderAll(); toast('削除しました');
   } catch (e) { toast(e.message); }
 };

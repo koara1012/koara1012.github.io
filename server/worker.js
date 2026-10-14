@@ -12,7 +12,7 @@
 //    ・Cron トリガー  */15 * * * *  （15分おき）
 // =====================================================================
 
-const VERSION = '第4版（2026-10-14 18:20:00 更新・表/裏タブ）';
+const VERSION = '第5版（2026-10-14 18:10:00 更新・裏の名前とアイコン）';
 const DEFAULT_MODEL = 'gemini-flash-latest';
 const DEFAULT_GROK_MODEL = 'grok-4-fast-non-reasoning';
 const JST = 9 * 3600 * 1000;
@@ -67,6 +67,7 @@ async function ensureSchema(env) {
     env.DB.prepare('CREATE TABLE IF NOT EXISTS reads (char_id TEXT PRIMARY KEY, at INTEGER NOT NULL)'),
     env.DB.prepare('CREATE TABLE IF NOT EXISTS kv (k TEXT PRIMARY KEY, v TEXT NOT NULL)'),
     env.DB.prepare('CREATE TABLE IF NOT EXISTS subs (endpoint TEXT PRIMARY KEY, data TEXT NOT NULL, created INTEGER)'),
+    env.DB.prepare('CREATE TABLE IF NOT EXISTS ura_icons (char_id TEXT PRIMARY KEY, icon TEXT, ver INTEGER NOT NULL)'), // 裏のアイコン
   ]);
   schemaReady = true;
 }
@@ -105,6 +106,7 @@ function normChar(c) {
     maxSplit: clamp(Math.round(num(c.maxSplit, 3)), 1, 5), // 吹き出しの最大数
     typing: ['slow', 'normal', 'fast'].includes(c.typing) ? c.typing : 'normal',
     // 裏（実際に会う場面）用
+    uraName: String(c.uraName || '').trim().slice(0, 40),       // 裏での名前（空なら表と同じ）
     uraPrompt: String(c.uraPrompt || '').slice(0, 20000),    // 裏だけの追加設定（関係性など）
     uraScene: String(c.uraScene || '').slice(0, 2000),       // いまの場面
     uraNarration: c.uraNarration !== false,                  // ナレーションを入れるか
@@ -120,14 +122,16 @@ function splitCid(cid) {
   return { base, world: ura ? 'ura' : 'omote', key: ura ? base + URA : base };
 }
 
+const CHAR_COLS = 'c.id,c.data,c.icon_ver,c.created,u.ver AS ura_ver FROM chars c LEFT JOIN ura_icons u ON u.char_id=c.id';
+const rowToChar = (r) => ({ ...JSON.parse(r.data), id: r.id, iconVer: r.icon_ver || 0, uraIconVer: r.ura_ver || 0, created: r.created });
 async function loadChars(env) {
-  const { results } = await env.DB.prepare('SELECT id,data,icon_ver,created FROM chars ORDER BY created').all();
-  return results.map((r) => ({ ...JSON.parse(r.data), id: r.id, iconVer: r.icon_ver || 0, created: r.created }));
+  const { results } = await env.DB.prepare(`SELECT ${CHAR_COLS} ORDER BY c.created`).all();
+  return results.map(rowToChar);
 }
 async function getChar(env, id) {
-  const r = await env.DB.prepare('SELECT id,data,icon_ver,created FROM chars WHERE id=?').bind(String(id || '')).first();
+  const r = await env.DB.prepare(`SELECT ${CHAR_COLS} WHERE c.id=?`).bind(String(id || '')).first();
   if (!r) throw new HttpError(404, 'キャラが見つかりません');
-  return { ...JSON.parse(r.data), id: r.id, iconVer: r.icon_ver || 0, created: r.created };
+  return rowToChar(r);
 }
 const rowToMsg = (r) => ({ id: r.id, charId: r.char_id, sender: r.sender, text: r.text, at: r.at });
 
@@ -186,8 +190,19 @@ async function route(key, url, body, env, ctx) {
     case 'GET /icons': {
       const ids = (url.searchParams.get('ids') || '').split(',').filter(Boolean).slice(0, 50);
       if (!ids.length) return json({ icons: {} });
-      const { results } = await env.DB.prepare(`SELECT id,icon,icon_ver FROM chars WHERE id IN (${ids.map(() => '?').join(',')})`).bind(...ids).all();
-      return json({ icons: Object.fromEntries(results.map((r) => [r.id, { ver: r.icon_ver || 0, data: r.icon || null }])) });
+      // 「id#ura」は裏のアイコン
+      const omote = ids.filter((i) => !i.endsWith(URA)), ura = ids.filter((i) => i.endsWith(URA)).map((i) => i.slice(0, -URA.length));
+      const icons = {};
+      if (omote.length) {
+        const { results } = await env.DB.prepare(`SELECT id,icon,icon_ver FROM chars WHERE id IN (${omote.map(() => '?').join(',')})`).bind(...omote).all();
+        for (const r of results) icons[r.id] = { ver: r.icon_ver || 0, data: r.icon || null };
+      }
+      if (ura.length) {
+        const { results } = await env.DB.prepare(`SELECT char_id,icon,ver FROM ura_icons WHERE char_id IN (${ura.map(() => '?').join(',')})`).bind(...ura).all();
+        for (const id of ura) icons[id + URA] = { ver: 0, data: null };
+        for (const r of results) icons[r.char_id + URA] = { ver: r.ver || 0, data: r.icon || null };
+      }
+      return json({ icons });
     }
 
     case 'POST /char': {
@@ -202,6 +217,12 @@ async function route(key, url, body, env, ctx) {
       } else if (src.icon === null) {
         await env.DB.prepare('UPDATE chars SET icon=NULL, icon_ver=? WHERE id=?').bind(Date.now(), c.id).run();
       }
+      if (typeof src.uraIcon === 'string' && src.uraIcon.startsWith('data:image/')) {
+        if (src.uraIcon.length > 500000) throw new HttpError(400, '裏のアイコン画像が大きすぎます');
+        await env.DB.prepare('INSERT INTO ura_icons (char_id,icon,ver) VALUES (?,?,?) ON CONFLICT(char_id) DO UPDATE SET icon=excluded.icon, ver=excluded.ver').bind(c.id, src.uraIcon, Date.now()).run();
+      } else if (src.uraIcon === null) {
+        await env.DB.prepare('DELETE FROM ura_icons WHERE char_id=?').bind(c.id).run();
+      }
       return json({ char: await getChar(env, c.id) });
     }
 
@@ -211,6 +232,7 @@ async function route(key, url, body, env, ctx) {
         env.DB.prepare('DELETE FROM chars WHERE id=?').bind(id),
         env.DB.prepare('DELETE FROM messages WHERE char_id=? OR char_id=?').bind(id, id + URA),
         env.DB.prepare('DELETE FROM reads WHERE char_id=? OR char_id=?').bind(id, id + URA),
+        env.DB.prepare('DELETE FROM ura_icons WHERE char_id=?').bind(id),
       ]);
       return json({ ok: true });
     }
@@ -458,6 +480,7 @@ function buildContents(hist, world = 'omote') {
 
 // 裏：実際に会っている場面のロールプレイ（表のSNSとは完全に別の時間軸・別の記憶）
 function buildUraSystem(c) {
+  const alias = c.uraName && c.uraName !== c.name ? `\n（キャラクター設定では「${c.name}」と書かれていますが、この場面では「${c.uraName}」として振る舞います）` : '';
   const narr = c.uraNarration
     ? `- 情景・キャラクターの動作・表情・しぐさなどの描写（ナレーション）は、先頭に「＊」を付けた別の吹き出しとして書く。三人称・現在形で、1〜3文程度の短さにする。
 - セリフの吹き出しには描写や（ ）書きを混ぜず、キャラクターが口にする言葉だけを書く。
@@ -466,7 +489,7 @@ function buildUraSystem(c) {
   return `あなたは次のキャラクターになりきって、ユーザーと「実際に同じ場所で会っている場面」のロールプレイをしています。
 これはスマホのメッセージアプリ（SNS）でのやり取りとは完全に別の時間軸・別の世界線の出来事です。SNSでの会話の内容は知らないものとして振る舞ってください。
 
-# キャラクター: ${c.name}
+# キャラクター: ${c.uraName || c.name}${alias}
 ${c.prompt || '（設定なし）'}
 ${c.uraPrompt ? `
 # この場面（対面）での追加設定

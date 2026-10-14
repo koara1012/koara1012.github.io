@@ -489,13 +489,13 @@ body.ura #list.tlMode{background:#efe9f0}
       <button class="btn sub" id="stLifeSave" style="margin-top:10px">くらしの設定を保存</button>
     </div>
 
-    <div class="sec">静かな時間（自分から話しかけない時間帯）</div>
+    <div class="sec">静かな時間（深夜・早朝）</div>
     <div class="field">
       <label class="inline"><input type="checkbox" id="stQuietOn"> 静かな時間を使う</label>
       <div class="inline" style="margin-top:8px">
         <select id="stQuietS"></select> 時 〜 <select id="stQuietE"></select> 時
       </div>
-      <div class="hint">この間はキャラから話しかけてきません（あなたへの返信はします）。</div>
+      <div class="hint">この間は、キャラからの話しかけ・TLの投稿や反応がぐっと減ります（ふだんの1割ほど）。届くときは、夜更かしや早起きらしい内容になります。あなたへの返信はいつも通りします。</div>
       <button class="btn sub" id="stQuietSave" style="margin-top:10px">静かな時間を保存</button>
     </div>
 
@@ -521,7 +521,7 @@ body.ura #list.tlMode{background:#efe9f0}
 
 <script>
 'use strict';
-const APP_VERSION = '第11版（2026-10-14 23:40:00 更新・TLにも気分・天気・記念日・写真）';
+const APP_VERSION = '第12版（2026-10-14 23:50:00 更新・深夜早朝もたまに届く）';
 const $ = (id) => document.getElementById(id);
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 const esc = (s) => String(s).replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));

@@ -14,7 +14,7 @@
 //    ・Cron トリガー  * * * * *  （毎分。実際に動くのは13分おき）
 // =====================================================================
 
-const VERSION = '第11版（2026-10-14 23:40:00 更新・TLにも気分・天気・記念日・写真）';
+const VERSION = '第12版（2026-10-14 23:50:00 更新・深夜早朝もたまに届く）';
 const DEFAULT_MODEL = 'gemini-flash-latest';
 const DEFAULT_GROK_MODEL = 'grok-4.7';                 // X（Twitter）の Grok と同じ最新世代
 const FALLBACK_GROK_MODEL = 'grok-4-fast-non-reasoning'; // 上が使えないときの予備
@@ -552,6 +552,15 @@ function quietSpan(s) {
   if (!s.quietEnabled || s.quietStart === s.quietEnd) return 0;
   return (s.quietEnd - s.quietStart + 24) % 24;
 }
+// 静かな時間（深夜・早朝）も完全には止めず、ふだんの1割ほどの確率で話しかけ・投稿・反応をする
+const QUIET_RATE = 0.12;
+function nightNote(now) {
+  const h = jstParts(now).h;
+  const when = h >= 22 || h < 4 ? '深夜' : '早朝';
+  return when === '深夜'
+    ? `今は${when}（${h}時台）。この時間ならではの内容にする：眠れない、夜更かししている、ふと目が覚めた、静かな夜の空気、月や夜空、夜食、夜中に考えてしまうこと、など。相手は寝ているかもしれないので、起こさない気づかいや「起きてたら」「朝読んでくれればいい」という気持ちがにじむとよい。`
+    : `今は${when}（${h}時台）。この時間ならではの内容にする：早く目が覚めた、夜明けや朝焼け、まだ静かな街、朝ごはんの支度、寝ぼけている、など。相手はまだ寝ているかもしれないので、起こさない気づかいがにじむとよい。`;
+}
 function isQuiet(ts, s) {
   if (!quietSpan(s)) return false;
   const h = jstParts(ts).h;
@@ -565,11 +574,11 @@ function decide(c, hist, lastRead, now, settings, force = false) {
     return now - last.at > REPLY_WAIT ? { mode: 'reply' } : null; // アプリが閉じられて返信しそびれた分
   }
   if (!force) {
-    if (c.perDay <= 0 || isQuiet(now, settings)) return null;
+    if (c.perDay <= 0) return null;
     if (last && now - last.at < 20 * 60 * 1000) return null; // 会話の直後は割り込まない
   }
   const activeTicks = Math.max(1, ((24 - quietSpan(settings)) * 60) / TICK_MIN);
-  const p = c.perDay / activeTicks; // 1回のCronで話しかける確率
+  const p = (c.perDay / activeTicks) * (!force && isQuiet(now, settings) ? QUIET_RATE : 1); // 1回のCronで話しかける確率（静かな時間は大幅に下げる）
   const roll = (q) => force || Math.random() < q;
 
   if (!last) return roll(p * 4) ? { mode: 'first' } : null;
@@ -621,6 +630,7 @@ async function tick(env) {
         if (d && d.mode === 'reply' && state.busyUntil && now < state.busyUntil) d = null; // まだ忙しい
       }
       if (!d) continue;
+      if (d.mode !== 'reply' && isQuiet(now, settings)) d.night = true; // 深夜・早朝らしい内容に
       if (d.mode === 'topic') await attachNews(env, c, d, settings); // ときどき最近のニュースも話題の候補に
       if (d.mode === 'topic' && settings.lifeEnabled) await chooseFlavor(env, c, d, settings, now);
       const msgs = await generateAndStore(env, c, d, hist, lastRead);
@@ -713,7 +723,7 @@ ${tlInfo}${lifeInfo}
 ${fmtTime(now)}
 
 # 今の状況
-${situation(d, hist, now)}
+${situation(d, hist, now)}${d.night ? '\n' + nightNote(now) : ''}
 
 出力は {"messages": ["吹き出し1", "吹き出し2"]} の形のJSONのみ。`;
 }
@@ -1068,8 +1078,9 @@ async function deletePosts(env, where, args) {
 }
 
 // ---- 静かな時間（表のみ）にかかる予定は、静かな時間が明けてから少しずつ
-function deferQuiet(due, st, world) {
+function deferQuiet(due, st, world, rnd = Math.random()) {
   if (world !== 'omote' || !isQuiet(due, st)) return due;
+  if (rnd < QUIET_RATE) return due; // 夜更かし・早起きしている子は、たまにそのまま反応する
   let t = due;
   for (let i = 0; i < 200 && isQuiet(t, st); i++) t += 15 * MIN;
   return t + Math.floor(Math.random() * 90) * MIN;
@@ -1247,7 +1258,7 @@ function snsRules(world, now) {
 - 地の文・ト書き・（ ）での動作描写は書かない。
 - 自分がAIであることには触れない。
 - 公開のSNSなので、性的に露骨な内容や、相手との個人的なやり取りをそのまま書き写すことはしない（ほのめかす程度はよい）。
-${world === 'ura' ? '- この世界は表（メッセージアプリの世界）とは別の時間軸。表での出来事は知らない。' : `- 現在日時: ${fmtTime(now)}`}`;
+${world === 'ura' ? '- この世界は表（メッセージアプリの世界）とは別の時間軸。表での出来事は知らない。' : `- 現在日時: ${fmtTime(now)}${jstParts(now).h < 7 || jstParts(now).h >= 23 ? '（深夜・早朝。夜更かし・早起きしている感じなど、時間帯らしさをにじませてよい）' : ''}`}`;
 }
 
 async function genComment(env, c, post, replyTo, note) {
@@ -1321,7 +1332,7 @@ ${others.length ? others.map((p) => `- ${nameOf(p.author)}: ${trunc(p.text, 100)
 
 # あなたとユーザーの${world === 'ura' ? '最近の様子（実際に会ったとき）' : 'トークでのやり取り'}
 ${await talkContext(env, c, world)}
-${life ? life.info + '\n\n# 今回の投稿のテーマ\n' + life.hint + '\n' : ''}
+${life ? life.info + '\n\n# 今回の投稿のテーマ\n' + life.hint + '\n' : ''}${world === 'omote' && isQuiet(now, st) ? '\n# 時間帯\n' + nightNote(now).replace(/相手は[^。]*。/, '') + 'テーマより時間帯らしさを優先してよい。\n' : ''}
 この世界のSNSに、新しい投稿を1つ書いてください。`;
   const schema = life && life.photo ? PHOTO_POST_SCHEMA : TEXT_SCHEMA;
   const r = await aiJson(env, world, system, user, schema, 'tl_post');
@@ -1381,11 +1392,11 @@ ${w ? '天気：' + weatherText(w, st) + '\n' : ''}${seasonText(now)}／${weekda
 // ---- キャラが自分からつぶやくか（15分ごと）
 async function shouldCharPost(env, c, world, now, st) {
   const perDay = nz(world === 'ura' ? c.uraTlPerDay : c.tlPerDay, world === 'ura' ? 1 : 2);
-  if (perDay <= 0 || isQuiet(now, st)) return false;
+  if (perDay <= 0) return false;
   const last = await env.DB.prepare('SELECT at FROM tl_posts WHERE world=? AND author=? ORDER BY id DESC LIMIT 1').bind(world, c.id).first();
   if (last && now - last.at < 60 * MIN) return false; // 続けて投稿しすぎない
   const activeTicks = Math.max(1, ((24 - quietSpan(st)) * 60) / TICK_MIN);
-  return Math.random() < perDay / activeTicks;
+  return Math.random() < (perDay / activeTicks) * (isQuiet(now, st) ? QUIET_RATE : 1); // 静かな時間は大幅に下げる
 }
 
 async function charPostNow(env, c, world, st) {

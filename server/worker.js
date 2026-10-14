@@ -14,7 +14,7 @@
 //    ・Cron トリガー  * * * * *  （毎分。実際に動くのは13分おき）
 // =====================================================================
 
-const VERSION = '第10版（2026-10-14 23:30:00 更新・記憶・毎日の様子・天気・写真・記念日）';
+const VERSION = '第11版（2026-10-14 23:40:00 更新・TLにも気分・天気・記念日・写真）';
 const DEFAULT_MODEL = 'gemini-flash-latest';
 const DEFAULT_GROK_MODEL = 'grok-4.7';                 // X（Twitter）の Grok と同じ最新世代
 const FALLBACK_GROK_MODEL = 'grok-4-fast-non-reasoning'; // 上が使えないときの予備
@@ -92,6 +92,10 @@ async function ensureSchema(env) {
   // 既存の messages に写真・送信取り消し用の列を足す（2回目以降は「もうある」で失敗するので無視）
   for (const col of ['image TEXT', 'alt TEXT', 'retracted INTEGER NOT NULL DEFAULT 0', 'retract_at INTEGER']) {
     try { await env.DB.prepare('ALTER TABLE messages ADD COLUMN ' + col).run(); } catch (_) {}
+  }
+  // TLの投稿に写真を付けられるようにする
+  for (const col of ['image TEXT', 'alt TEXT']) {
+    try { await env.DB.prepare('ALTER TABLE tl_posts ADD COLUMN ' + col).run(); } catch (_) {}
   }
   schemaReady = true;
 }
@@ -1040,14 +1044,14 @@ async function getPost(env, id) {
 }
 
 async function loadTimeline(env, world, limit) {
-  const { results: posts } = await env.DB.prepare('SELECT id,world,author,text,at FROM tl_posts WHERE world=? ORDER BY id DESC LIMIT ?').bind(world, limit).all();
+  const { results: posts } = await env.DB.prepare('SELECT id,world,author,text,at,image,alt FROM tl_posts WHERE world=? ORDER BY id DESC LIMIT ?').bind(world, limit).all();
   if (!posts.length) return [];
   const ids = posts.map((p) => p.id);
   const qs = ids.map(() => '?').join(',');
   const { results: cs } = await env.DB.prepare(`SELECT id,post_id,author,text,reply_to,at FROM tl_comments WHERE post_id IN (${qs}) ORDER BY id`).bind(...ids).all();
   const { results: ls } = await env.DB.prepare(`SELECT post_id,author,at FROM tl_likes WHERE post_id IN (${qs}) ORDER BY at`).bind(...ids).all();
-  return posts.map((p) => ({
-    ...p,
+  return posts.map(({ image, alt, ...p }) => ({
+    ...p, ...(image ? { image, alt: alt || '' } : {}),
     likes: ls.filter((l) => l.post_id === p.id).map((l) => ({ author: l.author, at: l.at })),
     comments: cs.filter((c) => c.post_id === p.id).map((c) => ({ id: c.id, author: c.author, text: c.text, replyTo: c.reply_to, at: c.at })),
   }));
@@ -1150,7 +1154,7 @@ ${worldDesc(world)}
 
 # 投稿
 投稿者: ${authorName}${post.author === ME ? '（ユーザー本人）' : ''}
-本文: ${post.text}
+本文: ${post.text}${post.alt ? `\n添付写真：${post.alt}` : ''}
 ${post.author !== ME ? `\n# 投稿者（${authorName}）のキャラクター設定\n${charPersona(author, world, 1500)}\n` : ''}
 # 判定するキャラクター
 ${cands.map((c) => `## id: ${c.id} ／ 名前: ${cName(c, world)}
@@ -1269,7 +1273,7 @@ ${worldDesc(world)}
 
 # 投稿
 投稿者: ${nameOf(post.author)}${world === 'omote' ? `（${fmtDur(now - post.at)}前）` : ''}
-本文: ${post.text}
+本文: ${post.text}${post.alt ? `\n添付写真：${post.alt}` : ''}
 
 # これまでのコメント
 ${cms.length ? cms.map((x) => `${nameOf(x.author)}${x.reply_to ? '（返信）' : ''}: ${trunc(x.text, 150)}`).join('\n') : '（まだなし）'}
@@ -1287,6 +1291,7 @@ ${replyTo ? 'このコメントへの返信を書いてください。' : 'こ�
 async function genPost(env, c, world) {
   const now = Date.now();
   const st = await getSettings(env);
+  const life = world === 'omote' ? await tlLifeTheme(env, c, st, now).catch(() => null) : null;
   const chars = await loadChars(env);
   const { results: own } = await env.DB.prepare('SELECT text FROM tl_posts WHERE world=? AND author=? ORDER BY id DESC LIMIT 6').bind(world, c.id).all();
   const { results: others } = await env.DB.prepare('SELECT author,text FROM tl_posts WHERE world=? AND author<>? ORDER BY id DESC LIMIT 5').bind(world, c.id).all();
@@ -1302,8 +1307,9 @@ ${charPersona(c, world)}
 - ユーザーとのトークの状況（既読スルーされている、楽しく話した、など）を踏まえたつぶやきをしてもよい。ただしやり取りの中身はそのまま書かず、ほのめかす程度に。毎回トークに触れる必要はない。
 - 前の投稿と同じ内容・同じ言い回しにしない。
 ${snsRules(world, now)}
+${life && life.photo ? `- 今回は写真付きの投稿にする。photo に写真の内容を具体的に1文で書く（${PHOTO_SUBJECTS}）。本文は写真に添える一言。
 
-出力は {"text": "投稿本文"} の形のJSONのみ。`;
+出力は {"text": "投稿本文", "photo": "写真の内容"} の形のJSONのみ。` : '\n出力は {"text": "投稿本文"} の形のJSONのみ。'}`;
   const user = `# 世界
 ${worldDesc(world)}
 
@@ -1315,12 +1321,61 @@ ${others.length ? others.map((p) => `- ${nameOf(p.author)}: ${trunc(p.text, 100)
 
 # あなたとユーザーの${world === 'ura' ? '最近の様子（実際に会ったとき）' : 'トークでのやり取り'}
 ${await talkContext(env, c, world)}
-
+${life ? life.info + '\n\n# 今回の投稿のテーマ\n' + life.hint + '\n' : ''}
 この世界のSNSに、新しい投稿を1つ書いてください。`;
-  const r = await aiJson(env, world, system, user, TEXT_SCHEMA, 'tl_post');
+  const schema = life && life.photo ? PHOTO_POST_SCHEMA : TEXT_SCHEMA;
+  const r = await aiJson(env, world, system, user, schema, 'tl_post');
   const text = String((r && r.text) || '').trim();
   if (!text) throw new Error('投稿が空でした');
-  return text.slice(0, 500);
+  if (life && life.done) await life.done();
+  return { text: text.slice(0, 500), photo: life && life.photo ? String((r && r.photo) || '').trim().slice(0, 300) : '' };
+}
+
+// ---- 表のTL：投稿のテーマ（気分・日記・続いている出来事・天気・記念日・写真）
+const PHOTO_POST_SCHEMA = { type: 'object', properties: { text: { type: 'string' }, photo: { type: 'string' } }, required: ['text', 'photo'], additionalProperties: false };
+async function tlLifeTheme(env, c, st, now) {
+  if (!st.lifeEnabled) return null;
+  const state = await getState(env, c.id);
+  const today = jstDay(now);
+  let w = null;
+  try { w = await getWeather(env, st); } catch (_) {}
+  const occ = state.tlOcc === today ? [] : occasionsToday(c, st, now);
+  const ev = state.tlOcc === today ? null : (EVENTS.find(([d]) => d === today.slice(5)) || [])[1];
+  const table = [
+    ['free', 25],
+    ['mood', state.day === today ? 22 : 0],
+    ['story', state.story ? 15 : 0],
+    ['weather', w ? (weatherNotable(w) ? 18 : 5) : 0],
+    ['occasion', occ.length ? 45 : ev ? 18 : 0],
+    ['photo', st.imagesEnabled ? 18 : 0],
+  ];
+  const total = table.reduce((a, x) => a + x[1], 0);
+  let r = Math.random() * total, theme = 'free';
+  for (const [k, wgt] of table) { if ((r -= wgt) < 0) { theme = k; break; } }
+  const info = [];
+  if (state.day === today) {
+    info.push(`# あなた（${c.name}）の今日の様子
+気分：${state.mood}${state.moodReason ? `（${state.moodReason}）` : ''}
+今日：${state.today}
+${(state.diary || []).slice(-2).map((x) => `${fmtDay(x.d)}の出来事：${x.t}`).join('\n')}${state.story ? `
+続いている出来事「${state.story.title}」：${state.story.log.map((x) => `${fmtDay(x.d)} ${x.t}`).join(' → ')}${state.story.finished ? '（区切りがついた）' : ''}` : ''}`);
+  }
+  info.push(`# 天気・季節（ユーザーの住んでいる地域）
+${w ? '天気：' + weatherText(w, st) + '\n' : ''}${seasonText(now)}／${weekdayText(now)}`);
+  const hints = {
+    free: '自由に。今日の気分や天気をさりげなくにじませてもよい。',
+    mood: '今日の気分や、今日していること・最近の出来事（日記）をつぶやく。',
+    story: `続いている出来事「${state.story ? state.story.title : ''}」の今日の進み具合をつぶやく。`,
+    weather: '今日の天気や気温にちなんだつぶやき（雨、暑さ、寒さ、空の様子など）。',
+    occasion: occ.length
+      ? `今日は「${occ.map((o) => o.label).join('・')}」。それにちなんだ投稿をする（ユーザーの誕生日なら、名前はぼかしつつお祝いの気持ちがにじむように。記念日なら嬉しさを）。`
+      : `今日は${ev}。それにちなんだ投稿をする。`,
+    photo: '写真付きの投稿。今日の暮らしの一枚を載せる。',
+  };
+  return {
+    info: info.join('\n\n'), hint: hints[theme], photo: theme === 'photo',
+    done: theme === 'occasion' ? async () => { const s2 = await getState(env, c.id); s2.tlOcc = today; await setState(env, c.id, s2); } : null,
+  };
 }
 
 // ---- キャラが自分からつぶやくか（15分ごと）
@@ -1334,12 +1389,19 @@ async function shouldCharPost(env, c, world, now, st) {
 }
 
 async function charPostNow(env, c, world, st) {
-  const text = await genPost(env, c, world);
+  const { text, photo } = await genPost(env, c, world);
+  let image = null;
+  if (photo && world === 'omote' && st.imagesEnabled) {
+    try { image = await saveImage(env, await makeCharPhoto(env, photo)); }
+    catch (e) { await log(env, `TLの写真を作れませんでした（${c.name}）: ${e.message}`); }
+  }
+  const alt = image ? photo : null;
   const at = Date.now();
-  const r = await env.DB.prepare('INSERT INTO tl_posts (world,author,text,at,planned) VALUES (?,?,?,?,0)').bind(world, c.id, text, at).run();
-  const post = { id: r.meta.last_row_id, world, author: c.id, text, at, planned: 0 };
-  await pushTL(env, st, world, 'tlCharPost', { title: cName(c, world), body: text, post });
-  return { ...post, likes: [], comments: [] };
+  const r = await env.DB.prepare('INSERT INTO tl_posts (world,author,text,at,planned,image,alt) VALUES (?,?,?,?,0,?,?)').bind(world, c.id, text, at, image, alt).run();
+  const post = { id: r.meta.last_row_id, world, author: c.id, text, at, planned: 0, image, alt };
+  await pushTL(env, st, world, 'tlCharPost', { title: cName(c, world), body: (image ? '📷 ' : '') + text, post });
+  const { image: im, alt: al, ...rest } = post;
+  return { ...rest, ...(im ? { image: im, alt: al } : {}), likes: [], comments: [] };
 }
 
 // ---- 予定の実行
@@ -1820,7 +1882,7 @@ function flavorText(d) {
     case 'consult': return '今回は、あなた自身の小さな悩みごとをユーザーに相談してください（キャラクターの暮らしや続いている出来事に合ったもの。深刻すぎない）。';
     case 'recommend': return '今回は、あなたが好きなもの（料理・本・音楽・場所など、キャラクター設定に合うもの）をユーザーに具体的に勧めてください。';
     case 'memory': return `今回は、あなたが覚えているユーザーのこと「${d.memFact}」につながる話題で話しかけてください。`;
-    case 'photo': return '今回は、あなたが作った料理や、見かけた景色・物の写真を送る流れで話しかけてください。写真の内容は photo に書く（人物は写っていない写真）。';
+    case 'photo': return `今回は、写真を送る流れで話しかけてください。写真の内容は photo に書く（${PHOTO_SUBJECTS}）。`;
     default: return '';
   }
 }
@@ -1893,8 +1955,10 @@ async function geminiImage(env, prompt, src) {
   throw new Error(lastErr);
 }
 const NO_PEOPLE = '人物・キャラクター・人の顔や手足・イラストの人物は一切写さない。文字やロゴは入れない。';
+// キャラが送る・載せる写真の題材（キャラ本人や人物は写さない）
+const PHOTO_SUBJECTS = '作った料理、見かけた景色のほか、あなたにまつわる物（愛用品、趣味の道具、好きな物、部屋の一角、よく行く場所、飼っている動物など、キャラクター設定に合うもの）でもよい。あなた自身や人物は写っていないもの';
 async function makeCharPhoto(env, desc) {
-  return geminiImage(env, `スマートフォンで撮った自然な写真を1枚作ってください。内容：${desc}。${NO_PEOPLE}`);
+  return geminiImage(env, `スマートフォンで撮った自然な実写の写真を1枚作ってください。イラストやアニメ調にはしない。内容：${desc}。${NO_PEOPLE}`);
 }
 async function editUserPhoto(env, src, how) {
   return geminiImage(env, `この写真を次のように加工した画像を1枚作ってください：${how}。写っているものは保ったまま。${NO_PEOPLE.replace('写さない', '新しく描き足さない')}`, src);
@@ -1905,7 +1969,7 @@ async function callOmoteRich(env, c, d, system, contents, opt) {
   const props = { messages: { type: 'array', items: { type: 'string' } } };
   let extra = '';
   if (opt.news) { props.used_news = { type: 'integer' }; }
-  if (opt.photo) { props.photo = { type: 'string' }; extra += '\n- photo：送る写真の内容を具体的に1文（例「焼きたてのブリヌイ、ジャムを添えて」）。人物は写っていないもの。写真を送らないなら ""。'; }
+  if (opt.photo) { props.photo = { type: 'string' }; extra += `\n- photo：送る写真の内容を具体的に1文（例「焼きたてのブリヌイ、ジャムを添えて」）。${PHOTO_SUBJECTS}。写真を送らないなら ""。`; }
   if (opt.edit) { props.photo_edit = { type: 'string' }; extra += '\n- photo_edit：ユーザーが送ってくれた写真を、遊び心で加工して送り返したくなったら、加工の内容を1文（例「花の冠を描き足す」「レトロなフィルムカメラ風にする」）。人物やキャラクターは描き足さない。ほとんどの場合は加工しない（""）。'; }
   if (opt.retract) { props.retract = { type: 'integer' }; extra += '\n- retract：書いた吹き出しのうち、照れくさかったり言い過ぎたりして「やっぱり送信取り消し」したくなるものがあれば、その番号（0から）。なければ -1。'; }
   if (opt.typo) extra += '\n- 今回は、吹き出しのどれか1か所で、スマホらしい自然な打ち間違い（変換ミスなど）をして、次の吹き出しで「＊正しい言葉」と短く訂正する。キャラクターに合わなければしなくてよい。';

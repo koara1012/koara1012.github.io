@@ -159,6 +159,8 @@ body.ura #list.tlMode{background:#efe9f0}
 .post .nm{font-weight:700;font-size:14.5px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .post .tm{color:var(--sub);font-size:12px;white-space:nowrap}
 .post .tx{font-size:15px;line-height:1.6;white-space:pre-wrap;word-break:break-word;margin-top:3px}
+.post .pimg{margin-top:8px}
+.post .pimg img{display:block;max-width:100%;max-height:340px;border-radius:12px;background:#e3e7ee;min-height:120px;min-width:120px;object-fit:cover}
 .post .acts{display:flex;gap:22px;margin-top:8px;color:var(--sub);font-size:13px}
 .post .acts button{display:flex;align-items:center;gap:5px;color:var(--sub);font-variant-numeric:tabular-nums}
 .post .acts button.liked{color:#e0245e}
@@ -519,7 +521,7 @@ body.ura #list.tlMode{background:#efe9f0}
 
 <script>
 'use strict';
-const APP_VERSION = '第10版（2026-10-14 23:30:00 更新・記憶・毎日の様子・写真・記念日）';
+const APP_VERSION = '第11版（2026-10-14 23:40:00 更新・TLにも気分・天気・記念日・写真）';
 const $ = (id) => document.getElementById(id);
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 const esc = (s) => String(s).replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
@@ -1038,6 +1040,7 @@ function postHTML(p, world, big) {
     <div class="mid">
       <div class="hd"><span class="nm">${esc(authorName(p.author, world))}</span>${t ? `<span class="tm">${t}</span>` : ''}</div>
       <div class="tx">${esc(p.text)}</div>
+      ${p.image ? `<div class="pimg"><img ${imgCache[p.image] ? `src="${imgCache[p.image]}"` : `data-img="${esc(p.image)}"`} alt="${esc(p.alt || '写真')}"></div>` : ''}
       ${!big && lk ? `<div class="who">${esc(lk)}</div>` : ''}
       <div class="acts">
         <button class="${liked ? 'liked' : ''}" data-like="${p.id}" ${p.pending ? 'disabled' : ''} aria-label="いいね">${liked ? '♥' : '♡'} ${p.likes.length || ''}</button>
@@ -1048,6 +1051,7 @@ function postHTML(p, world, big) {
   </div>`;
 }
 function renderTL() {
+  setTimeout(fillImages, 0);
   const el = $('list'), w = S.world;
   const posts = S.tl[w];
   // 入力欄は作り直さない（日本語入力の途中で消えないように）。世界を切り替えたときだけ作る
@@ -1118,6 +1122,7 @@ function openPost(id) {
   $('postBox').scrollTop = 0;
 }
 function renderPost() {
+  setTimeout(fillImages, 0);
   const f = findPost(S.postId);
   const box = $('postBox');
   document.body.classList.toggle('ura', (f ? f.w : S.world) === 'ura');
@@ -1184,8 +1189,8 @@ function cAutosize() {
 function ask(msg) { try { return window.confirm(msg); } catch (_) { return true; } }
 
 // ------------------------------------------------ 写真
-const imgCache = {}; // 写真ID → 表示用URL
-const imgLoading = {};
+var imgCache = {}; // 写真ID → 表示用URL
+var imgLoading = {};
 function bubHTML(m) {
   if (m.retracted) return `<div class="bub gone">${m.sender === 'me' ? 'メッセージの送信を取り消しました' : '送信を取り消しました'}</div>`;
   const src = m.localImg || (m.image && imgCache[m.image]);
@@ -1659,6 +1664,11 @@ $('msgs').addEventListener('click', (e) => {
   $('imgViewImg').src = im.src; $('imgView').classList.add('on');
 });
 $('imgView').onclick = () => $('imgView').classList.remove('on');
+// TLの写真：投稿を開いているときはタップで拡大
+document.addEventListener('click', (e) => {
+  const im = e.target.closest('.post.big .pimg img'); if (!im || !im.src) return;
+  e.stopPropagation(); $('imgViewImg').src = im.src; $('imgView').classList.add('on');
+}, true);
 $('stLifeSave').onclick = async () => {
   const m = $('stBdM').value, d = $('stBdD').value;
   try {

@@ -14,7 +14,7 @@
 //    ・Cron トリガー  * * * * *  （毎分。実際に動くのは13分おき）
 // =====================================================================
 
-const VERSION = '第13版（2026-10-14 23:55:00 更新・夜の投稿はコメント欄も昼と同じ）';
+const VERSION = '第15版（2026-10-15 03:10:00 更新・メッセージを選んで消せる）';
 const DEFAULT_MODEL = 'gemini-flash-latest';
 const DEFAULT_GROK_MODEL = 'grok-4.7';                 // X（Twitter）の Grok と同じ最新世代
 const FALLBACK_GROK_MODEL = 'grok-4-fast-non-reasoning'; // 上が使えないときの予備
@@ -311,6 +311,23 @@ async function route(key, url, body, env, ctx) {
         env.DB.prepare('DELETE FROM reads WHERE char_id=?').bind(key),
       ]);
       return json({ ok: true });
+    }
+
+    case 'POST /messages/delete': { // 選んだメッセージだけ消す（表・裏それぞれ）
+      const { base, key } = splitCid(body.charId);
+      await getChar(env, base);
+      const ids = [...new Set((Array.isArray(body.ids) ? body.ids : []).map((x) => num(x, 0)).filter((x) => x > 0))].slice(0, 2000);
+      if (!ids.length) throw new HttpError(400, '消すメッセージが選ばれていません');
+      let deleted = 0;
+      for (let i = 0; i < ids.length; i += 90) { // D1 のパラメータ数の上限に合わせて分ける
+        const part = ids.slice(i, i + 90);
+        const qs = part.map(() => '?').join(',');
+        const { results: imgs } = await env.DB.prepare(`SELECT image FROM messages WHERE char_id=? AND image IS NOT NULL AND id IN (${qs})`).bind(key, ...part).all();
+        for (const im of imgs) await env.DB.prepare('DELETE FROM images WHERE id=?').bind(im.image).run(); // 写真も一緒に消す
+        const r = await env.DB.prepare(`DELETE FROM messages WHERE char_id=? AND id IN (${part.map(() => '?').join(',')})`).bind(key, ...part).run();
+        deleted += (r.meta && r.meta.changes) || 0;
+      }
+      return json({ ok: true, deleted });
     }
 
     case 'POST /send': {

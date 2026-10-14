@@ -8,7 +8,7 @@
 //    ・Cron トリガー  */15 * * * *  （15分おき）
 // =====================================================================
 
-const VERSION = '第1版（2026-10-14 03:40:00 更新）';
+const VERSION = '第2版（2026-10-14 15:35:00 更新・GitHubから自動Deploy）';
 const DEFAULT_MODEL = 'gemini-flash-latest';
 const JST = 9 * 3600 * 1000;
 const TICK_MIN = 15;              // Cronの間隔（分）

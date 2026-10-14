@@ -7,17 +7,19 @@
 //    ・（任意）変数 GEMINI_MODEL   … 使うモデル名。未設定なら gemini-flash-latest
 //    ・（Grokを使うとき）シークレット XAI_API_KEY … xAI（Grok）のAPIキー
 //    ・（任意）変数 XAI_MODEL      … Grokのモデル名。アプリの設定画面で指定したものが優先
-//    ※ Gemini / Grok の切り替えはアプリの設定画面から（会話履歴はどちらでもそのまま使われる）
+//    ※ Gemini / Grok は「表」「裏」それぞれアプリの設定画面で選ぶ（既定：表＝Gemini、裏＝Grok）
+//    ※ 裏（実際に会う場面）の会話は char_id に「#ura」を付けて保存し、表とは履歴・既読を完全に分ける
 //    ・Cron トリガー  */15 * * * *  （15分おき）
 // =====================================================================
 
-const VERSION = '第3版（2026-10-14 17:05:00 更新・Gemini/Grok切り替え）';
+const VERSION = '第4版（2026-10-14 18:20:00 更新・表/裏タブ）';
 const DEFAULT_MODEL = 'gemini-flash-latest';
 const DEFAULT_GROK_MODEL = 'grok-4-fast-non-reasoning';
 const JST = 9 * 3600 * 1000;
 const TICK_MIN = 15;              // Cronの間隔（分）
 const MAX_UNREAD = 8;             // 未読がこれ以上たまったら送らない
-const REPLY_WAIT = 90 * 1000;     // ユーザーの送信後、アプリが返信を取りに来なかった場合にサーバーが代わりに返すまでの時間
+const REPLY_WAIT = 90 * 1000;
+const URA = '#ura';              // 裏タブの会話は char_id にこれを付けて別に保存する     // ユーザーの送信後、アプリが返信を取りに来なかった場合にサーバーが代わりに返すまでの時間
 
 const CORS = {
   'Access-Control-Allow-Origin': '*',
@@ -85,7 +87,7 @@ async function log(env, msg) {
   } catch (_) {}
 }
 
-const DEFAULT_SETTINGS = { quietEnabled: true, quietStart: 1, quietEnd: 7, provider: 'gemini', grokModel: '' };
+const DEFAULT_SETTINGS = { quietEnabled: true, quietStart: 1, quietEnd: 7, omoteProvider: 'gemini', uraProvider: 'grok', grokModel: '' };
 async function getSettings(env) {
   return { ...DEFAULT_SETTINGS, ...(await kvGet(env, 'settings', {})) };
 }
@@ -102,7 +104,20 @@ function normChar(c) {
     nudgeRate: clamp(num(c.nudgeRate, 50), 0, 100),  // 既読スルー時に催促する確率（％）。残りは別の話題
     maxSplit: clamp(Math.round(num(c.maxSplit, 3)), 1, 5), // 吹き出しの最大数
     typing: ['slow', 'normal', 'fast'].includes(c.typing) ? c.typing : 'normal',
+    // 裏（実際に会う場面）用
+    uraPrompt: String(c.uraPrompt || '').slice(0, 20000),    // 裏だけの追加設定（関係性など）
+    uraScene: String(c.uraScene || '').slice(0, 2000),       // いまの場面
+    uraNarration: c.uraNarration !== false,                  // ナレーションを入れるか
+    uraMaxSplit: clamp(Math.round(num(c.uraMaxSplit, 5)), 1, 8),
   };
+}
+
+// "abc#ura" → { base: 'abc', world: 'ura', key: 'abc#ura' }
+function splitCid(cid) {
+  const s = String(cid || '');
+  const ura = s.endsWith(URA);
+  const base = ura ? s.slice(0, -URA.length) : s;
+  return { base, world: ura ? 'ura' : 'omote', key: ura ? base + URA : base };
 }
 
 async function loadChars(env) {
@@ -128,7 +143,7 @@ async function setRead(env, charId, at) {
   await env.DB.prepare('INSERT INTO reads (char_id,at) VALUES (?,?) ON CONFLICT(char_id) DO UPDATE SET at=MAX(reads.at, excluded.at)').bind(charId, at).run();
 }
 async function totalUnread(env) {
-  const r = await env.DB.prepare("SELECT COUNT(*) AS n FROM messages m LEFT JOIN reads r ON r.char_id=m.char_id WHERE m.sender='char' AND m.at > COALESCE(r.at,0)").first();
+  const r = await env.DB.prepare("SELECT COUNT(*) AS n FROM messages m LEFT JOIN reads r ON r.char_id=m.char_id WHERE m.sender='char' AND m.char_id NOT LIKE '%#ura' AND m.at > COALESCE(r.at,0)").first();
   return r ? r.n : 0;
 }
 
@@ -139,7 +154,10 @@ async function route(key, url, body, env, ctx) {
       const subs = await env.DB.prepare('SELECT COUNT(*) AS n FROM subs').first();
       const st = await getSettings(env);
       return json({
-        ok: true, version: VERSION, provider: st.provider, model: modelFor(env, st),
+        ok: true, version: VERSION,
+        omoteProvider: st.omoteProvider, uraProvider: st.uraProvider,
+        omoteModel: modelFor(env, st, 'omote'), uraModel: modelFor(env, st, 'ura'),
+        model: modelFor(env, st, 'omote'),
         geminiModel: env.GEMINI_MODEL || DEFAULT_MODEL, grokModel: grokModelFor(env, st),
         hasGeminiKey: !!env.GEMINI_API_KEY, hasXaiKey: !!env.XAI_API_KEY, subs: subs.n,
         log: await kvGet(env, 'log', []), lastTick: await kvGet(env, 'lastTick', null),
@@ -151,7 +169,10 @@ async function route(key, url, body, env, ctx) {
       const chars = await loadChars(env);
       let messages = [], more = false;
       if (since <= 0) {
-        for (const c of chars) messages.push(...(await recent(env, c.id, 200)));
+        for (const c of chars) {
+          messages.push(...(await recent(env, c.id, 200)));
+          messages.push(...(await recent(env, c.id + URA, 200)));
+        }
       } else {
         const { results } = await env.DB.prepare('SELECT id,char_id,sender,text,at FROM messages WHERE id>? ORDER BY id LIMIT 501').bind(since).all();
         more = results.length > 500;
@@ -188,48 +209,52 @@ async function route(key, url, body, env, ctx) {
       const id = url.searchParams.get('id') || '';
       await env.DB.batch([
         env.DB.prepare('DELETE FROM chars WHERE id=?').bind(id),
-        env.DB.prepare('DELETE FROM messages WHERE char_id=?').bind(id),
-        env.DB.prepare('DELETE FROM reads WHERE char_id=?').bind(id),
+        env.DB.prepare('DELETE FROM messages WHERE char_id=? OR char_id=?').bind(id, id + URA),
+        env.DB.prepare('DELETE FROM reads WHERE char_id=? OR char_id=?').bind(id, id + URA),
       ]);
       return json({ ok: true });
     }
 
-    case 'POST /clear': {
-      const c = await getChar(env, body.charId);
+    case 'POST /clear': { // 表・裏それぞれ別に消す（charId に #ura が付いていれば裏）
+      const { base, key } = splitCid(body.charId);
+      await getChar(env, base);
       await env.DB.batch([
-        env.DB.prepare('DELETE FROM messages WHERE char_id=?').bind(c.id),
-        env.DB.prepare('DELETE FROM reads WHERE char_id=?').bind(c.id),
+        env.DB.prepare('DELETE FROM messages WHERE char_id=?').bind(key),
+        env.DB.prepare('DELETE FROM reads WHERE char_id=?').bind(key),
       ]);
       return json({ ok: true });
     }
 
     case 'POST /send': {
-      const c = await getChar(env, body.charId);
+      const { base, key } = splitCid(body.charId);
+      await getChar(env, base);
       const text = String(body.text || '').trim().slice(0, 4000);
       if (!text) throw new HttpError(400, 'メッセージが空です');
       const at = Date.now();
-      const r = await env.DB.prepare('INSERT INTO messages (char_id,sender,text,at) VALUES (?,?,?,?)').bind(c.id, 'me', text, at).run();
-      await setRead(env, c.id, at); // 返信する＝それまでの相手のメッセージは読んだ
-      return json({ message: { id: r.meta.last_row_id, charId: c.id, sender: 'me', text, at } });
+      const r = await env.DB.prepare('INSERT INTO messages (char_id,sender,text,at) VALUES (?,?,?,?)').bind(key, 'me', text, at).run();
+      await setRead(env, key, at); // 返信する＝それまでの相手のメッセージは読んだ
+      return json({ message: { id: r.meta.last_row_id, charId: key, sender: 'me', text, at } });
     }
 
     case 'POST /reply': {
-      const c = await getChar(env, body.charId);
-      const hist = await recent(env, c.id, 60);
+      const { base, world, key } = splitCid(body.charId);
+      const c = await getChar(env, base);
+      const hist = await recent(env, key, 60);
       const last = hist[hist.length - 1];
       if (!last || last.sender !== 'me') return json({ messages: [] });
-      const msgs = await generateAndStore(env, c, { mode: 'reply' }, hist, await getRead(env, c.id));
+      const msgs = await generateAndStore(env, c, { mode: 'reply' }, hist, await getRead(env, key), world);
       return json({ messages: msgs });
     }
 
     case 'POST /read': {
-      const c = await getChar(env, body.charId);
-      await setRead(env, c.id, Date.now());
+      const { base, key } = splitCid(body.charId);
+      await getChar(env, base);
+      await setRead(env, key, Date.now());
       return json({ ok: true, badge: await totalUnread(env) });
     }
 
-    case 'POST /poke': { // テスト用：今すぐ自分から話しかけさせる
-      const c = await getChar(env, body.charId);
+    case 'POST /poke': { // テスト用：今すぐ自分から話しかけさせる（表のみ）
+      const c = await getChar(env, splitCid(body.charId).base);
       const hist = await recent(env, c.id, 60);
       const lastRead = await getRead(env, c.id);
       const d = decide(c, hist, lastRead, Date.now(), await getSettings(env), true) || { mode: 'topic' };
@@ -245,7 +270,9 @@ async function route(key, url, body, env, ctx) {
       if ('quietEnabled' in s) v.quietEnabled = !!s.quietEnabled;
       if ('quietStart' in s) v.quietStart = clamp(Math.round(num(s.quietStart, 1)), 0, 23);
       if ('quietEnd' in s) v.quietEnd = clamp(Math.round(num(s.quietEnd, 7)), 0, 23);
-      if ('provider' in s) v.provider = s.provider === 'grok' ? 'grok' : 'gemini';
+      if ('omoteProvider' in s) v.omoteProvider = s.omoteProvider === 'grok' ? 'grok' : 'gemini';
+      if ('uraProvider' in s) v.uraProvider = s.uraProvider === 'gemini' ? 'gemini' : 'grok';
+      delete v.provider; // 旧設定（表裏共通）は使わない
       if ('grokModel' in s) v.grokModel = String(s.grokModel || '').trim().slice(0, 80);
       await kvSet(env, 'settings', v);
       return json({ settings: v });
@@ -410,24 +437,60 @@ ${situation(d, hist, now)}
 出力は {"messages": ["吹き出し1", "吹き出し2"]} の形のJSONのみ。`;
 }
 
-function buildContents(hist) {
+function buildContents(hist, world = 'omote') {
   const turns = [];
   for (const m of hist) {
     const role = m.sender === 'me' ? 'user' : 'model';
-    const line = `[${fmtTime(m.at)}] ${m.text}`;
+    // 裏は現実の時刻とは別の時間軸なので時刻は付けない。ナレーションは「＊」付きで渡す
+    const line = world === 'ura' ? (m.sender === 'narr' ? '＊' + m.text : m.text) : `[${fmtTime(m.at)}] ${m.text}`;
     const t = turns[turns.length - 1];
     if (t && t.role === role) t.parts[0].text += '\n' + line;
     else turns.push({ role, parts: [{ text: line }] });
   }
   if (turns.length && turns[0].role === 'model') turns.unshift({ role: 'user', parts: [{ text: '（会話の始まり）' }] });
   if (!turns.length || turns[turns.length - 1].role === 'model') {
-    turns.push({ role: 'user', parts: [{ text: '（ユーザーからの新しいメッセージはありません。「今の状況」に沿って、あなたから送るメッセージを作ってください）' }] });
+    turns.push({ role: 'user', parts: [{ text: world === 'ura'
+      ? '（場面の始まり。あなたから自然に始めてください）'
+      : '（ユーザーからの新しいメッセージはありません。「今の状況」に沿って、あなたから送るメッセージを作ってください）' }] });
   }
   return turns;
 }
 
-function modelFor(env, st) {
-  return st.provider === 'grok' ? grokModelFor(env, st) : (env.GEMINI_MODEL || DEFAULT_MODEL);
+// 裏：実際に会っている場面のロールプレイ（表のSNSとは完全に別の時間軸・別の記憶）
+function buildUraSystem(c) {
+  const narr = c.uraNarration
+    ? `- 情景・キャラクターの動作・表情・しぐさなどの描写（ナレーション）は、先頭に「＊」を付けた別の吹き出しとして書く。三人称・現在形で、1〜3文程度の短さにする。
+- セリフの吹き出しには描写や（ ）書きを混ぜず、キャラクターが口にする言葉だけを書く。
+- ナレーションは場面が伝わるときに挟む程度でよい。毎回入れなくてよい。`
+    : '- ナレーションや地の文、（ ）での動作描写は書かず、キャラクターのセリフだけで表現する。';
+  return `あなたは次のキャラクターになりきって、ユーザーと「実際に同じ場所で会っている場面」のロールプレイをしています。
+これはスマホのメッセージアプリ（SNS）でのやり取りとは完全に別の時間軸・別の世界線の出来事です。SNSでの会話の内容は知らないものとして振る舞ってください。
+
+# キャラクター: ${c.name}
+${c.prompt || '（設定なし）'}
+${c.uraPrompt ? `
+# この場面（対面）での追加設定
+${c.uraPrompt}
+` : ''}
+# いまの場面
+${c.uraScene || '（特に指定なし。これまでの流れやユーザーの言動から自然に判断する）'}
+
+# ルール（キャラクター設定に別の指示があればそちらを優先）
+- 返答は1〜${c.uraMaxSplit}個の吹き出しに分ける。
+${narr}
+- ユーザーの発言のうち（ ）で書かれた部分は、ユーザーの行動や状況の描写として受け取る。
+- ユーザーの行動・発言・気持ちを勝手に決めて書かない。ユーザーが次にどうするかの余地を残す。
+- 自分がAIであることには触れない。
+- キャラクターが未成年の設定である場合、性的な内容や描写は一切しない。
+
+出力は {"messages": ["吹き出し1", "吹き出し2"]} の形のJSONのみ。`;
+}
+
+function providerFor(st, world) {
+  return world === 'ura' ? (st.uraProvider || 'grok') : (st.omoteProvider || 'gemini');
+}
+function modelFor(env, st, world = 'omote') {
+  return providerFor(st, world) === 'grok' ? grokModelFor(env, st) : (env.GEMINI_MODEL || DEFAULT_MODEL);
 }
 function grokModelFor(env, st) {
   return (st && st.grokModel) || env.XAI_MODEL || DEFAULT_GROK_MODEL;
@@ -486,9 +549,9 @@ async function callGrok(env, model, system, contents, maxSplit) {
 }
 
 // ---------------------------------------------------------------- 使うAIを選んで呼ぶ
-async function callAI(env, system, contents, maxSplit) {
+async function callAI(env, world, system, contents, maxSplit) {
   const st = await getSettings(env);
-  if (st.provider === 'grok') return callGrok(env, grokModelFor(env, st), system, contents, maxSplit);
+  if (providerFor(st, world) === 'grok') return callGrok(env, grokModelFor(env, st), system, contents, maxSplit);
   return callGemini(env, system, contents, maxSplit);
 }
 
@@ -528,13 +591,24 @@ async function callGemini(env, system, contents, maxSplit) {
   return parseMessages(text, maxSplit, 'Gemini');
 }
 
-async function generateAndStore(env, c, d, hist, lastRead) {
+async function generateAndStore(env, c, d, hist, lastRead, world = 'omote') {
   const now = Date.now();
-  const texts = await callAI(env, buildSystem(c, d, hist, now), buildContents(hist), c.maxSplit);
+  const ura = world === 'ura';
+  const key = ura ? c.id + URA : c.id;
+  const texts = ura
+    ? (await callAI(env, 'ura', buildUraSystem(c), buildContents(hist, 'ura'), c.uraMaxSplit + 4))
+        .flatMap((t) => t.split(/\n(?=\s*[＊*])/)) // ナレーションとセリフが1つにまとまっていたら分ける
+    : await callAI(env, 'omote', buildSystem(c, d, hist, now), buildContents(hist), c.maxSplit);
+  // 裏では「＊」で始まる吹き出しをナレーションとして保存する
+  const items = texts.map((t) => {
+    const m = ura && t.match(/^\s*[＊*]+\s*([\s\S]*)$/);
+    return m ? { sender: 'narr', text: m[1].trim() } : { sender: 'char', text: ura ? t.replace(/^「([\s\S]*)」$/, '$1') : t };
+  }).filter((x) => x.text);
+  if (!items.length) throw new Error('返答が空でした');
   const t0 = Date.now();
-  const res = await env.DB.batch(texts.map((t, i) =>
-    env.DB.prepare('INSERT INTO messages (char_id,sender,text,at) VALUES (?,?,?,?)').bind(c.id, 'char', t, t0 + i)));
-  return texts.map((t, i) => ({ id: res[i].meta.last_row_id, charId: c.id, sender: 'char', text: t, at: t0 + i }));
+  const res = await env.DB.batch(items.map((x, i) =>
+    env.DB.prepare('INSERT INTO messages (char_id,sender,text,at) VALUES (?,?,?,?)').bind(key, x.sender, x.text, t0 + i)));
+  return items.map((x, i) => ({ id: res[i].meta.last_row_id, charId: key, sender: x.sender, text: x.text, at: t0 + i }));
 }
 
 // ---------------------------------------------------------------- Web Push（RFC 8291 / RFC 8292）

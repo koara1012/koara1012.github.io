@@ -9,10 +9,11 @@
 //    ・（任意）変数 XAI_MODEL      … Grokのモデル名。アプリの設定画面で指定したものが優先
 //    ※ Gemini / Grok は「表」「裏」それぞれアプリの設定画面で選ぶ（既定：表＝Gemini、裏＝Grok）
 //    ※ 裏（実際に会う場面）の会話は char_id に「#ura」を付けて保存し、表とは履歴・既読を完全に分ける
+//    ※ タイムライン（TL）も表と裏で完全に別（tl_posts.world が 'omote' / 'ura'）。AIは各世界の設定に従う。通知は表のTLだけ
 //    ・Cron トリガー  */15 * * * *  （15分おき）
 // =====================================================================
 
-const VERSION = '第6版（2026-10-14 18:10:00 更新・裏のプロンプトを別に設定）';
+const VERSION = '第7版（2026-10-14 20:00:00 更新・表と裏のタイムライン）';
 const DEFAULT_MODEL = 'gemini-flash-latest';
 const DEFAULT_GROK_MODEL = 'grok-4.7';                 // X（Twitter）の Grok と同じ最新世代
 const FALLBACK_GROK_MODEL = 'grok-4-fast-non-reasoning'; // 上が使えないときの予備
@@ -69,6 +70,15 @@ async function ensureSchema(env) {
     env.DB.prepare('CREATE TABLE IF NOT EXISTS kv (k TEXT PRIMARY KEY, v TEXT NOT NULL)'),
     env.DB.prepare('CREATE TABLE IF NOT EXISTS subs (endpoint TEXT PRIMARY KEY, data TEXT NOT NULL, created INTEGER)'),
     env.DB.prepare('CREATE TABLE IF NOT EXISTS ura_icons (char_id TEXT PRIMARY KEY, icon TEXT, ver INTEGER NOT NULL)'), // 裏のアイコン
+    // タイムライン
+    env.DB.prepare('CREATE TABLE IF NOT EXISTS tl_posts (id INTEGER PRIMARY KEY AUTOINCREMENT, world TEXT NOT NULL, author TEXT NOT NULL, text TEXT NOT NULL, at INTEGER NOT NULL, planned INTEGER NOT NULL DEFAULT 0)'),
+    env.DB.prepare('CREATE INDEX IF NOT EXISTS idx_tl_posts ON tl_posts(world, id)'),
+    env.DB.prepare('CREATE TABLE IF NOT EXISTS tl_comments (id INTEGER PRIMARY KEY AUTOINCREMENT, post_id INTEGER NOT NULL, world TEXT NOT NULL, author TEXT NOT NULL, text TEXT NOT NULL, reply_to INTEGER, at INTEGER NOT NULL)'),
+    env.DB.prepare('CREATE INDEX IF NOT EXISTS idx_tl_comments ON tl_comments(post_id, id)'),
+    env.DB.prepare('CREATE TABLE IF NOT EXISTS tl_likes (post_id INTEGER NOT NULL, author TEXT NOT NULL, at INTEGER NOT NULL, PRIMARY KEY (post_id, author))'),
+    env.DB.prepare('CREATE TABLE IF NOT EXISTS tl_jobs (id INTEGER PRIMARY KEY AUTOINCREMENT, world TEXT NOT NULL, char_id TEXT NOT NULL, kind TEXT NOT NULL, post_id INTEGER NOT NULL, comment_id INTEGER, due INTEGER NOT NULL, note TEXT)'),
+    env.DB.prepare('CREATE INDEX IF NOT EXISTS idx_tl_jobs ON tl_jobs(due)'),
+    env.DB.prepare('CREATE TABLE IF NOT EXISTS me_icons (world TEXT PRIMARY KEY, icon TEXT, ver INTEGER NOT NULL)'), // あなたのTL用アイコン
   ]);
   schemaReady = true;
 }
@@ -89,9 +99,16 @@ async function log(env, msg) {
   } catch (_) {}
 }
 
-const DEFAULT_SETTINGS = { quietEnabled: true, quietStart: 1, quietEnd: 7, omoteProvider: 'gemini', uraProvider: 'grok', grokModel: '' };
+// 表のTLの通知（4項目を個別にオン／オフ）。裏のTLとトークは通知しない
+const NOTIFY_DEFAULT = { tlComment: true, tlLike: true, tlCharPost: true, tlReply: true };
+const DEFAULT_SETTINGS = {
+  quietEnabled: true, quietStart: 1, quietEnd: 7, omoteProvider: 'gemini', uraProvider: 'grok', grokModel: '',
+  meName: '', meNameUra: '', meIconVer: 0, meUraIconVer: 0, // あなたのTLでの名前（表・裏）とアイコンの版
+};
 async function getSettings(env) {
-  return { ...DEFAULT_SETTINGS, ...(await kvGet(env, 'settings', {})) };
+  const s = { ...DEFAULT_SETTINGS, ...(await kvGet(env, 'settings', {})) };
+  s.notify = { ...NOTIFY_DEFAULT, ...(s.notify || {}) };
+  return s;
 }
 
 function num(v, d) { const n = Number(v); return Number.isFinite(n) ? n : d; }
@@ -113,6 +130,11 @@ function normChar(c) {
     uraScene: String(c.uraScene || '').slice(0, 2000),       // いまの場面
     uraNarration: c.uraNarration !== false,                  // ナレーションを入れるか
     uraMaxSplit: clamp(Math.round(num(c.uraMaxSplit, 5)), 1, 8),
+    // タイムライン用
+    affinity: clamp(Math.round(num(c.affinity, 60)), 0, 100),     // あなたとの仲の良さ
+    snsActivity: clamp(Math.round(num(c.snsActivity, 50)), 0, 100), // SNSでの反応のしやすさ
+    tlPerDay: clamp(num(c.tlPerDay, 2), 0, 12),                   // 表のTLに自分から投稿する回数（1日の目安）
+    uraTlPerDay: clamp(num(c.uraTlPerDay, 1), 0, 12),             // 裏のTLに投稿する回数
   };
 }
 
@@ -193,8 +215,15 @@ async function route(key, url, body, env, ctx) {
       const ids = (url.searchParams.get('ids') || '').split(',').filter(Boolean).slice(0, 50);
       if (!ids.length) return json({ icons: {} });
       // 「id#ura」は裏のアイコン
-      const omote = ids.filter((i) => !i.endsWith(URA)), ura = ids.filter((i) => i.endsWith(URA)).map((i) => i.slice(0, -URA.length));
       const icons = {};
+      // 「@me」「@me#ura」は、あなたのTL用アイコン
+      for (const id of ids.filter((i) => i.startsWith('@me'))) {
+        const w = id.endsWith(URA) ? 'ura' : 'omote';
+        const r = await env.DB.prepare('SELECT icon,ver FROM me_icons WHERE world=?').bind(w).first();
+        icons[id] = { ver: r ? r.ver : 0, data: r ? r.icon : null };
+      }
+      const charIds = ids.filter((i) => !i.startsWith('@'));
+      const omote = charIds.filter((i) => !i.endsWith(URA)), ura = charIds.filter((i) => i.endsWith(URA)).map((i) => i.slice(0, -URA.length));
       if (omote.length) {
         const { results } = await env.DB.prepare(`SELECT id,icon,icon_ver FROM chars WHERE id IN (${omote.map(() => '?').join(',')})`).bind(...omote).all();
         for (const r of results) icons[r.id] = { ver: r.icon_ver || 0, data: r.icon || null };
@@ -235,6 +264,13 @@ async function route(key, url, body, env, ctx) {
         env.DB.prepare('DELETE FROM messages WHERE char_id=? OR char_id=?').bind(id, id + URA),
         env.DB.prepare('DELETE FROM reads WHERE char_id=? OR char_id=?').bind(id, id + URA),
         env.DB.prepare('DELETE FROM ura_icons WHERE char_id=?').bind(id),
+        // タイムライン：このキャラの投稿（とそれへのコメント・いいね）、コメント、いいね、予定
+        env.DB.prepare('DELETE FROM tl_comments WHERE post_id IN (SELECT id FROM tl_posts WHERE author=?)').bind(id),
+        env.DB.prepare('DELETE FROM tl_likes WHERE post_id IN (SELECT id FROM tl_posts WHERE author=?)').bind(id),
+        env.DB.prepare('DELETE FROM tl_jobs WHERE char_id=? OR post_id IN (SELECT id FROM tl_posts WHERE author=?)').bind(id, id),
+        env.DB.prepare('DELETE FROM tl_posts WHERE author=?').bind(id),
+        env.DB.prepare('DELETE FROM tl_comments WHERE author=?').bind(id),
+        env.DB.prepare('DELETE FROM tl_likes WHERE author=?').bind(id),
       ]);
       return json({ ok: true });
     }
@@ -298,8 +334,103 @@ async function route(key, url, body, env, ctx) {
       if ('uraProvider' in s) v.uraProvider = s.uraProvider === 'gemini' ? 'gemini' : 'grok';
       delete v.provider; // 旧設定（表裏共通）は使わない
       if ('grokModel' in s) v.grokModel = String(s.grokModel || '').trim().slice(0, 80);
+      if (s.notify && typeof s.notify === 'object') {
+        for (const k of Object.keys(NOTIFY_DEFAULT)) if (k in s.notify) v.notify[k] = !!s.notify[k];
+      }
       await kvSet(env, 'settings', v);
       return json({ settings: v });
+    }
+
+    // ---- あなたのTLでの名前とアイコン（表・裏で別）
+    case 'POST /me': {
+      const world = body.world === 'ura' ? 'ura' : 'omote';
+      const v = await getSettings(env);
+      if ('name' in body) v[world === 'ura' ? 'meNameUra' : 'meName'] = String(body.name || '').trim().slice(0, 40);
+      const verKey = world === 'ura' ? 'meUraIconVer' : 'meIconVer';
+      if (typeof body.icon === 'string' && body.icon.startsWith('data:image/')) {
+        if (body.icon.length > 500000) throw new HttpError(400, 'アイコン画像が大きすぎます');
+        v[verKey] = Date.now();
+        await env.DB.prepare('INSERT INTO me_icons (world,icon,ver) VALUES (?,?,?) ON CONFLICT(world) DO UPDATE SET icon=excluded.icon, ver=excluded.ver').bind(world, body.icon, v[verKey]).run();
+      } else if (body.icon === null) {
+        v[verKey] = Date.now();
+        await env.DB.prepare('DELETE FROM me_icons WHERE world=?').bind(world).run();
+      }
+      await kvSet(env, 'settings', v);
+      return json({ settings: v });
+    }
+
+    // ---- タイムライン
+    case 'GET /tl': {
+      const world = url.searchParams.get('world') === 'ura' ? 'ura' : 'omote';
+      ctx.waitUntil(runTlJobs(env, 3).catch((e) => log(env, 'TL: ' + e.message))); // アプリを開いている間は、予定の反応を少しずつ進める
+      return json({ world, posts: await loadTimeline(env, world, 60), now: Date.now() });
+    }
+
+    case 'POST /tl/post': {
+      const world = body.world === 'ura' ? 'ura' : 'omote';
+      const text = String(body.text || '').trim().slice(0, 1000);
+      if (!text) throw new HttpError(400, '投稿が空です');
+      const at = Date.now();
+      const r = await env.DB.prepare('INSERT INTO tl_posts (world,author,text,at,planned) VALUES (?,?,?,?,0)').bind(world, ME, text, at).run();
+      const post = { id: r.meta.last_row_id, world, author: ME, text, at, planned: 0 };
+      ctx.waitUntil(runTlJobs(env, 2).catch((e) => log(env, 'TL: ' + e.message))); // 誰がどう反応するかをすぐに決める
+      return json({ post: { ...post, likes: [], comments: [] } });
+    }
+
+    case 'POST /tl/comment': {
+      const post = await getPost(env, body.postId);
+      const text = String(body.text || '').trim().slice(0, 1000);
+      if (!text) throw new HttpError(400, 'コメントが空です');
+      let replyTo = null;
+      if (body.replyTo != null) {
+        const rc = await env.DB.prepare('SELECT * FROM tl_comments WHERE id=? AND post_id=?').bind(num(body.replyTo, 0), post.id).first();
+        if (!rc) throw new HttpError(404, '返信先のコメントが見つかりません');
+        replyTo = rc;
+      }
+      const at = Date.now();
+      const r = await env.DB.prepare('INSERT INTO tl_comments (post_id,world,author,text,reply_to,at) VALUES (?,?,?,?,?,?)')
+        .bind(post.id, post.world, ME, text, replyTo ? replyTo.id : null, at).run();
+      const comment = { id: r.meta.last_row_id, postId: post.id, author: ME, text, replyTo: replyTo ? replyTo.id : null, at };
+      await planReplyToMe(env, post, comment, replyTo);
+      ctx.waitUntil(runTlJobs(env, 2).catch((e) => log(env, 'TL: ' + e.message)));
+      return json({ comment });
+    }
+
+    case 'POST /tl/like': {
+      const post = await getPost(env, body.postId);
+      if (body.on === false) await env.DB.prepare('DELETE FROM tl_likes WHERE post_id=? AND author=?').bind(post.id, ME).run();
+      else await env.DB.prepare('INSERT OR IGNORE INTO tl_likes (post_id,author,at) VALUES (?,?,?)').bind(post.id, ME, Date.now()).run();
+      return json({ ok: true });
+    }
+
+    case 'POST /tl/delete': { // 自分の投稿・コメントだけ消せる
+      if (body.commentId != null) {
+        const c = await env.DB.prepare('SELECT * FROM tl_comments WHERE id=?').bind(num(body.commentId, 0)).first();
+        if (!c || c.author !== ME) throw new HttpError(403, '自分のコメントだけ消せます');
+        await env.DB.batch([
+          env.DB.prepare('DELETE FROM tl_jobs WHERE comment_id=?').bind(c.id),
+          env.DB.prepare('DELETE FROM tl_comments WHERE id=? OR reply_to=?').bind(c.id, c.id),
+        ]);
+        return json({ ok: true });
+      }
+      const post = await getPost(env, body.postId);
+      if (post.author !== ME) throw new HttpError(403, '自分の投稿だけ消せます');
+      await deletePosts(env, 'id=?', [post.id]);
+      return json({ ok: true });
+    }
+
+    case 'POST /tl/clear': { // その世界のTLを全部消す
+      const world = body.world === 'ura' ? 'ura' : 'omote';
+      await deletePosts(env, 'world=?', [world]);
+      return json({ ok: true });
+    }
+
+    case 'POST /tl/poke': { // テスト用：今すぐTLに投稿してもらう
+      const world = body.world === 'ura' ? 'ura' : 'omote';
+      const c = await getChar(env, splitCid(body.charId).base);
+      const post = await charPostNow(env, c, world, await getSettings(env));
+      ctx.waitUntil(runTlJobs(env, 2).catch((e) => log(env, 'TL: ' + e.message)));
+      return json({ post });
     }
 
     case 'GET /vapid': {
@@ -396,6 +527,25 @@ async function tick(env) {
       await log(env, `自動送信（${c.name}）: ${e.message}`);
     }
   }
+  // タイムライン：キャラが自分からつぶやく（表・裏それぞれ）
+  for (const c of chars) {
+    for (const world of ['omote', 'ura']) {
+      try {
+        if (!(await shouldCharPost(env, c, world, now, settings))) continue;
+        await charPostNow(env, c, world, settings);
+        done.push(`${c.name}:TL投稿(${world === 'ura' ? '裏' : '表'})`);
+      } catch (e) {
+        await log(env, `TL投稿（${c.name}）: ${e.message}`);
+      }
+    }
+  }
+  // タイムライン：予定していた いいね・コメント・返信 を実行
+  try {
+    const n = await runTlJobs(env, 15);
+    if (n) done.push(`TL反応:${n}件`);
+  } catch (e) {
+    await log(env, 'TL反応: ' + e.message);
+  }
   await kvSet(env, 'lastTick', { at: now, done });
 }
 
@@ -438,12 +588,12 @@ function situation(d, hist, now) {
   }
 }
 
-function buildSystem(c, d, hist, now) {
+function buildSystem(c, d, hist, now, tlInfo = '') {
   return `あなたは次のキャラクターになりきって、ユーザーとスマホのメッセージアプリ（LINEのようなチャット）でやり取りしています。
 
 # キャラクター: ${c.name}
 ${c.prompt || '（設定なし）'}
-
+${tlInfo}
 # やり取りのルール（キャラクター設定に別の指示があればそちらを優先）
 - 実際にスマホでメッセージを打っているように、短く自然な話し言葉で書く。
 - 返答は1〜${c.maxSplit}個の吹き出しに分ける。一言で済むなら1個でよい。何個に分けるかはキャラクターの性格と内容に合わせる。
@@ -481,7 +631,7 @@ function buildContents(hist, world = 'omote') {
 }
 
 // 裏：実際に会っている場面のロールプレイ（表のSNSとは完全に別の時間軸・別の記憶）
-function buildUraSystem(c) {
+function buildUraSystem(c, tlInfo = '') {
   const own = c.uraCharPrompt && c.uraCharPrompt.trim();
   const alias = !own && c.uraName && c.uraName !== c.name ? `\n（キャラクター設定では「${c.name}」と書かれていますが、この場面では「${c.uraName}」として振る舞います）` : '';
   const narr = c.uraNarration
@@ -500,7 +650,7 @@ ${c.uraPrompt}
 ` : ''}
 # いまの場面
 ${c.uraScene || '（特に指定なし。これまでの流れやユーザーの言動から自然に判断する）'}
-
+${tlInfo}
 # ルール（キャラクター設定に別の指示があればそちらを優先）
 - 返答は1〜${c.uraMaxSplit}個の吹き出しに分ける。
 ${narr}
@@ -539,17 +689,18 @@ function parseMessages(text, maxSplit, label) {
 
 // ---------------------------------------------------------------- Grok（xAI・OpenAI互換API）
 // 会話履歴は Gemini 用の contents と同じものを受け取り、OpenAI 形式（user / assistant）に変換して送る
+const MSG_SCHEMA = { type: 'object', properties: { messages: { type: 'array', items: { type: 'string' } } }, required: ['messages'], additionalProperties: false };
+
 async function callGrok(env, model, system, contents, maxSplit) {
+  return parseMessages(await grokText(env, model, system, contents, MSG_SCHEMA, 'chat_reply'), maxSplit, 'Grok');
+}
+
+// Grok に送って、返答の文字列（JSON）をそのまま返す
+async function grokText(env, model, system, contents, schema, schemaName) {
   if (!env.XAI_API_KEY) throw new Error('シークレット XAI_API_KEY が設定されていません');
   const messages = [{ role: 'system', content: system }].concat(
     contents.map((t) => ({ role: t.role === 'model' ? 'assistant' : 'user', content: t.parts.map((p) => p.text).join('\n') })));
-  const schemaFormat = {
-    type: 'json_schema',
-    json_schema: {
-      name: 'chat_reply', strict: true,
-      schema: { type: 'object', properties: { messages: { type: 'array', items: { type: 'string' } } }, required: ['messages'], additionalProperties: false },
-    },
-  };
+  const schemaFormat = { type: 'json_schema', json_schema: { name: schemaName, strict: true, schema } };
   let format = schemaFormat, data, lastErr;
   // 考えるモデル（grok-4.7 など）は、チャットの返事が遅くならないよう思考を軽めにする
   let effort = /^grok-4\.[5-9]|^grok-[5-9]/.test(model) ? 'low' : null;
@@ -581,7 +732,38 @@ async function callGrok(env, model, system, contents, maxSplit) {
   const ch = data.choices && data.choices[0];
   const text = ch && ch.message && typeof ch.message.content === 'string' ? ch.message.content : '';
   if (!text) throw new Error('Grokの返答が空でした（' + ((ch && ch.finish_reason) || '理由不明') + '）');
-  return parseMessages(text, maxSplit, 'Grok');
+  return text;
+}
+
+// JSON Schema（OpenAI形式）→ Gemini の responseSchema 形式
+function toGeminiSchema(s) {
+  if (!s || typeof s !== 'object') return s;
+  const out = {};
+  for (const [k, v] of Object.entries(s)) {
+    if (k === 'additionalProperties') continue;
+    if (k === 'type') out.type = String(v).toUpperCase();
+    else if (k === 'properties') out.properties = Object.fromEntries(Object.entries(v).map(([pk, pv]) => [pk, toGeminiSchema(pv)]));
+    else if (k === 'items') out.items = toGeminiSchema(v);
+    else out[k] = v;
+  }
+  return out;
+}
+
+function parseJsonLoose(text, label) {
+  try { return JSON.parse(text); } catch (_) {}
+  const m = String(text).match(/\{[\s\S]*\}/);
+  if (m) { try { return JSON.parse(m[0]); } catch (_) {} }
+  throw new Error(label + 'の返答をJSONとして読めませんでした');
+}
+
+// その世界（表／裏）のAIに、決まった形のJSONで答えてもらう（タイムライン用）
+async function aiJson(env, world, system, userText, schema, schemaName) {
+  const st = await getSettings(env);
+  const contents = [{ role: 'user', parts: [{ text: userText }] }];
+  if (providerFor(st, world) === 'grok') {
+    return parseJsonLoose(await grokText(env, grokModelFor(env, st), system, contents, schema, schemaName), 'Grok');
+  }
+  return parseJsonLoose(await geminiText(env, system, contents, toGeminiSchema(schema)), 'Gemini');
 }
 
 // ---------------------------------------------------------------- 使うAIを選んで呼ぶ
@@ -592,6 +774,11 @@ async function callAI(env, world, system, contents, maxSplit) {
 }
 
 async function callGemini(env, system, contents, maxSplit) {
+  return parseMessages(await geminiText(env, system, contents, toGeminiSchema(MSG_SCHEMA)), maxSplit, 'Gemini');
+}
+
+// Gemini に送って、返答の文字列（JSON）をそのまま返す
+async function geminiText(env, system, contents, responseSchema) {
   if (!env.GEMINI_API_KEY) throw new Error('シークレット GEMINI_API_KEY が設定されていません');
   const model = env.GEMINI_MODEL || DEFAULT_MODEL;
   const req = {
@@ -600,7 +787,7 @@ async function callGemini(env, system, contents, maxSplit) {
     generationConfig: {
       temperature: 1.0,
       responseMimeType: 'application/json',
-      responseSchema: { type: 'OBJECT', properties: { messages: { type: 'ARRAY', items: { type: 'STRING' } } }, required: ['messages'] },
+      responseSchema,
     },
     safetySettings: ['HARM_CATEGORY_HARASSMENT', 'HARM_CATEGORY_HATE_SPEECH', 'HARM_CATEGORY_SEXUALLY_EXPLICIT', 'HARM_CATEGORY_DANGEROUS_CONTENT']
       .map((category) => ({ category, threshold: 'BLOCK_ONLY_HIGH' })),
@@ -624,17 +811,19 @@ async function callGemini(env, system, contents, maxSplit) {
   const parts = (cand && cand.content && cand.content.parts) || [];
   const text = parts.filter((p) => !p.thought && typeof p.text === 'string').map((p) => p.text).join('');
   if (!text) throw new Error('Geminiの返答が空でした（' + ((cand && cand.finishReason) || (data.promptFeedback && data.promptFeedback.blockReason) || '理由不明') + '）');
-  return parseMessages(text, maxSplit, 'Gemini');
+  return text;
 }
 
 async function generateAndStore(env, c, d, hist, lastRead, world = 'omote') {
   const now = Date.now();
   const ura = world === 'ura';
   const key = ura ? c.id + URA : c.id;
+  // 同じ世界のタイムラインでの出来事も伝える（トークとTLはつながっている）
+  const tlInfo = await tlContextForTalk(env, c, world).catch(() => '');
   const texts = ura
-    ? (await callAI(env, 'ura', buildUraSystem(c), buildContents(hist, 'ura'), c.uraMaxSplit + 4))
+    ? (await callAI(env, 'ura', buildUraSystem(c, tlInfo), buildContents(hist, 'ura'), c.uraMaxSplit + 4))
         .flatMap((t) => t.split(/\n(?=\s*[＊*])/)) // ナレーションとセリフが1つにまとまっていたら分ける
-    : await callAI(env, 'omote', buildSystem(c, d, hist, now), buildContents(hist), c.maxSplit);
+    : await callAI(env, 'omote', buildSystem(c, d, hist, now, tlInfo), buildContents(hist), c.maxSplit);
   // 裏では「＊」で始まる吹き出しをナレーションとして保存する
   const items = texts.map((t) => {
     const m = ura && t.match(/^\s*[＊*]+\s*([\s\S]*)$/);
@@ -645,6 +834,422 @@ async function generateAndStore(env, c, d, hist, lastRead, world = 'omote') {
   const res = await env.DB.batch(items.map((x, i) =>
     env.DB.prepare('INSERT INTO messages (char_id,sender,text,at) VALUES (?,?,?,?)').bind(key, x.sender, x.text, t0 + i)));
   return items.map((x, i) => ({ id: res[i].meta.last_row_id, charId: key, sender: x.sender, text: x.text, at: t0 + i }));
+}
+
+// ================================================================ タイムライン（表／裏）
+// 表と裏は投稿・いいね・コメント・予定・記憶がすべて別。AIはその世界の設定（表のAI／裏のAI）を使う。
+// 反応の決め方：
+//   ① 性格（設定値「反応のしやすさ」＋AIがプロンプトから読んだ「反応したくなる度合い」）と仲の良さ
+//   ② 投稿の中身への食いつき（AIが全キャラ分をまとめて0〜100で判定）
+//   ③ 最後に少しだけサイコロで揺らぎ
+//   点数が高いほど、いいね・コメントしやすく、反応も早い。
+const ME = 'me';
+const MIN = 60 * 1000;
+
+const nz = (v, d) => (Number.isFinite(Number(v)) ? Number(v) : d);
+const cName = (c, world) => (world === 'ura' && c.uraName ? c.uraName : c.name);
+function charPersona(c, world, max = 4000) {
+  let p;
+  if (world === 'ura') {
+    const own = c.uraCharPrompt && c.uraCharPrompt.trim();
+    p = (own ? c.uraCharPrompt : (c.prompt || '（設定なし）')) + (c.uraPrompt ? '\n（この世界での追加設定）\n' + c.uraPrompt : '');
+  } else p = c.prompt || '（設定なし）';
+  return p.length > max ? p.slice(0, max) + '…' : p;
+}
+function meName(st, world) { return (world === 'ura' ? st.meNameUra || st.meName : st.meName) || 'あなた'; }
+function worldDesc(world) {
+  return world === 'ura'
+    ? '「裏」の世界のSNS。ユーザーと実際に会って過ごしている世界で、表（メッセージアプリでやり取りしている世界）とは時間の流れも記憶も別。表での出来事は知らない。'
+    : '「表」の世界のSNS。ユーザーとはふだんスマホのメッセージアプリ（トーク）でやり取りしている。';
+}
+const trunc = (s, n) => (String(s).length > n ? String(s).slice(0, n) + '…' : String(s));
+
+async function getPost(env, id) {
+  const p = await env.DB.prepare('SELECT * FROM tl_posts WHERE id=?').bind(num(id, 0)).first();
+  if (!p) throw new HttpError(404, '投稿が見つかりません');
+  return p;
+}
+
+async function loadTimeline(env, world, limit) {
+  const { results: posts } = await env.DB.prepare('SELECT id,world,author,text,at FROM tl_posts WHERE world=? ORDER BY id DESC LIMIT ?').bind(world, limit).all();
+  if (!posts.length) return [];
+  const ids = posts.map((p) => p.id);
+  const qs = ids.map(() => '?').join(',');
+  const { results: cs } = await env.DB.prepare(`SELECT id,post_id,author,text,reply_to,at FROM tl_comments WHERE post_id IN (${qs}) ORDER BY id`).bind(...ids).all();
+  const { results: ls } = await env.DB.prepare(`SELECT post_id,author,at FROM tl_likes WHERE post_id IN (${qs}) ORDER BY at`).bind(...ids).all();
+  return posts.map((p) => ({
+    ...p,
+    likes: ls.filter((l) => l.post_id === p.id).map((l) => ({ author: l.author, at: l.at })),
+    comments: cs.filter((c) => c.post_id === p.id).map((c) => ({ id: c.id, author: c.author, text: c.text, replyTo: c.reply_to, at: c.at })),
+  }));
+}
+
+async function deletePosts(env, where, args) {
+  const sub = `SELECT id FROM tl_posts WHERE ${where}`;
+  await env.DB.batch([
+    env.DB.prepare(`DELETE FROM tl_jobs WHERE post_id IN (${sub})`).bind(...args),
+    env.DB.prepare(`DELETE FROM tl_comments WHERE post_id IN (${sub})`).bind(...args),
+    env.DB.prepare(`DELETE FROM tl_likes WHERE post_id IN (${sub})`).bind(...args),
+    env.DB.prepare(`DELETE FROM tl_posts WHERE ${where}`).bind(...args),
+  ]);
+}
+
+// ---- 静かな時間（表のみ）にかかる予定は、静かな時間が明けてから少しずつ
+function deferQuiet(due, st, world) {
+  if (world !== 'omote' || !isQuiet(due, st)) return due;
+  let t = due;
+  for (let i = 0; i < 200 && isQuiet(t, st); i++) t += 15 * MIN;
+  return t + Math.floor(Math.random() * 90) * MIN;
+}
+// 点数 x（0〜1）が高いほど早い。指数分布でばらつかせる
+function reactDelay(x, isComment) {
+  const mean = 4 + Math.pow(1 - x, 2) * 360; // 分
+  let d = -mean * Math.log(1 - Math.random());
+  if (isComment) d += 2 + Math.random() * 6; // 文章を打つ時間
+  return clamp(d, 1, 20 * 60) * MIN;
+}
+
+// ---- トークの様子（TLとトークをつなげる）
+async function talkContext(env, c, world) {
+  const key = world === 'ura' ? c.id + URA : c.id;
+  const hist = await recent(env, key, 8);
+  if (!hist.length) return '（まだやり取りはありません）';
+  const nm = cName(c, world);
+  const lines = hist.map((m) => (m.sender === 'me' ? 'ユーザー' : m.sender === 'narr' ? '（描写）' : nm) + ': ' + trunc(m.text, 120));
+  let state = '';
+  if (world === 'omote') {
+    const last = hist[hist.length - 1];
+    const ago = fmtDur(Date.now() - last.at);
+    if (last.sender === 'char') {
+      const lastRead = await getRead(env, key);
+      const unread = hist.filter((m) => m.sender === 'char' && m.at > lastRead).length;
+      state = unread ? `あなたが送ったメッセージ${unread}件が、まだ読まれていない（最後に送ってから${ago}）`
+        : `ユーザーはあなたのメッセージを読んだが、返信がない（既読スルー、${ago}）`;
+    } else state = `ユーザーからの最後のメッセージは${ago}前`;
+  }
+  return lines.join('\n') + (state ? '\n今の状況: ' + state : '');
+}
+
+// トークのAIに渡す「同じ世界のTLでの最近の出来事」
+async function tlContextForTalk(env, c, world) {
+  const now = Date.now();
+  const ura = world === 'ura';
+  const { results: mine } = await env.DB.prepare("SELECT id,text,at FROM tl_posts WHERE world=? AND author='me' AND at>? ORDER BY id DESC LIMIT 4").bind(world, now - 48 * 3600e3).all();
+  const { results: own } = await env.DB.prepare('SELECT id,text,at FROM tl_posts WHERE world=? AND author=? ORDER BY id DESC LIMIT 2').bind(world, c.id).all();
+  if (!mine.length && !own.length) return '';
+  const lines = [];
+  for (const p of mine) {
+    const liked = await env.DB.prepare('SELECT 1 FROM tl_likes WHERE post_id=? AND author=?').bind(p.id, c.id).first();
+    const cm = await env.DB.prepare('SELECT text FROM tl_comments WHERE post_id=? AND author=? ORDER BY id DESC LIMIT 1').bind(p.id, c.id).first();
+    lines.push(`- ユーザーの投稿${ura ? '' : `（${fmtDur(now - p.at)}前）`}「${trunc(p.text, 100)}」→ あなたは${liked ? 'いいね済み' : 'いいねしていない'}${cm ? `・コメント「${trunc(cm.text, 60)}」` : ''}`);
+  }
+  for (const p of own) {
+    const lk = await env.DB.prepare("SELECT 1 FROM tl_likes WHERE post_id=? AND author='me'").bind(p.id).first();
+    const uc = await env.DB.prepare("SELECT text FROM tl_comments WHERE post_id=? AND author='me' ORDER BY id DESC LIMIT 1").bind(p.id).first();
+    lines.push(`- あなたの投稿${ura ? '' : `（${fmtDur(now - p.at)}前）`}「${trunc(p.text, 100)}」→ ユーザーは${lk ? 'いいねした' : 'いいねしていない'}${uc ? `・コメント「${trunc(uc.text, 60)}」` : ''}`);
+  }
+  return `
+# SNS（タイムライン）での最近の出来事${ura ? '（この世界のSNS）' : ''}
+${lines.join('\n')}
+（自然な流れなら話題にしてよい。毎回触れる必要はない）
+`;
+}
+
+// ---- ② 投稿の中身への食いつき・① 性格からの反応したさ を、全キャラ分まとめて判定
+const SCORE_SCHEMA = {
+  type: 'object',
+  properties: {
+    scores: {
+      type: 'array',
+      items: {
+        type: 'object',
+        properties: { id: { type: 'string' }, interest: { type: 'integer' }, eagerness: { type: 'integer' }, bond: { type: 'integer' }, note: { type: 'string' } },
+        required: ['id', 'interest', 'eagerness', 'bond', 'note'], additionalProperties: false,
+      },
+    },
+  },
+  required: ['scores'], additionalProperties: false,
+};
+const TEXT_SCHEMA = { type: 'object', properties: { text: { type: 'string' } }, required: ['text'], additionalProperties: false };
+
+async function scoreReactions(env, post, author, cands, st) {
+  const world = post.world;
+  const authorName = post.author === ME ? meName(st, world) : cName(author, world);
+  const system = 'あなたはSNS上で、各キャラクターがある投稿にどれくらい反応しそうかを判定する係です。キャラクター設定（性格・好きなもの・苦手なもの・人間関係・ユーザーへの気持ち）をよく読み、キャラクターごとに数値で答えてください。';
+  const user = `# 世界
+${worldDesc(world)}
+
+# 投稿
+投稿者: ${authorName}${post.author === ME ? '（ユーザー本人）' : ''}
+本文: ${post.text}
+${post.author !== ME ? `\n# 投稿者（${authorName}）のキャラクター設定\n${charPersona(author, world, 1500)}\n` : ''}
+# 判定するキャラクター
+${cands.map((c) => `## id: ${c.id} ／ 名前: ${cName(c, world)}
+ユーザーとの仲の良さ（設定値）: ${nz(c.affinity, 60)}/100
+SNSでの反応のしやすさ（設定値）: ${nz(c.snsActivity, 50)}/100
+キャラクター設定:
+${charPersona(c, world, 2000)}`).join('\n\n')}
+
+# 答えること（各キャラクターについて0〜100の整数）
+- interest: この投稿の話題にどれくらい食いつくか。好きなもの・趣味・気になる人・嫉妬しそうな話題なら高く、興味のない話題や苦手なものは低く。
+- eagerness: 性格から見て、SNSで反応したくなる度合い。構いたがり・寂しがり・社交的なら高く、クール・さっぱり・SNSに興味が薄いなら低く。
+- bond: 投稿者との親しさ。投稿者がユーザーなら、そのキャラクターのユーザーへの好意の強さ。
+- note: 反応するとしたら、どんな気持ちで何に触れそうか（20字以内）。
+すべてのキャラクターについて、idはそのまま返してください。`;
+  const r = await aiJson(env, world, system, user, SCORE_SCHEMA, 'tl_scores');
+  const out = {};
+  for (const s of (r && r.scores) || []) if (s && s.id) out[String(s.id)] = s;
+  return out;
+}
+
+// 投稿に対して、誰が・いつ・いいね／コメントするかを決めて予定に入れる
+async function planReactions(env, post) {
+  const claim = await env.DB.prepare('UPDATE tl_posts SET planned=1 WHERE id=? AND planned=0').bind(post.id).run();
+  if (claim.meta && claim.meta.changes === 0) return []; // ほかの処理がもう決めた
+  const st = await getSettings(env);
+  const world = post.world;
+  const chars = await loadChars(env);
+  const author = post.author === ME ? null : chars.find((c) => c.id === post.author);
+  if (post.author !== ME && !author) return [];
+  const cands = chars.filter((c) => c.id !== post.author);
+  if (!cands.length) return [];
+  let scores = {};
+  try { scores = await scoreReactions(env, post, author, cands, st); }
+  catch (e) { await log(env, 'TL判定: ' + e.message); }
+  const now = Date.now();
+  const plan = [];
+  for (const c of cands) {
+    const s = scores[c.id] || { interest: 50, eagerness: 50, bond: 50, note: '' };
+    const interest = clamp(nz(s.interest, 50), 0, 100) / 100;
+    const eager = clamp(nz(s.eagerness, 50), 0, 100) / 100;
+    const aiBond = clamp(nz(s.bond, 50), 0, 100) / 100;
+    const base = 0.5 * (nz(c.snsActivity, 50) / 100) + 0.5 * eager;                                   // ① 性格
+    const bond = post.author === ME ? 0.6 * (nz(c.affinity, 60) / 100) + 0.4 * aiBond : aiBond;     // ① 仲の良さ
+    const x = clamp(0.35 * base + 0.30 * bond + 0.35 * interest + (Math.random() - 0.5) * 0.16, 0, 1); // ② 話題 ＋ ③ 揺らぎ
+    const pLike = clamp(0.03 + 0.97 * Math.pow(x, 0.9), 0, 0.97);
+    const pComment = clamp(0.92 * Math.pow(x, 1.7), 0, 0.9);
+    const doComment = Math.random() < pComment;
+    const doLike = Math.random() < (doComment ? Math.min(0.97, pLike + 0.25) : pLike);
+    const note = String(s.note || '').slice(0, 60);
+    if (doLike) plan.push({ c, kind: 'like', due: deferQuiet(now + reactDelay(x, false), st, world), x });
+    if (doComment) plan.push({ c, kind: 'comment', due: deferQuiet(now + reactDelay(x, true), st, world), note, x });
+  }
+  if (plan.length) {
+    await env.DB.batch(plan.map((j) => env.DB.prepare('INSERT INTO tl_jobs (world,char_id,kind,post_id,comment_id,due,note) VALUES (?,?,?,?,NULL,?,?)')
+      .bind(world, j.c.id, j.kind, post.id, j.due, j.note || '')));
+  }
+  return plan.map((j) => ({ char: j.c.id, kind: j.kind, inMin: Math.round((j.due - now) / MIN), x: Math.round(j.x * 100) }));
+}
+
+// あなたのコメントに、キャラが返事をするか決める
+function threadRoot(comments, id) {
+  let cur = comments.find((c) => c.id === id);
+  for (let i = 0; cur && cur.reply_to && i < 50; i++) cur = comments.find((c) => c.id === cur.reply_to) || cur;
+  return cur ? cur.id : id;
+}
+async function planReplyToMe(env, post, comment, replyTo) {
+  const st = await getSettings(env);
+  let target = null; // 返事をするキャラ
+  if (replyTo && replyTo.author !== ME) target = replyTo.author;
+  else if (!replyTo && post.author !== ME) target = post.author;
+  if (!target) return;
+  const c = (await loadChars(env)).find((x) => x.id === target);
+  if (!c) return;
+  const { results: all } = await env.DB.prepare('SELECT id,author,reply_to FROM tl_comments WHERE post_id=?').bind(post.id).all();
+  const root = threadRoot(all, comment.id);
+  const charReplies = all.filter((x) => x.author === c.id && x.reply_to && threadRoot(all, x.id) === root).length;
+  if (charReplies >= 3) return; // やり取りは3往復まで
+  const aff = nz(c.affinity, 60) / 100, act = nz(c.snsActivity, 50) / 100;
+  const p = clamp((replyTo ? 0.55 : 0.45) + 0.35 * aff + 0.15 * act, 0, 0.98);
+  if (Math.random() >= p) return;
+  const x = clamp(0.4 + 0.6 * aff + (Math.random() - 0.5) * 0.2, 0, 1);
+  const due = deferQuiet(Date.now() + reactDelay(x, true), st, post.world);
+  await env.DB.prepare('INSERT INTO tl_jobs (world,char_id,kind,post_id,comment_id,due,note) VALUES (?,?,?,?,?,?,?)')
+    .bind(post.world, c.id, 'reply', post.id, comment.id, due, '').run();
+}
+
+// ---- 文章を作る
+function snsRules(world, now) {
+  return `- キャラクターの口調・性格・相手との関係をそのまま出す。
+- 地の文・ト書き・（ ）での動作描写は書かない。
+- 自分がAIであることには触れない。
+- 公開のSNSなので、性的に露骨な内容や、相手との個人的なやり取りをそのまま書き写すことはしない（ほのめかす程度はよい）。
+${world === 'ura' ? '- この世界は表（メッセージアプリの世界）とは別の時間軸。表での出来事は知らない。' : `- 現在日時: ${fmtTime(now)}`}`;
+}
+
+async function genComment(env, c, post, replyTo, note) {
+  const st = await getSettings(env);
+  const world = post.world;
+  const now = Date.now();
+  const chars = await loadChars(env);
+  const nameOf = (a) => (a === ME ? meName(st, world) + '（ユーザー）' : (chars.find((x) => x.id === a) ? cName(chars.find((x) => x.id === a), world) : '退会したユーザー'));
+  const { results: cms } = await env.DB.prepare('SELECT id,author,text,reply_to FROM tl_comments WHERE post_id=? ORDER BY id').bind(post.id).all();
+  const system = `あなたは次のキャラクターとして、SNS（タイムライン）にコメントを書きます。
+
+# キャラクター: ${cName(c, world)}
+${charPersona(c, world)}
+
+# ルール（キャラクター設定に別の指示があればそちらを優先）
+- SNSのコメントらしく、短く自然な話し言葉で。1〜3文、長くても100字程度。
+- 好きな話題なら嬉しそうに、嫉妬する話題なら拗ねたり、興味が薄ければそっけなく。気持ちの温度をはっきり出す。
+${snsRules(world, now)}
+
+出力は {"text": "コメント本文"} の形のJSONのみ。`;
+  const user = `# 世界
+${worldDesc(world)}
+
+# 投稿
+投稿者: ${nameOf(post.author)}${world === 'omote' ? `（${fmtDur(now - post.at)}前）` : ''}
+本文: ${post.text}
+
+# これまでのコメント
+${cms.length ? cms.map((x) => `${nameOf(x.author)}${x.reply_to ? '（返信）' : ''}: ${trunc(x.text, 150)}`).join('\n') : '（まだなし）'}
+${replyTo ? `\n# あなたが返信するコメント\n${nameOf(replyTo.author)}: ${replyTo.text}\n` : ''}
+# あなたとユーザーの${world === 'ura' ? '最近の様子（実際に会ったとき）' : 'トークでのやり取り'}
+${await talkContext(env, c, world)}
+${note ? `\n# 反応の方向性\n${note}\n` : ''}
+${replyTo ? 'このコメントへの返信を書いてください。' : 'この投稿へのコメントを書いてください。'}`;
+  const r = await aiJson(env, world, system, user, TEXT_SCHEMA, 'tl_comment');
+  const text = String((r && r.text) || '').trim();
+  if (!text) throw new Error('コメントが空でした');
+  return text.slice(0, 500);
+}
+
+async function genPost(env, c, world) {
+  const now = Date.now();
+  const st = await getSettings(env);
+  const chars = await loadChars(env);
+  const { results: own } = await env.DB.prepare('SELECT text FROM tl_posts WHERE world=? AND author=? ORDER BY id DESC LIMIT 6').bind(world, c.id).all();
+  const { results: others } = await env.DB.prepare('SELECT author,text FROM tl_posts WHERE world=? AND author<>? ORDER BY id DESC LIMIT 5').bind(world, c.id).all();
+  const nameOf = (a) => (a === ME ? meName(st, world) + '（ユーザー）' : (chars.find((x) => x.id === a) ? cName(chars.find((x) => x.id === a), world) : '誰か'));
+  const system = `あなたは次のキャラクターとして、SNS（タイムライン）に自分の投稿（つぶやき）を書きます。
+
+# キャラクター: ${cName(c, world)}
+${charPersona(c, world)}
+
+# ルール（キャラクター設定に別の指示があればそちらを優先）
+- 1〜3文、140字以内のつぶやき。今していること、ふと思ったこと、好きなもの、日常の出来事など。
+- 絵文字やハッシュタグは、キャラクターに合えば少しだけ。
+- ユーザーとのトークの状況（既読スルーされている、楽しく話した、など）を踏まえたつぶやきをしてもよい。ただしやり取りの中身はそのまま書かず、ほのめかす程度に。毎回トークに触れる必要はない。
+- 前の投稿と同じ内容・同じ言い回しにしない。
+${snsRules(world, now)}
+
+出力は {"text": "投稿本文"} の形のJSONのみ。`;
+  const user = `# 世界
+${worldDesc(world)}
+
+# あなたの最近の投稿（重ならないように）
+${own.length ? own.map((p) => '- ' + trunc(p.text, 100)).join('\n') : '（まだなし）'}
+
+# タイムラインに流れている最近の投稿
+${others.length ? others.map((p) => `- ${nameOf(p.author)}: ${trunc(p.text, 100)}`).join('\n') : '（まだなし）'}
+
+# あなたとユーザーの${world === 'ura' ? '最近の様子（実際に会ったとき）' : 'トークでのやり取り'}
+${await talkContext(env, c, world)}
+
+この世界のSNSに、新しい投稿を1つ書いてください。`;
+  const r = await aiJson(env, world, system, user, TEXT_SCHEMA, 'tl_post');
+  const text = String((r && r.text) || '').trim();
+  if (!text) throw new Error('投稿が空でした');
+  return text.slice(0, 500);
+}
+
+// ---- キャラが自分からつぶやくか（15分ごと）
+async function shouldCharPost(env, c, world, now, st) {
+  const perDay = nz(world === 'ura' ? c.uraTlPerDay : c.tlPerDay, world === 'ura' ? 1 : 2);
+  if (perDay <= 0 || isQuiet(now, st)) return false;
+  const last = await env.DB.prepare('SELECT at FROM tl_posts WHERE world=? AND author=? ORDER BY id DESC LIMIT 1').bind(world, c.id).first();
+  if (last && now - last.at < 60 * MIN) return false; // 続けて投稿しすぎない
+  const activeTicks = Math.max(1, ((24 - quietSpan(st)) * 60) / TICK_MIN);
+  return Math.random() < perDay / activeTicks;
+}
+
+async function charPostNow(env, c, world, st) {
+  const text = await genPost(env, c, world);
+  const at = Date.now();
+  const r = await env.DB.prepare('INSERT INTO tl_posts (world,author,text,at,planned) VALUES (?,?,?,?,0)').bind(world, c.id, text, at).run();
+  const post = { id: r.meta.last_row_id, world, author: c.id, text, at, planned: 0 };
+  await pushTL(env, st, world, 'tlCharPost', { title: cName(c, world), body: text, post });
+  return { ...post, likes: [], comments: [] };
+}
+
+// ---- 予定の実行
+async function runTlJobs(env, limit) {
+  await ensureSchema(env);
+  let n = 0;
+  // 1) まだ反応を決めていない投稿
+  const { results: unplanned } = await env.DB.prepare('SELECT * FROM tl_posts WHERE planned=0 ORDER BY id LIMIT 2').all();
+  for (const p of unplanned) {
+    try { await planReactions(env, p); } catch (e) { await log(env, 'TL判定: ' + e.message); }
+  }
+  // 2) 時間が来た いいね・コメント・返信
+  const { results: due } = await env.DB.prepare('SELECT * FROM tl_jobs WHERE due<=? ORDER BY due LIMIT ?').bind(Date.now(), limit).all();
+  for (const j of due) {
+    const claimed = await env.DB.prepare('DELETE FROM tl_jobs WHERE id=? RETURNING id').bind(j.id).first();
+    if (!claimed) continue; // ほかの処理が先に実行した
+    try { if (await execJob(env, j)) n++; } catch (e) { await log(env, `TL反応（${j.kind}）: ${e.message}`); }
+  }
+  return n;
+}
+
+async function execJob(env, j) {
+  const post = await env.DB.prepare('SELECT * FROM tl_posts WHERE id=?').bind(j.post_id).first();
+  if (!post) return false;
+  const c = (await loadChars(env)).find((x) => x.id === j.char_id);
+  if (!c) return false;
+  const st = await getSettings(env);
+  const world = post.world;
+  const who = cName(c, world);
+
+  if (j.kind === 'like') {
+    const r = await env.DB.prepare('INSERT OR IGNORE INTO tl_likes (post_id,author,at) VALUES (?,?,?)').bind(post.id, c.id, Date.now()).run();
+    if (r.meta && r.meta.changes === 0) return false;
+    if (post.author === ME) await pushTL(env, st, world, 'tlLike', { title: `${who}さんがいいねしました`, body: trunc(post.text, 80), post, tag: 'like-' + post.id });
+    return true;
+  }
+
+  let replyTo = null;
+  if (j.kind === 'reply') {
+    replyTo = await env.DB.prepare('SELECT * FROM tl_comments WHERE id=?').bind(j.comment_id).first();
+    if (!replyTo) return false;
+  } else {
+    const dup = await env.DB.prepare('SELECT 1 FROM tl_comments WHERE post_id=? AND author=? AND reply_to IS NULL').bind(post.id, c.id).first();
+    if (dup) return false; // 同じ投稿に2回コメントしない
+  }
+  const text = await genComment(env, c, post, replyTo, j.note);
+  const at = Date.now();
+  const r = await env.DB.prepare('INSERT INTO tl_comments (post_id,world,author,text,reply_to,at) VALUES (?,?,?,?,?,?)')
+    .bind(post.id, world, c.id, text, replyTo ? replyTo.id : null, at).run();
+  const commentId = r.meta.last_row_id;
+
+  if (replyTo && replyTo.author === ME) {
+    await pushTL(env, st, world, 'tlReply', { title: `${who}さんが返信しました`, body: text, post });
+  } else if (post.author === ME) {
+    await pushTL(env, st, world, 'tlComment', { title: `${who}さんがコメントしました`, body: text, post });
+  }
+
+  // キャラ同士：キャラの投稿にほかのキャラがコメントしたら、投稿したキャラが1回だけ返すことがある
+  if (!replyTo && post.author !== ME && post.author !== c.id) {
+    const author = (await loadChars(env)).find((x) => x.id === post.author);
+    if (author && Math.random() < clamp(0.2 + 0.45 * (nz(author.snsActivity, 50) / 100), 0, 0.8)) {
+      const due = deferQuiet(Date.now() + reactDelay(0.5, true), st, world);
+      await env.DB.prepare('INSERT INTO tl_jobs (world,char_id,kind,post_id,comment_id,due,note) VALUES (?,?,?,?,?,?,?)')
+        .bind(world, author.id, 'reply', post.id, commentId, due, '').run();
+    }
+  }
+  return true;
+}
+
+// ---- 通知（表のTLだけ。4項目それぞれオン／オフ）
+async function pushTL(env, st, world, flag, { title, body, post, tag }) {
+  if (world !== 'omote') return;              // 裏は通知しない
+  if (!st.notify || !st.notify[flag]) return; // 設定でオフ
+  try {
+    await pushPayload(env, {
+      title, body: truncBytes(body, 1500), tl: 'omote', postId: post.id,
+      tag: 'tl-' + (tag || post.id + '-' + Date.now()), badge: await totalUnread(env),
+    });
+  } catch (e) { await log(env, 'TL通知: ' + e.message); }
 }
 
 // ---------------------------------------------------------------- Web Push（RFC 8291 / RFC 8292）

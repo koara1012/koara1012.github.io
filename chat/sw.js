@@ -8,11 +8,11 @@ self.addEventListener('push', (e) => {
   const jobs = [
     self.registration.showNotification(d.title || '新着メッセージ', {
       body: d.body || '',
-      tag: 'chat-' + (d.charId || 'test'),
+      tag: d.tag || 'chat-' + (d.charId || 'test'),
       renotify: true,
       icon: 'icon-192.png',
       badge: 'icon-192.png',
-      data: { charId: d.charId || null },
+      data: { charId: d.charId || null, tl: d.tl || null, postId: d.postId || null },
     }),
     self.clients.matchAll({ type: 'window', includeUncontrolled: true })
       .then((cs) => cs.forEach((c) => c.postMessage({ type: 'sync' }))),
@@ -25,14 +25,20 @@ self.addEventListener('push', (e) => {
 
 self.addEventListener('notificationclick', (e) => {
   e.notification.close();
-  const charId = e.notification.data && e.notification.data.charId;
-  const url = new URL(charId ? './?chat=' + encodeURIComponent(charId) : './', self.registration.scope).href;
+  const data = e.notification.data || {};
+  const charId = data.charId;
+  const tl = data.tl;
+  let path = './';
+  if (tl) path = './?tl=' + encodeURIComponent(tl) + (data.postId ? '&post=' + encodeURIComponent(data.postId) : '');
+  else if (charId) path = './?chat=' + encodeURIComponent(charId);
+  const url = new URL(path, self.registration.scope).href;
   e.waitUntil((async () => {
     const cs = await self.clients.matchAll({ type: 'window', includeUncontrolled: true });
     for (const c of cs) {
       if (c.url.startsWith(self.registration.scope)) {
         await c.focus();
-        if (charId) c.postMessage({ type: 'open', charId });
+        if (tl) c.postMessage({ type: 'openTl', world: tl, postId: data.postId || null });
+        else if (charId) c.postMessage({ type: 'open', charId });
         return;
       }
     }

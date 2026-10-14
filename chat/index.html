@@ -521,7 +521,7 @@ body.ura #list.tlMode{background:#efe9f0}
 
 <script>
 'use strict';
-const APP_VERSION = '第13版（2026-10-14 23:55:00 更新・夜の投稿はコメント欄も昼と同じ）';
+const APP_VERSION = '第14版（2026-10-14 23:46:00 更新・送信ボタンの不具合を修正）';
 const $ = (id) => document.getElementById(id);
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 const esc = (s) => String(s).replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
@@ -704,6 +704,7 @@ function setTyping(charId) {
 
 // ------------------------------------------------ 送信と返信
 async function sendMsg(photo) {
+  if (typeof photo !== 'string' || !photo.startsWith('data:image/')) photo = null; // 写真（dataURL）のときだけ写真として送る
   const ta = $('input');
   const text = photo ? '' : ta.value.trim();
   if ((!text && !photo) || !S.current) return;
@@ -1638,12 +1639,17 @@ function openTlFromNotice(world, postId) {
   if (postId) loadTL(world || 'omote', true).then(() => { if (findPost(postId)) openPost(postId); });
 }
 $('input').addEventListener('input', autosize);
-$('btnSend').onclick = sendMsg;
+$('btnSend').onclick = () => sendMsg(); // ボタンのクリック情報を写真と取り違えないよう、引数なしで呼ぶ
 $('msgs').addEventListener('click', (e) => {
   const m = e.target.closest('.msg.fail'); if (!m) return;
   const arr = S.msgs[curKey()] || []; const msg = arr.find((x) => String(x.id) === m.dataset.id);
-  if (!msg || !confirm('もう一度送りますか？')) return;
-  arr.splice(arr.indexOf(msg), 1); $('input').value = msg.text; sendMsg();
+  if (!msg) return;
+  const photo = typeof msg.localImg === 'string' && msg.localImg.startsWith('data:image/') ? msg.localImg : null;
+  if (!photo && !msg.text) { arr.splice(arr.indexOf(msg), 1); renderAll(true); return; } // 中身のない失敗分は消すだけ
+  if (!confirm('もう一度送りますか？')) return;
+  arr.splice(arr.indexOf(msg), 1);
+  if (photo) { sendMsg(photo); return; }
+  $('input').value = msg.text; sendMsg();
 });
 ['edPerDay', 'edNudge', 'edSplit', 'edUraSplit'].forEach((id) => $(id).addEventListener('input', syncEditLabels));
 $('edUraNarr').addEventListener('click', (e) => { const b = e.target.closest('button'); if (b) { edit.uraNarration = b.dataset.v === '1'; syncEditLabels(); } });

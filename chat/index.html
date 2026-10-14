@@ -269,7 +269,7 @@ pre.diag{white-space:pre-wrap;word-break:break-all;font-size:11px;background:#f3
 
 <script>
 'use strict';
-const APP_VERSION = '第2版（2026-10-14 17:05:00 更新・Gemini/Grok切り替え）';
+const APP_VERSION = '第3版（2026-10-14 17:40:00 更新・通知登録の修正）';
 const $ = (id) => document.getElementById(id);
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 const esc = (s) => String(s).replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
@@ -722,8 +722,13 @@ async function enablePush() {
   const perm = await Notification.requestPermission();
   if (perm !== 'granted') { toast('通知が許可されませんでした（iPhoneの設定 → 通知 から変更できます）', 4500); refreshPushState(); return; }
   try {
-    const reg = swReg || await registerSW();
-    await navigator.serviceWorker.ready;
+    if (!swReg) await registerSW();
+    // iPhoneでは登録直後のワーカーがまだ「有効」でないことがあるので、有効になった登録（ready）を使う
+    const reg = await Promise.race([
+      navigator.serviceWorker.ready,
+      sleep(10000).then(() => { throw new Error('サービスワーカーの準備が終わりません。アプリを一度閉じて開き直してください'); }),
+    ]);
+    swReg = reg;
     const { publicKey } = await api('GET', '/vapid');
     let sub = await reg.pushManager.getSubscription();
     if (sub) {

@@ -1,0 +1,994 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="robots" content="noindex">
+<title>セリフ起こし</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Zen+Maru+Gothic:wght@500;700&display=swap" rel="stylesheet">
+<style>
+:root{
+  --bg:#E9EDF3; --ink:#18202F; --muted:#5B6478; --line:#C9D0DC; --panel:#F6F8FB;
+  --window:#232B45; --window-ink:#F3F5FA; --plate:#F2B544; --plate-ink:#2A1D00;
+  --accent:#2E7F7A; --accent-ink:#FFFFFF; --warn:#B4442F;
+  --round:"Zen Maru Gothic","Hiragino Maru Gothic ProN","Hiragino Sans",sans-serif;
+  --body:-apple-system,BlinkMacSystemFont,"Hiragino Sans","Noto Sans JP","Yu Gothic",sans-serif;
+  box-sizing:border-box;
+  padding-top:env(safe-area-inset-top,0px);
+  padding-bottom:env(safe-area-inset-bottom,0px);
+}
+@media (prefers-color-scheme:dark){
+  :root:not([data-theme="light"]){
+    --bg:#12151D; --ink:#E6E9F0; --muted:#9AA3B5; --line:#2C3346; --panel:#191D28;
+    --window:#1E2640; --window-ink:#EEF1F8; --plate:#E6A93A; --plate-ink:#241800;
+    --accent:#4FB0A8; --accent-ink:#0B1A19; --warn:#E07A63;
+  }
+}
+:root[data-theme="dark"]{
+  --bg:#12151D; --ink:#E6E9F0; --muted:#9AA3B5; --line:#2C3346; --panel:#191D28;
+  --window:#1E2640; --window-ink:#EEF1F8; --plate:#E6A93A; --plate-ink:#241800;
+  --accent:#4FB0A8; --accent-ink:#0B1A19; --warn:#E07A63;
+}
+*,*::before,*::after{box-sizing:inherit}
+html{scroll-padding-top:env(safe-area-inset-top,0px)}
+body{margin:0;background:var(--bg);color:var(--ink);font:15px/1.7 var(--body);-webkit-text-size-adjust:100%}
+main{max-width:640px;margin:0 auto;padding:20px 16px 48px}
+h1{font:700 30px/1.2 var(--round);margin:8px 0 6px;letter-spacing:.02em}
+.lead{color:var(--muted);margin:0 0 20px}
+section{border-top:1px solid var(--line);padding:18px 0 20px}
+h2{font:700 18px/1.4 var(--round);margin:0 0 10px;display:flex;align-items:center;gap:10px}
+h2 .no{display:inline-grid;place-items:center;width:26px;height:26px;border-radius:50%;background:var(--ink);color:var(--bg);font-size:14px}
+p.hint{color:var(--muted);font-size:13px;margin:6px 0 10px}
+button,.filebtn{font:700 16px/1 var(--round);border:0;border-radius:12px;padding:15px 18px;cursor:pointer;
+  background:var(--accent);color:var(--accent-ink);width:100%;display:block;text-align:center;-webkit-tap-highlight-color:transparent}
+button.sub{background:transparent;color:var(--ink);border:1.5px solid var(--line);font-weight:500}
+button:disabled{opacity:.45;cursor:default}
+button:focus-visible,.filebtn:focus-within,input:focus-visible{outline:3px solid var(--plate);outline-offset:2px}
+.filebtn input{position:absolute;opacity:0;width:1px;height:1px}
+.row{display:flex;gap:10px}.row>*{flex:1}
+.fileinfo{font-size:13px;color:var(--muted);margin-top:8px;word-break:break-all}
+.stage{position:relative;background:#000;border-radius:10px;overflow:hidden;margin:10px 0;touch-action:none}
+.stage canvas{display:block;width:100%;height:auto}
+label.sl{display:grid;grid-template-columns:4.5em 1fr 3em;align-items:center;gap:8px;font-size:14px;margin:4px 0}
+label.sl output{text-align:right;color:var(--muted);font-variant-numeric:tabular-nums}
+input[type=range]{width:100%;accent-color:var(--accent)}
+.check{display:flex;gap:10px;align-items:flex-start;font-size:14px;margin:10px 0}
+.check input{width:20px;height:20px;margin-top:2px;accent-color:var(--accent)}
+.seg{display:flex;border:1.5px solid var(--line);border-radius:12px;overflow:hidden;margin:8px 0}
+.seg label{flex:1;text-align:center;padding:10px 4px;font-size:14px;cursor:pointer}
+.seg input{position:absolute;opacity:0}
+.seg label:has(input:checked){background:var(--ink);color:var(--bg);font-weight:700}
+details{margin-top:10px;font-size:14px}
+summary{cursor:pointer;color:var(--muted);padding:6px 0}
+.bar{height:8px;background:var(--line);border-radius:4px;overflow:hidden;margin:12px 0 6px}
+.bar i{display:block;height:100%;width:0;background:var(--accent);transition:width .2s}
+#status{font-size:14px;min-height:1.7em}
+#status.err{color:var(--warn)}
+.notice{background:var(--panel);border-left:4px solid var(--plate);padding:10px 12px;border-radius:6px;font-size:13px;margin:10px 0}
+.notice.err{border-left-color:var(--warn)}
+#lines{list-style:none;padding:0;margin:14px 0 0;display:grid;gap:14px}
+#lines li{position:relative;background:var(--window);color:var(--window-ink);border-radius:10px;padding:16px 14px 12px;margin-top:10px}
+#lines li .plate{position:absolute;top:-12px;left:12px;background:var(--plate);color:var(--plate-ink);
+  font:700 13px/1 var(--round);padding:6px 12px;border-radius:999px}
+#lines li.narr{background:transparent;color:var(--ink);border:1.5px dashed var(--line)}
+#lines li.narr .plate{background:var(--bg);color:var(--muted);border:1.5px dashed var(--line)}
+#lines li .t{font-size:12px;opacity:.6;font-variant-numeric:tabular-nums;float:right;margin-left:8px}
+#lines li .txt{white-space:pre-wrap;word-break:break-word}
+.exports{display:grid;grid-template-columns:repeat(2,1fr);gap:10px;margin-top:16px}
+textarea{width:100%;min-height:160px;font:13px/1.6 var(--body);background:var(--panel);color:var(--ink);border:1px solid var(--line);border-radius:8px;padding:10px;margin-top:10px}
+video{position:fixed;left:0;bottom:0;width:64px;height:36px;opacity:.02;pointer-events:none;z-index:-1}
+[hidden]{display:none!important}
+input[type=password],input[type=text],select{width:100%;font:15px/1.4 var(--body);padding:12px;border-radius:10px;border:1.5px solid var(--line);background:var(--panel);color:var(--ink);margin:6px 0}
+a{color:var(--accent)}
+.build{display:inline-block;font:700 13px/1 var(--round);background:var(--plate);color:var(--plate-ink);padding:6px 12px;border-radius:999px;margin-top:4px}
+ol.steps{padding-left:1.3em;margin:6px 0;font-size:14px}
+@media (prefers-reduced-motion:reduce){.bar i{transition:none}}
+</style>
+</head>
+<body>
+<main>
+  <div id="build" class="build"></div>
+  <h1>セリフ起こし</h1>
+  <div id="bootNote" class="notice" hidden></div>
+  <p class="lead">ゲームの画面録画から、キャラクター名つきの台詞一覧を作ります。ボイスの有無は関係なく、画面に表示された名前欄と台詞を読み取ります。</p>
+
+  <section id="secKey">
+    <h2><span class="no">0</span>準備（最初の1回だけ）</h2>
+    <p class="hint">台詞の読み取りにGoogleのGemini API（無料枠）を使います。<a href="https://aistudio.google.com/apikey" target="_blank" rel="noopener">Google AI Studio</a>でAPIキーを作成し、下に貼り付けてください。キーはこのiPhoneのブラウザ内にだけ保存されます。</p>
+    <input id="apiKey" type="password" autocomplete="off" placeholder="APIキーを貼り付け">
+    <button id="saveKey">キーを保存して確認する</button>
+    <label for="model" class="hint" style="display:block;margin-top:12px">使うモデル</label>
+    <select id="model"><option value="">キーを保存すると選べます</option></select>
+    <div id="keyStatus" class="hint" aria-live="polite"></div>
+    <details>
+      <summary>料金の目安について</summary>
+      <p class="hint">料金の目安は、どのモデルを選んでいても <b>Gemini 3.8 Flash（gemini-3.8-flash）</b> の通常料金で計算します。Geminiが毎回返す実際の使用量（トークン数）に、次の単価をかけています。</p>
+      <p class="hint" id="priceInfo"></p>
+      <p class="hint">無料枠で使っている場合、実際の請求は0円です。</p>
+      <label class="hint" for="fx">為替（円／1ドル）</label><input id="fx" type="text" inputmode="decimal">
+      <button id="costReset" class="sub" style="margin-top:8px">累計をリセット</button>
+    </details>
+  </section>
+
+  <section>
+    <h2><span class="no">1</span>録画を選ぶ</h2>
+    <label class="filebtn">録画ファイルを選ぶ<input id="file" type="file" accept="video/*"></label>
+    <div id="fileInfo" class="fileinfo"></div>
+    <p class="hint">横向き・全画面で録画したものがおすすめです。長い録画は30分程度ずつに分けると安定します。</p>
+  </section>
+
+  <section id="secRange" hidden>
+    <h2><span class="no">2</span>会話ウィンドウの範囲を合わせる</h2>
+    <p class="hint">台詞が表示されている場面を選び、明るい枠の中に名前欄と台詞の両方が入るように調整してください。</p>
+    <label class="sl">場面<input id="seek" type="range" min="0" max="1" step="0.1" value="0"><output id="seekOut">0:00</output></label>
+    <div class="stage"><canvas id="preview" width="640" height="360"></canvas></div>
+    <label class="sl">上端<input id="top" type="range" min="0" max="100" value="60"><output></output></label>
+    <label class="sl">下端<input id="bottom" type="range" min="0" max="100" value="100"><output></output></label>
+    <label class="sl">左端<input id="left" type="range" min="0" max="100" value="0"><output></output></label>
+    <label class="sl">右端<input id="right" type="range" min="0" max="100" value="100"><output></output></label>
+    <label class="check"><input id="useBubble" type="checkbox"><span>吹き出しの範囲も読み取る<br><small style="color:var(--muted)">名前欄とは別の場所に吹き出しの台詞が出るゲーム向けです。水色の枠を吹き出しが出る場所に合わせてください。</small></span></label>
+    <div id="bubbleBox" hidden>
+      <label class="sl">上端<input id="top2" type="range" min="0" max="100" value="0"><output></output></label>
+      <label class="sl">下端<input id="bottom2" type="range" min="0" max="100" value="32"><output></output></label>
+      <label class="sl">左端<input id="left2" type="range" min="0" max="100" value="35"><output></output></label>
+      <label class="sl">右端<input id="right2" type="range" min="0" max="100" value="100"><output></output></label>
+    </div>
+  </section>
+
+  <section id="secRun" hidden>
+    <h2><span class="no">3</span>読み取る</h2>
+    <label class="check"><input id="guessBubble" type="checkbox" checked><span>吹き出しの話者を前後の会話から推定する<br><small style="color:var(--muted)">推定した名前には「（推定）」が付きます。推定できない場合は「（吹き出し）」のままです。</small></span></label>
+    <label class="check"><input id="trial" type="checkbox"><span>お試し：最初の3分だけ読み取る<br><small style="color:var(--muted)">範囲や設定が合っているか確認してから本番にすると、無料枠の回数を節約できます。</small></span></label>
+    <details>
+      <summary>検出の細かい設定</summary>
+      <label class="sl">間隔<input id="step" type="range" min="0.15" max="1" step="0.05" value="0.3"><output></output></label>
+      <p class="hint">画面を確認する間隔（秒）。短いほど取りこぼしが減りますが、時間がかかります。</p>
+      <label class="sl">静止<input id="stable" type="range" min="0.2" max="2" step="0.1" value="0.6"><output></output></label>
+      <p class="hint">文字送りが止まってから台詞を確定するまでの時間（秒）。文字送りが遅いゲームは長めにしてください。</p>
+      <label class="sl">感度<input id="thresh" type="range" min="0.05" max="3" step="0.05" value="0.4"><output></output></label>
+      <p class="hint">変化とみなすしきい値（%）。取りこぼしがあれば下げ、同じ台詞が重複するなら上げてください。</p>
+    </details>
+    <div id="resumeBox" class="notice" hidden>
+      <div id="resumeText"></div>
+      <div class="row" style="margin-top:10px">
+        <button id="resume">続きから再開</button>
+        <button id="restart" class="sub">最初からやり直す</button>
+      </div>
+    </div>
+    <div class="row" style="margin-top:14px">
+      <button id="start">読み取りを始める</button>
+      <button id="stop" class="sub" hidden>中止</button>
+    </div>
+    <div class="bar"><i id="barFill"></i></div>
+    <div id="cost" class="hint" aria-live="polite"></div>
+    <div id="status" aria-live="polite"></div>
+    <div id="errBox" class="notice err" hidden>
+      <div>エラーの詳細です。下のボタンでコピーして、そのままClaudeに貼り付けて送ってください。</div>
+      <textarea id="errText" readonly style="min-height:120px"></textarea>
+      <button id="errCopy" class="sub">エラー内容をコピー</button>
+    </div>
+    <p class="hint">処理中は画面を開いたままにしてください。止まっても途中経過は自動で保存され、同じ録画を選び直すと続きから再開できます。</p>
+  </section>
+
+  <section id="secResult" hidden>
+    <h2><span class="no">4</span>台詞一覧</h2>
+    <div id="resultInfo" class="hint"></div>
+    <div class="exports">
+      <button class="sub" data-fmt="txt">テキストを保存</button>
+      <button class="sub" data-fmt="csv">CSVを保存</button>
+      <button class="sub" data-fmt="srt">字幕(SRT)を保存</button>
+      <button class="sub" id="copy">テキストをコピー</button>
+    </div>
+    <textarea id="fallback" readonly hidden></textarea>
+    <ol id="lines"></ol>
+  </section>
+  <section>
+    <h2>困ったとき</h2>
+    <p class="hint">うまくいかないときは、下のボタンで情報を集めてClaudeに送ってください。APIキーは含まれません。</p>
+    <div class="exports">
+      <button class="sub" id="diagCopy">診断情報をコピー</button>
+      <button class="sub" id="diagRange">範囲の画像を保存</button>
+      <button class="sub" id="diagSent">送った画像を保存</button>
+      <button class="sub" id="diagClear">記録を消す</button>
+    </div>
+    <p class="hint">「診断情報をコピー」はテキストなのでそのまま貼り付けて、画像の2つは保存してから画像として送ってください。</p>
+  </section>
+</main>
+<video id="video" muted playsinline preload="auto"></video>
+
+<script>
+const $ = id => document.getElementById(id);
+const APP_BUILD = 18; // アップデートの回数（更新のたびに1つ増やす）
+const APP_UPDATED = "2026-10-07 12:48:53"; // 更新した日時（日本時間）
+const APP_VERSION = `第${APP_BUILD}版（${APP_UPDATED} 更新）`;
+let currentStep = "待機中";
+$("build").textContent = APP_VERSION;
+const video = $("video");
+const NARRATION = "ナレーション";
+const API = "https://generativelanguage.googleapis.com/v1beta";
+const BATCH = 8;            // 1回に送る画像数
+const MIN_INTERVAL = 7000;  // 無料枠の毎分制限に合わせた送信間隔（ミリ秒）
+let fileName = "recording", rows = [], abortCtl = null, wakeLock = null;
+
+/* ---------- 保存 ---------- */
+const store = {
+  get(k){ try{ return localStorage.getItem(k); }catch{ return null; } },
+  set(k,v){ try{ localStorage.setItem(k,v); }catch{} },
+};
+
+/* ---------- ユーティリティ ---------- */
+const sleep = (ms, signal) => new Promise((res, rej) => {
+  const t = setTimeout(res, ms);
+  signal?.addEventListener("abort", () => { clearTimeout(t); rej({code:"cancelled"}); }, {once:true});
+});
+const fmt = s => { s=Math.max(0,s); const m=Math.floor(s/60), x=Math.floor(s%60); return `${m}:${String(x).padStart(2,"0")}`; };
+function ts(t, srt){ let ms=Math.round(t*1000); const h=Math.floor(ms/3600000); ms-=h*3600000; const m=Math.floor(ms/60000); ms-=m*60000; const s=Math.floor(ms/1000); ms-=s*1000;
+  const p=(n,l=2)=>String(n).padStart(l,"0"); return srt?`${p(h)}:${p(m)}:${p(s)},${p(ms,3)}`:`${p(h)}:${p(m)}:${p(s)}`; }
+function once(el, ev, timeout=8000){ return new Promise(res=>{ let done=false; const f=()=>{ if(done)return; done=true; el.removeEventListener(ev,f); res(); }; el.addEventListener(ev,f); setTimeout(f,timeout); }); }
+function seekTo(t){
+  // seeked のあと、新しいフレームが実際に描画されるまで待つ（iPhoneでは描画が遅れて古い画面のまま読まれることがあるため）
+  return new Promise(res=>{
+    let done=false;
+    const finish=()=>{ if(done) return; done=true; video.removeEventListener("seeked",onSeeked); res(); };
+    const onSeeked=()=>{
+      if(video.requestVideoFrameCallback){ video.requestVideoFrameCallback(()=>finish()); setTimeout(finish,300); }
+      else setTimeout(finish,60);
+    };
+    video.addEventListener("seeked",onSeeked); setTimeout(()=>{ if(!done){ seekTimeouts++; if(seekTimeouts<=5) log(`シーク待ちが4秒を超えた（${t.toFixed(1)}秒地点）`); } finish(); },4000);
+    video.currentTime=Math.min(t, Math.max(0,video.duration-0.05));
+  });
+}
+function setStatus(msg, err){ const s=$("status"); s.textContent=msg; s.classList.toggle("err",!!err); }
+/* ---------- 動作の記録（診断用） ---------- */
+const LOG_KEY="serifu:log";
+let actLog=[]; try{ actLog=JSON.parse(localStorage.getItem(LOG_KEY)||"[]"); }catch{ actLog=[]; }
+function log(msg){
+  const t=new Date(); const hh=`${String(t.getHours()).padStart(2,"0")}:${String(t.getMinutes()).padStart(2,"0")}:${String(t.getSeconds()).padStart(2,"0")}`;
+  actLog.push(`${hh} ${msg}`); if(actLog.length>80) actLog.splice(0,actLog.length-80);
+  try{ localStorage.setItem(LOG_KEY, JSON.stringify(actLog)); }catch{}
+}
+const apiLog=[];   // 直近のAPI呼び出し
+function logApi(o){ apiLog.push(o); if(apiLog.length>6) apiLog.shift(); log(`API ${o.kind} ${o.status} ${o.ms}ms 画像${o.images}枚 ${o.note||""}`); }
+let seekTimeouts=0, lastSentImages=[];
+function setBar(p){ $("barFill").style.width=`${Math.round(Math.min(1,Math.max(0,p))*100)}%`; }
+
+/* ---------- Geminiの推定利用料金 ---------- */
+// Gemini 3.8 Flash の通常（Standard）料金・100万トークンあたりのドル（Google公式の料金ページより）
+// 2026年12月31日までは入力0.75・出力3.75、2027年1月1日からは入力1.50・出力7.50。考える処理（thinking）のトークンも出力として計算
+const PRICE_MODEL="Gemini 3.8 Flash（gemini-3.8-flash）";
+const PRICE_TABLE=[{until:new Date("2027-01-01T00:00:00Z"), in:0.75, out:3.75},{until:null, in:1.50, out:7.50}];
+const FX_DEFAULT=150;
+const num=(v,d)=>{ const n=parseFloat(String(v??"").replace(/[^0-9.]/g,"")); return isFinite(n)&&n>0?n:d; };
+const price=()=>{ const now=new Date(); const p=PRICE_TABLE.find(x=>!x.until||now<x.until); return {in:p.in, out:p.out, fx:num(store.get("serifu:fx"),FX_DEFAULT)}; };
+let curUsage=null; // 今回の処理の使用量（途中経過と一緒に保存される）
+function loadTotal(){ try{ return JSON.parse(localStorage.getItem("serifu:usageTotal")||"null")||{in:0,out:0,calls:0}; }catch{ return {in:0,out:0,calls:0}; } }
+function yen(u){ const p=price(); return (u.in*p.in + u.out*p.out)/1e6*p.fx; }
+const fmtYen=v=> v<10 ? `約${v.toFixed(2)}円` : `約${Math.round(v).toLocaleString("ja-JP")}円`;
+function addUsage(j, kind){
+  const m=j?.usageMetadata; if(!m) return;
+  const inT=m.promptTokenCount||0, outT=(m.candidatesTokenCount||0)+(m.thoughtsTokenCount||0);
+  const tot=loadTotal(); tot.in+=inT; tot.out+=outT; tot.calls++; store.set("serifu:usageTotal",JSON.stringify(tot));
+  if(curUsage){ curUsage.in+=inT; curUsage.out+=outT; curUsage.calls++; }
+  showCost();
+}
+function showCost(){
+  const tot=loadTotal(), el=$("cost"); if(!el) return;
+  const cur=curUsage ? `今回の推定料金（${PRICE_MODEL}で計算）：${fmtYen(yen(curUsage))}（入力${curUsage.in.toLocaleString("ja-JP")}・出力${curUsage.out.toLocaleString("ja-JP")}トークン／${curUsage.calls}回）　` : "";
+  el.textContent = (curUsage||tot.calls) ? `${cur}累計：${fmtYen(yen(tot))}（${tot.calls}回）` : "";
+}
+function showPriceInfo(){ const p=price(); $("priceInfo").textContent=`現在の単価：入力 ${p.in}ドル・出力 ${p.out}ドル（100万トークンあたり）／為替 ${p.fx}円`; }
+$("fx").value=String(price().fx);
+$("fx").addEventListener("change",()=>{ store.set("serifu:fx", String(num($("fx").value,FX_DEFAULT))); $("fx").value=String(price().fx); showPriceInfo(); showCost(); });
+showPriceInfo();
+$("costReset").addEventListener("click",()=>{ try{ localStorage.removeItem("serifu:usageTotal"); }catch{} showCost(); $("costReset").textContent="リセットしました"; setTimeout(()=>$("costReset").textContent="累計をリセット",2000); });
+showCost();
+
+/* ---------- エラー報告（Claudeに送る用） ---------- */
+function reportError(e, where, jobArg){
+  let job=jobArg||null; if(!job){ try{ job=JSON.parse(localStorage.getItem("serifu:job")||"null"); }catch{} }
+  const lines=[
+    "【セリフ起こし エラー報告】",
+    `版: ${APP_VERSION}`,
+    `日時: ${new Date().toLocaleString("ja-JP")}`,
+    `発生場所: ${where||"不明"} / 作業: ${currentStep}`,
+    `内容: ${e?.message||e?.code||String(e)}`,
+    e?.name ? `種類: ${e.name}` : "",
+    e?.stack ? `詳細:\n${String(e.stack).split("\n").slice(0,6).join("\n")}` : "",
+    `最後のAPIエラー: ${typeof lastError!=="undefined"&&lastError?lastError:"なし"}`,
+    `モデル: ${$("model")?.value||"未選択"}`,
+    `動画: ${video?.videoWidth||0}x${video?.videoHeight||0}, ${video?.duration?Math.round(video.duration):0}秒`,
+    `範囲: ${JSON.stringify(typeof box==="function"?box():null)} 吹き出し: ${JSON.stringify(typeof box2==="function"?box2():null)}`,
+    job ? `途中経過: 段階=${job.phase}, 場面=${job.states?.length}, 次の組=${job.next}, お試し=${job.trial}, 長さ=${Math.round(job.dur||0)}秒` : "途中経過: なし",
+    job?.diag ? `場面探しの診断: 確認${job.diag.samples}回, 全く同じ画面${job.diag.same}回, 変化あり${job.diag.changes}回` : "",
+    job ? `その時の範囲: ${JSON.stringify(job.box)} 吹き出し: ${JSON.stringify(job.box2||null)} 間隔${job.step} 静止${job.stable} 感度${job.thresh}` : "",
+    `オンライン: ${navigator.onLine}`,
+    `使用量: 今回=${JSON.stringify(curUsage)} 累計=${JSON.stringify(loadTotal())} 単価=${JSON.stringify(price())}`,
+    `保存データ: ${(()=>{ try{ let n=0; for(let k=0;k<localStorage.length;k++){ const key=localStorage.key(k); n+=(localStorage.getItem(key)||"").length; } return Math.round(n/1024)+"KB"; }catch{ return "不明"; } })()} / 途中経過=${localStorage.getItem("serifu:job")?"あり":"なし"} / 録画の識別=${JSON.stringify(typeof currentRec!=="undefined"?currentRec:null)}`,
+    `端末: ${navigator.userAgent}`,
+    `画面: ${window.screen?.width}x${window.screen?.height} 倍率${window.devicePixelRatio} / シーク待ち超過: ${seekTimeouts}回`,
+    job?.diag?.regions ? `範囲ごとの結果: ${JSON.stringify(job.diag.regions)}` : "",
+    job?.diag?.sceneTimes ? `見つかった場面（秒）: ${job.diag.sceneTimes}` : "",
+    job?.states?.length ? `読み取り結果の例:\n${job.states.slice(0,12).map((x,k)=>`  ${k}: ${x.start?.toFixed?.(1)}秒 ${x.ok?"○":x.tried?"×":"-"} 名前=${x.name??""} 台詞=${(x.text??"").slice(0,30)}${x.bubble?` 吹き出し=${x.bubble.slice(0,20)}`:""}`).join("\n")}` : "",
+    apiLog.length ? `直近のAPI応答:\n${apiLog.slice(-3).map(a=>`  [${a.kind}] ${a.status} ${a.ms}ms 画像${a.images} ${a.finish||""} ${a.note||""}\n    ${a.snippet}`).join("\n")}` : "直近のAPI応答: なし",
+    `設定: 間隔${$("step")?.value} 静止${$("stable")?.value} 感度${$("thresh")?.value} 話者推定=${$("guessBubble")?.checked}`,
+    `動作の記録（新しい順）:\n${actLog.slice(-25).reverse().map(x=>"  "+x).join("\n")}`,
+  ].filter(Boolean);
+  $("errText").value=lines.join("\n"); $("errBox").hidden=false;
+}
+function diagText(){ reportError({message:"（手動で取得した診断情報）",name:"診断"}, "困ったとき", loadJob()||lastJobRef); return $("errText").value; }
+let lastJobRef=null;
+async function copyText(txt, btn, label){
+  try{ await navigator.clipboard.writeText(txt); btn.textContent="コピーしました"; setTimeout(()=>btn.textContent=label,2000); }
+  catch{ const t=$("errText"); t.value=txt; $("errBox").hidden=false; t.focus(); t.select(); }
+}
+$("diagCopy").addEventListener("click", ()=>copyText(diagText(), $("diagCopy"), "診断情報をコピー"));
+$("diagClear").addEventListener("click", ()=>{ actLog=[]; try{ localStorage.removeItem(LOG_KEY); }catch{} apiLog.length=0; $("diagClear").textContent="消しました"; setTimeout(()=>$("diagClear").textContent="記録を消す",2000); });
+async function saveCanvas(c, name){
+  const blob=await new Promise(r=>c.toBlob(r,"image/jpeg",0.85)); if(!blob) return;
+  const file=new File([blob], name, {type:"image/jpeg"});
+  try{ if(navigator.canShare?.({files:[file]})){ await navigator.share({files:[file]}); return; } }catch(e){ if(e?.name==="AbortError") return; }
+  const a=document.createElement("a"); a.href=URL.createObjectURL(file); a.download=name; document.body.append(a); a.click(); a.remove();
+}
+$("diagRange").addEventListener("click", ()=>{ if(!video.videoWidth){ setStatus("先に録画を選んでください。",true); return; } drawPreview(); saveCanvas($("preview"),"serifu-range.jpg"); });
+$("diagSent").addEventListener("click", async ()=>{
+  if(!lastSentImages.length){ setStatus("まだGeminiに画像を送っていません。読み取りを一度実行してから押してください。",true); return; }
+  const imgs=await Promise.all(lastSentImages.map(b=>new Promise(r=>{ const im=new Image(); im.onload=()=>r(im); im.onerror=()=>r(null); im.src="data:image/jpeg;base64,"+b; })));
+  const ok=imgs.filter(Boolean), W=720, hs=ok.map(im=>Math.round(im.height*W/im.width));
+  const c=document.createElement("canvas"); c.width=W; c.height=hs.reduce((a,b)=>a+b+8,0)||1;
+  const g=c.getContext("2d"); g.fillStyle="#000"; g.fillRect(0,0,c.width,c.height);
+  let y=0; ok.forEach((im,k)=>{ g.drawImage(im,0,y,W,hs[k]); g.fillStyle="#ff0"; g.font="bold 28px sans-serif"; g.fillText(String(k),8,y+32); y+=hs[k]+8; });
+  saveCanvas(c,"serifu-sent.jpg");
+});
+$("errCopy").addEventListener("click", async ()=>{
+  try{ await navigator.clipboard.writeText($("errText").value); $("errCopy").textContent="コピーしました"; setTimeout(()=>$("errCopy").textContent="エラー内容をコピー",2000); }
+  catch{ const t=$("errText"); t.focus(); t.select(); }
+});
+window.addEventListener("error", ev=>reportError(ev.error||{message:ev.message, stack:`${ev.filename}:${ev.lineno}:${ev.colno}`}, "画面の処理"));
+window.addEventListener("unhandledrejection", ev=>{ if(ev.reason?.code!=="cancelled") reportError(ev.reason, "画面の処理（非同期）"); });
+
+/* ---------- APIキーとモデル ---------- */
+function keyStatus(msg, err){ const s=$("keyStatus"); s.textContent=msg; s.style.color=err?"var(--warn)":""; }
+async function loadModels(key){
+  const res = await fetch(`${API}/models?pageSize=200`, {headers:{"x-goog-api-key":key}});
+  if(!res.ok){ const j=await res.json().catch(()=>({})); throw new Error(j?.error?.message || `HTTP ${res.status}`); }
+  const j = await res.json();
+  const list = (j.models||[]).filter(m =>
+    (m.supportedGenerationMethods||[]).includes("generateContent") &&
+    /gemini/i.test(m.name) && /flash|pro/i.test(m.name) &&
+    !/image|tts|audio|live|embed|native|thinking/i.test(m.name));
+  const ver = n => parseFloat((n.match(/gemini-(\d+(?:\.\d+)?)/)||[])[1]||0);
+  // Flash（速くて安い）を先頭に、Pro（高精度・遅い・高い）は後ろに並べる
+  const score = m => ver(m.name)*10 - (/lite/i.test(m.name)?3:0) - (/preview|exp/i.test(m.name)?1:0) - (/pro/i.test(m.name)?100:0);
+  list.sort((a,b)=>score(b)-score(a));
+  return list;
+}
+async function setupKey(key, quiet){
+  keyStatus("確認しています…");
+  try{
+    const models = await loadModels(key);
+    if(!models.length) throw new Error("使えるFlashモデルが見つかりませんでした");
+    const sel=$("model"), saved=store.get("serifu:model");
+    sel.replaceChildren(...models.map(m=>{ const o=document.createElement("option"); o.value=m.name; o.textContent=`${/pro/i.test(m.name)?"【高精度・有料のみ】":""}${m.displayName||m.name}（${m.name.replace("models/","")}）`; return o; }));
+    if(saved && models.some(m=>m.name===saved)) sel.value=saved;
+    store.set("serifu:model", sel.value);
+    keyStatus("準備できました。キーはこのブラウザに保存されています。");
+    return true;
+  }catch(e){
+    keyStatus(`キーを確認できませんでした：${e.message}`, true);
+    currentStep="APIキーの確認"; reportError(e, "APIキーの確認");
+    return false;
+  }
+}
+$("saveKey").addEventListener("click", async ()=>{
+  const key=$("apiKey").value.trim();
+  if(!key){ keyStatus("APIキーを貼り付けてください。", true); return; }
+  store.set("serifu:key", key);
+  await setupKey(key);
+});
+$("model").addEventListener("change", ()=>store.set("serifu:model",$("model").value));
+(() => { const k=store.get("serifu:key"); if(k){ $("apiKey").value=k; setupKey(k,true); } })();
+
+/* ---------- 範囲スライダー ---------- */
+const box = () => { const v=id=>+$(id).value/100; return {x1:v("left"),y1:v("top"),x2:v("right"),y2:v("bottom")}; };
+const RANGE_IDS=["top","bottom","left","right","top2","bottom2","left2","right2"];
+const box2 = () => { if(!$("useBubble").checked) return null; const v=id=>+$(id).value/100; return {x1:v("left2"),y1:v("top2"),x2:v("right2"),y2:v("bottom2")}; };
+function syncBubbleUI(){ $("bubbleBox").hidden=!$("useBubble").checked; }
+$("useBubble").checked = store.get("serifu:useBubble")==="1"; syncBubbleUI();
+$("useBubble").addEventListener("change",()=>{ store.set("serifu:useBubble",$("useBubble").checked?"1":"0"); syncBubbleUI(); drawPreview(); });
+document.querySelectorAll("label.sl").forEach(l=>{
+  const inp=l.querySelector("input"), out=l.querySelector("output");
+  if(inp.id==="seek") return;
+  const saved=store.get("serifu:"+inp.id); if(saved!==null) inp.value=saved;
+  const upd=()=>{ out.textContent = RANGE_IDS.includes(inp.id) ? `${inp.value}%` : inp.value; };
+  inp.addEventListener("input",()=>{ upd(); store.set("serifu:"+inp.id, inp.value); if(RANGE_IDS.includes(inp.id)) drawPreview(); }); upd();
+});
+function boxOk(){ const ok=b=>!b || (b.y2-b.y1>=0.05 && b.x2-b.x1>=0.05); return ok(box()) && ok(box2()); }
+
+/* ---------- 動画読み込み ---------- */
+let objUrl=null;
+$("file").addEventListener("change", async () => {
+  const f=$("file").files[0]; if(!f) return;
+  fileName=f.name.replace(/\.[^.]+$/,"") || "recording";
+  if(objUrl) URL.revokeObjectURL(objUrl);
+  objUrl=URL.createObjectURL(f); video.src=objUrl; video.load();
+  $("fileInfo").textContent="読み込み中…";
+  await once(video,"loadedmetadata"); await once(video,"loadeddata",4000);
+  if(!video.videoWidth){ $("fileInfo").textContent="この動画は読み込めませんでした。別の形式で録画し直してください。"; return; }
+  $("fileInfo").textContent=`${f.name}（${fmt(video.duration)}・${video.videoWidth}×${video.videoHeight}）`;
+  const s=$("seek"); s.max=String(video.duration); s.value=String(Math.min(5,video.duration/2));
+  $("secRange").hidden=false; $("secRun").hidden=false;
+  currentKey=`${f.name}|${f.size}`;
+  currentRec={name:f.name, dur:video.duration, w:video.videoWidth, h:video.videoHeight};
+  const job=loadJob(); if(job && job.phase!=="done" && sameRecording(job)) applyJobSettings(job);
+  refreshResume();
+  await seekTo(+s.value); $("seekOut").textContent=fmt(+s.value); drawPreview();
+});
+let seekBusy=false, seekWant=null;
+$("seek").addEventListener("input", async e=>{
+  seekWant=+e.target.value; $("seekOut").textContent=fmt(seekWant);
+  if(seekBusy) return; seekBusy=true;
+  while(seekWant!==null){ const t=seekWant; seekWant=null; await seekTo(t); drawPreview(); }
+  seekBusy=false;
+});
+function drawPreview(){
+  const c=$("preview"); if(!video.videoWidth) return;
+  const w=c.clientWidth||640, dpr=window.devicePixelRatio||1;
+  c.width=Math.round(w*dpr); c.height=Math.round(w*dpr*video.videoHeight/video.videoWidth);
+  const g=c.getContext("2d"); g.drawImage(video,0,0,c.width,c.height);
+  const rects=[[box(),"#F2B544"]]; const b2=box2(); if(b2) rects.push([b2,"#5ED0E6"]);
+  // 枠の外を暗くする
+  g.save(); g.beginPath(); g.rect(0,0,c.width,c.height);
+  for(const [b] of rects) g.rect(b.x2*c.width,b.y1*c.height,-(b.x2-b.x1)*c.width,(b.y2-b.y1)*c.height);
+  g.fillStyle="rgba(0,0,0,.55)"; g.fill("evenodd"); g.restore();
+  g.lineWidth=3*dpr;
+  for(const [b,col] of rects){ g.strokeStyle=col; g.strokeRect(b.x1*c.width,b.y1*c.height,(b.x2-b.x1)*c.width,(b.y2-b.y1)*c.height); }
+}
+window.addEventListener("resize",()=>drawPreview());
+
+/* ---------- 画面の変化検出 ---------- */
+const SW=256, SH=64;
+const sigCanvas=document.createElement("canvas"); sigCanvas.width=SW; sigCanvas.height=SH;
+const sigCtx=sigCanvas.getContext("2d",{willReadFrequently:true});
+function rectOf(b){ const W=video.videoWidth, H=video.videoHeight;
+  return [Math.round(b.x1*W), Math.round(b.y1*H), Math.max(1,Math.round((b.x2-b.x1)*W)), Math.max(1,Math.round((b.y2-b.y1)*H))]; }
+function srcRect(){ return rectOf(box()); }
+function regions(){ const b2=box2(); return b2 ? [box(), b2] : [box()]; }
+function sigOf(b){
+  const [sx,sy,sw,sh]=rectOf(b);
+  sigCtx.drawImage(video,sx,sy,sw,sh,0,0,SW,SH);
+  const d=sigCtx.getImageData(0,0,SW,SH).data, g=new Uint8Array(SW*SH);
+  for(let i=0,j=0;i<g.length;i++,j+=4) g[i]=(d[j]*299+d[j+1]*587+d[j+2]*114)/1000;
+  return g;
+}
+function changed(a,b){ let n=0; for(let i=0;i<a.length;i++) if(Math.abs(a[i]-b[i])>28) n++; return n/a.length*100; }
+function stdev(a){ let s=0,s2=0; for(const v of a){s+=v;s2+=v*v;} const m=s/a.length; return Math.sqrt(Math.max(0,s2/a.length-m*m)); }
+
+/* ---------- 動画の読み込み直し（メモリ対策） ---------- */
+// iPhoneのSafariは、動画の位置移動を何千回もくり返すとメモリがたまり、ページごと落ちることがある。
+// 一定回数ごとに動画を読み込み直して、たまったメモリを解放する。
+let seeksSinceReload=0;
+const RELOAD_EVERY=60;
+async function maybeReloadVideo(){
+  if(++seeksSinceReload<RELOAD_EVERY || !objUrl) return;
+  seeksSinceReload=0;
+  try{
+    video.pause(); video.removeAttribute("src"); video.load();
+    await sleep(50);
+    video.src=objUrl; video.load();
+    await once(video,"loadedmetadata",8000); await once(video,"loadeddata",4000);
+    log("動画を読み込み直した（メモリ対策）");
+  }catch(e){ log(`動画の読み込み直しに失敗：${e?.message||e}`); }
+}
+
+/* ---------- 再生しながら調べる ---------- */
+const PLAY_RATE=2; // 2倍速で再生しながら調べる
+function scanByPlayback(fromT, dur, step, onSample, signal, persist){
+  return new Promise(async (resolve, reject)=>{
+    if(!video.requestVideoFrameCallback || fromT>dur){ resolve(fromT>dur); return; }
+    try{ await seekTo(Math.max(0,fromT)); video.muted=true; video.playbackRate=PLAY_RATE; await video.play(); }
+    catch(e){ log(`再生できないため位置移動の方式に切り替え：${e?.message||e}`); try{ video.pause(); }catch{} resolve(false); return; }
+    log(`再生しながら調べる方式で開始（${fmt(fromT)}から・${PLAY_RATE}倍速）`);
+    let done=false, next=fromT, lastMedia=-1, lastProgress=Date.now();
+    const stop=(fn)=>{ if(done) return; done=true; clearInterval(watch); try{ video.pause(); video.playbackRate=1; }catch{} fn(); };
+    const cb=(now, meta)=>{
+      if(done) return;
+      if(signal.aborted){ persist(); stop(()=>reject({code:"cancelled"})); return; }
+      const mt=Math.min(meta?.mediaTime ?? video.currentTime, dur);
+      if(mt!==lastMedia){ lastMedia=mt; lastProgress=Date.now(); }
+      try{ if(mt>=next-1e-4){ onSample(+mt.toFixed(3)); while(next<=mt+1e-4) next+=step; } }
+      catch(e){ stop(()=>reject(e)); return; }
+      if(mt>=dur-0.02){ stop(()=>resolve(true)); return; }
+      video.requestVideoFrameCallback(cb);
+    };
+    video.requestVideoFrameCallback(cb);
+    const watch=setInterval(()=>{
+      if(done) return;
+      if(signal.aborted){ persist(); stop(()=>reject({code:"cancelled"})); return; }
+      if(video.ended || video.currentTime>=dur-0.05){ stop(()=>resolve(true)); return; }
+      if(document.hidden){ lastProgress=Date.now(); return; }          // 裏に回っている間は待つ
+      if(video.paused) video.play().catch(()=>{});                       // 戻ってきたら再生を続ける
+      if(Date.now()-lastProgress>15000){ log("再生が15秒以上止まったため、位置移動の方式に切り替え"); stop(()=>resolve(false)); }
+    },1000);
+  });
+}
+
+/* ---------- 途中経過の保存（再開用） ---------- */
+const JOB="serifu:job";
+let currentKey="", persistNow=null, currentRec=null;
+// iPhoneでは選び直すたびにファイルのサイズが変わることがあるため、名前・長さ・画面サイズでも同じ録画とみなす
+function sameRecording(job){
+  if(!job || !currentRec) return false;
+  if(job.key===currentKey) return true;
+  if(!job.rec) return false;
+  const closeDur=Math.abs((job.rec.dur||0)-currentRec.dur)<0.6, sameSize=job.rec.w===currentRec.w && job.rec.h===currentRec.h;
+  return closeDur && sameSize && (job.rec.name===currentRec.name || Math.abs(job.rec.dur-currentRec.dur)<0.05);
+}
+function loadJob(){ try{ return JSON.parse(localStorage.getItem(JOB)||"null"); }catch{ return null; } }
+let saveFailLogged=false;
+function saveJob(job){ try{ localStorage.setItem(JOB, JSON.stringify(job, (k,v)=>k==="b64"?undefined:v)); }catch(e){ if(!saveFailLogged){ saveFailLogged=true; log(`途中経過の保存に失敗：${e?.name||""} ${e?.message||e}`); } } }
+function clearJob(){ try{ localStorage.removeItem(JOB); }catch{} }
+const enc=a=>{ if(!a) return null; let s=""; for(let i=0;i<a.length;i+=8192) s+=String.fromCharCode.apply(null,a.subarray(i,i+8192)); return btoa(s); };
+const dec=b=>{ if(!b) return null; const s=atob(b), a=new Uint8Array(s.length); for(let i=0;i<s.length;i++) a[i]=s.charCodeAt(i); return a; };
+document.addEventListener("visibilitychange",()=>{ if(document.hidden) persistNow?.(); else if(abortCtl) navigator.wakeLock?.request("screen").then(w=>wakeLock=w).catch(()=>{}); });
+window.addEventListener("pagehide",()=>persistNow?.());
+
+/* ---------- 1段階目：台詞の場面を探す ---------- */
+// 範囲（会話ウィンドウ・吹き出し）ごとに別々に「表示が止まった瞬間」を探す。
+// 吹き出しの範囲にはキャラクターの髪の揺れやボタンの光など常に動くものが入りやすいので、
+// 範囲ごとに普段の揺れの大きさ（ノイズ）を測り、それより大きな変化だけを「切り替わり」とみなす。
+async function scanPhase(job, signal){
+  const {step, thresh:th, dur}=job, need=Math.max(1,Math.round(job.stable/step)), total=Math.floor(dur/step);
+  const regs=job.box2 ? [job.box, job.box2] : [job.box];
+  const states=job.states;
+  const sc=job.scan;
+  const R=regs.map((_,r)=>{ const x=sc.regs?.[r]||{};
+    return {prev:dec(x.prev), cur:x.cur?{start:x.cur.start,firm:x.cur.firm,end:x.cur.end,sig:dec(x.cur.sig)}:null,
+            stable:x.stable||0, changeStart:x.changeStart||0, lastSig:dec(x.lastSig), hist:x.hist||[]}; });
+  let i=sc.i;
+  // 会話ウィンドウ（r=0）は常に設定どおりのしきい値。動きの多い場面で同じ人の台詞同士がまとめられるのを防ぐ
+  const thrOf=(S,r)=>{ if(r===0) return th; const h=S.hist.slice(-40); if(h.length<5) return th; const m=[...h].sort((a,b)=>a-b)[Math.floor(h.length/2)]; return Math.max(th, m*2.5); };
+  const commit=(r,c)=>{ const S=R[r]; if(!c||stdev(c.sig)<4) return;
+    if(S.lastSig && changed(S.lastSig,c.sig)<thrOf(S,r)){ for(let k=states.length-1;k>=0;k--) if((states[k].r||0)===r){ states[k].end=c.end; break; } }
+    else states.push({start:c.start,end:c.end,firm:c.firm??c.end,r});
+    S.lastSig=c.sig; };
+  const persist=()=>{ job.scan={i, t:lastT, regs:R.map(S=>({prev:enc(S.prev), cur:S.cur&&{start:S.cur.start,firm:S.cur.firm,end:S.cur.end,sig:enc(S.cur.sig)},
+      stable:S.stable, changeStart:S.changeStart, lastSig:enc(S.lastSig), hist:S.hist.slice(-40)}))}; saveJob(job); };
+  persistNow=persist;
+  const diag=job.diag=job.diag||{samples:0,same:0,changes:0};
+  let lastT = sc.t ?? (i>0 ? (i-1)*step : -1); // 最後に調べた時刻
+  let count=0;
+  const sample=(t)=>{
+    regs.forEach((b,r)=>{
+      const S=R[r], sig=sigOf(b);
+      if(S.prev){
+        const d=changed(sig,S.prev), thr=thrOf(S,r); S.hist.push(d); if(S.hist.length>80) S.hist.splice(0,S.hist.length-40);
+        if(r===0){ diag.samples++; if(d===0) diag.same++; if(d>=thr) diag.changes++; }
+        if(d<thr) S.stable++; else { commit(r,S.cur); S.cur=null; S.stable=0; S.changeStart=t; }
+      } else S.changeStart=t;
+      if(S.stable>=need){ if(!S.cur) S.cur={start:S.changeStart,firm:Math.max(S.changeStart,t-need*step),end:t,sig}; /* firm＝同じ画面が続いていると確かめられた最初の時刻 */ else { S.cur.end=t; S.cur.sig=sig; } }
+      S.prev=sig;
+    });
+    lastT=t; i=Math.round(t/step)+1; count++;
+    if(count%10===0){ setBar(0.5*Math.min(1,t/dur)); setStatus(`台詞の場面を探しています… ${fmt(t)} / ${fmt(dur)}（${states.length}件）`); }
+    if(count%20===0) persist();
+  };
+  // まずは「動画を再生しながら一定間隔で調べる」方式（位置の移動を何千回もくり返さないので、iPhoneでも軽くて速い）
+  const played = await scanByPlayback(lastT+step, dur, step, sample, signal, persist);
+  // 再生できない・途中で止まった場合は、これまでの「位置を移動して調べる」方式で残りを調べる
+  if(!played){
+    log(`位置を移動して調べる方式で続行（${fmt(Math.max(0,lastT))}から）`);
+    for(let k=Math.round((lastT+step)/step); k*step<=dur+1e-9; k++){
+      if(signal.aborted){ persist(); throw {code:"cancelled"}; }
+      const t=+(k*step).toFixed(4); await maybeReloadVideo(); await seekTo(t); sample(t);
+    }
+  }
+  R.forEach((S,r)=>commit(r,S.cur));
+  // 切り出す瞬間は「表示が止まっている時間の真ん中」にする。
+  // 最後の瞬間（end）だと次の台詞への切り替わり（フェード）の直前で、iPhoneでは空のウィンドウや次の台詞を撮ってしまうことがあるため
+  for(const x of states){ const f=x.firm??x.end; x.at=f+(x.end-f)/2; }
+  // 範囲ごとに見つけた場面を時刻順に並べ、ほぼ同じ瞬間のものは1つにまとめる（切り出す瞬間は会話ウィンドウ側を優先）
+  states.sort((a,b)=>a.end-b.end);
+  for(let k=states.length-1;k>0;k--) if(states[k].end-states[k-1].end<0.35){
+    const a=states[k-1], b=states[k]; const keep=(a.r||0)===0 ? a : (b.r||0)===0 ? b : a;
+    a.start=Math.min(a.start,b.start); a.end=b.end; a.at=keep.at; a.r=Math.min(a.r||0,b.r||0); states.splice(k,1); }
+  job.lowCount = states.length < Math.max(3, dur/20); // 20秒に1場面より少ない＝範囲が合っていない可能性
+  diag.scenes=states.length;
+  diag.regions=R.map((S,r)=>({範囲:r?"吹き出し":"会話ウィンドウ", しきい値:+thrOf(S,r).toFixed(2), 場面:states.filter(x=>(x.r||0)===r).length}));
+  diag.sceneTimes=states.slice(0,40).map(x=>`${x.start.toFixed(1)}-${x.end.toFixed(1)}${x.r?"吹":""}`).join(" ");
+  log(`場面探し完了：${states.length}場面 ${JSON.stringify(diag.regions)}`);
+  job.phase="read"; job.next=0; delete job.scan; persistNow=null; saveJob(job);
+}
+
+/* ---------- 2段階目：切り出して読み取る ---------- */
+const cropCanvas=document.createElement("canvas");
+async function readPhase(job, signal){
+  const states=job.states, nb=Math.ceil(states.length/BATCH);
+  // 吹き出し範囲がある場合は「上：吹き出し／下：会話ウィンドウ」の順に縦に並べて1枚にする
+  const parts=(box2()?[box2(),box()]:[box()]).map(rectOf);
+  const CW=Math.min(1024, Math.max(...parts.map(p=>p[2])));
+  const hs=parts.map(p=>Math.round(p[3]*CW/p[2])), GAP=parts.length>1?12:0;
+  cropCanvas.width=CW; cropCanvas.height=hs.reduce((a,b)=>a+b,0)+GAP;
+  const g=cropCanvas.getContext("2d");
+  const drawCrop=()=>{ g.fillStyle="#ff00ff"; g.fillRect(0,0,CW,cropCanvas.height); let y=0;
+    parts.forEach(([sx,sy,sw,sh],k)=>{ g.drawImage(video,sx,sy,sw,sh,0,y,CW,hs[k]); y+=hs[k]+GAP; }); };
+  persistNow=()=>saveJob(job);
+  for(let b=job.next||0;b<nb;b++){
+    const batch=states.slice(b*BATCH,(b+1)*BATCH);
+    setStatus(`台詞の画像を準備しています… ${b+1}/${nb}組目`);
+    try{
+      for(const s of batch){
+        if(signal.aborted) throw {code:"cancelled"};
+        await maybeReloadVideo(); await seekTo(s.at ?? Math.max(s.start, s.end-0.15)); drawCrop();
+        s.b64=cropCanvas.toDataURL("image/jpeg",0.85).split(",")[1];
+      }
+      setStatus(`名前欄と台詞を読み取っています… ${b+1}/${nb}組目`);
+      await readBatch(batch, signal);
+      batch.forEach(s=>s.tried=true);
+    }finally{ batch.forEach(s=>delete s.b64); }
+    job.next=b+1; saveJob(job);
+    rows=applyGuesses(toRows(states), job.guesses); saveResult(); render();
+    setBar(0.5+0.5*(b+1)/nb);
+  }
+  job.phase = job.guess ? "guess" : "done"; job.gNext=0; persistNow=null; saveJob(job);
+}
+
+/* ---------- Geminiで読み取り ---------- */
+const PROMPT = (n, bubble) => `渡した画像${n}枚は、ゲームの画面録画から切り出した会話部分の画面です。渡した順に0から番号を振ってください。
+${bubble?"各画像は、ピンクの線より上が「吹き出しが出る場所」、下が「会話ウィンドウ（名前欄つき）」です。\n":""}各画像について、会話ウィンドウの名前欄に表示されている話者名と、表示されている台詞を読み取ってください。
+・名前欄が無い、または空欄の場合は name を空文字にする（ナレーション・地の文として扱います）
+・名前を囲む記号（【】「」など）は除き、名前だけにする
+・台詞は改行を除いて1行につなげ、画面の表記どおりに書き写す
+・会話ウィンドウが表示されていない、または台詞が無い場合は text を空文字にする
+${bubble?"・漫画のようなギザギザ・丸形の吹き出しの中に台詞があれば bubble に書き写す（無ければ空文字）。キャラクターの顔や背景の文字、選択肢画面で上部に出る横長の帯（直前の台詞の再表示）やボタンの文字は読まない\n":""}次の形式のJSON配列だけを返してください。
+[{"i":0,"name":"話者名","text":"台詞"${bubble?',"bubble":"吹き出しの台詞"':""}}]
+
+`;
+function parseJsonArray(text){
+  const pick=v=>{
+    if(Array.isArray(v)) return v;
+    if(v && typeof v==="object"){ for(const x of Object.values(v)) if(Array.isArray(x)) return x; if("text" in v||"name" in v) return [v]; }
+    return null;
+  };
+  try{ const r=pick(JSON.parse(text)); if(r) return r; }catch{}
+  const m=text.match(/\[[\s\S]*\]/); if(m){ try{ return JSON.parse(m[0]); }catch{} }
+  const o=text.match(/\{[\s\S]*\}/); if(o){ try{ return pick(JSON.parse(o[0])); }catch{} }
+  return null;
+}
+class QuotaError extends Error {}
+const REQUEST_TIMEOUT=120000; // 応答が2分ない場合は送り直す
+let lastError="";
+async function callGemini(batch, signal){
+  const key=store.get("serifu:key"), model=$("model").value;
+  const parts=[];
+  batch.forEach((s,k)=>{ parts.push({text:`画像${k}`}); parts.push({inline_data:{mime_type:"image/jpeg",data:s.b64}}); });
+  parts.push({text:PROMPT(batch.length, !!box2())});
+  lastSentImages=batch.map(s=>s.b64);
+  const gen={temperature:0,responseMimeType:"application/json"};
+  if(/2\.5-flash/.test(model)) gen.thinkingConfig={thinkingBudget:0}; // 考える時間を省いて速くする
+  const ctl=new AbortController(); let timedOut=false;
+  const onAbort=()=>ctl.abort(); signal.addEventListener("abort",onAbort,{once:true});
+  const timer=setTimeout(()=>{ timedOut=true; ctl.abort(); }, REQUEST_TIMEOUT);
+  const t0=Date.now(), base=$("status").textContent.replace(/（.*$/,"");
+  const tick=setInterval(()=>setStatus(`${base}（Geminiの応答待ち ${Math.round((Date.now()-t0)/1000)}秒）`),1000);
+  try{
+    const res=await fetch(`${API}/${model}:generateContent`,{
+      method:"POST", signal:ctl.signal,
+      headers:{"Content-Type":"application/json","x-goog-api-key":key},
+      body:JSON.stringify({contents:[{role:"user",parts}],generationConfig:gen}),
+    });
+    const j=await res.json().catch(()=>({}));
+    addUsage(j,"読み取り");
+    if(!res.ok) logApi({kind:"読み取り", status:res.status, ms:Date.now()-t0, images:batch.length, model, note:(j?.error?.message||"").slice(0,160), snippet:JSON.stringify(j).slice(0,400)});
+    if(res.status===429){ const msg=j?.error?.message||""; const e=new QuotaError(msg); e.daily=/per.?day|daily|PerDay/i.test(msg); throw e; }
+    if(!res.ok) throw new Error(j?.error?.message||`HTTP ${res.status}`);
+    const cand=j.candidates?.[0];
+    const text=(cand?.content?.parts||[]).map(p=>p.text||"").join("");
+    logApi({kind:"読み取り", status:res.status, ms:Date.now()-t0, images:batch.length, model, finish:cand?.finishReason||"", note:res.ok?"":(j?.error?.message||"").slice(0,120), snippet:(text||JSON.stringify(j)).slice(0,400)});
+    if(!text) throw new Error(`空の応答（${cand?.finishReason||j?.promptFeedback?.blockReason||"理由不明"}）`);
+    return {arr:parseJsonArray(text), raw:text};
+  }catch(e){
+    if(timedOut && !signal.aborted){ log("Geminiの応答が2分を超えたので送り直し"); throw new Error("Geminiから2分以上応答がありませんでした"); }
+    if(e?.name!=="AbortError" && !(e instanceof QuotaError)) log(`通信エラー：${e?.name||""} ${e?.message||e}`);
+    throw e;
+  }finally{
+    clearTimeout(timer); clearInterval(tick); signal.removeEventListener("abort",onAbort);
+  }
+}
+let lastCall=0;
+function waitOnline(signal){
+  return new Promise((res,rej)=>{
+    const done=()=>{ clearInterval(t); window.removeEventListener("online",check); res(); };
+    const check=()=>{ if(navigator.onLine) setTimeout(done,2000); };
+    const t=setInterval(()=>{ if(signal.aborted){ clearInterval(t); window.removeEventListener("online",check); rej({code:"cancelled"}); } else check(); },5000);
+    window.addEventListener("online",check);
+  });
+}
+async function readBatch(batch, signal){
+  for(let attempt=0;attempt<4;attempt++){
+    const wait=lastCall+MIN_INTERVAL-Date.now(); if(wait>0) await sleep(wait,signal);
+    lastCall=Date.now();
+    try{
+      const {arr, raw}=await callGemini(batch, signal);
+      if(!arr){ lastError=`応答の形式を読み取れませんでした（${raw.slice(0,60)}）`; if(attempt<1) continue; return; }
+      arr.forEach((it,pos)=>{
+        if(!it || typeof it!=="object") return;
+        let k=Number(it.i ?? it.index ?? it.id);
+        if(!Number.isInteger(k) || k<0 || k>=batch.length) k=pos; // 番号が無い・ずれている場合は並び順で対応
+        if(k>=batch.length) return;
+        const name=it.name ?? it.speaker ?? it["話者"] ?? "";
+        const text=it.text ?? it.line ?? it.dialogue ?? it["台詞"] ?? "";
+        batch[k].name=String(name).trim(); batch[k].text=String(text).trim(); batch[k].ok=true;
+        const bub=it.bubble ?? it["吹き出し"] ?? ""; if(bub) batch[k].bubble=String(bub).trim();
+      });
+      if(!batch.some(s=>s.ok)) lastError=`応答に台詞が含まれていませんでした（${raw.slice(0,60)}）`;
+      return;
+    }catch(e){
+      if(e?.name==="AbortError"||e?.code==="cancelled") throw {code:"cancelled"};
+      if(e instanceof QuotaError){
+        if(e.daily || attempt>=3) throw e;
+        setStatus("無料枠の回数制限に達したので、1分待ってから続けます…");
+        await sleep(60000,signal); continue;
+      }
+      lastError=e?.message||String(e);
+      // 通信が切れている場合は、つながるまで待ってから同じ組をやり直す（失敗扱いにしない）
+      if(!navigator.onLine){
+        setStatus("インターネットにつながっていません。つながると自動で続きを読み取ります…");
+        await waitOnline(signal); attempt--; continue;
+      }
+      if(attempt>=2) return; // この組は読み取り失敗として扱う
+      setStatus(`うまく読み取れなかったので送り直します…（${lastError}）`);
+      await sleep(3000,signal);
+    }
+  }
+}
+
+/* ---------- 台詞一覧にまとめる ---------- */
+const norm = s => s.replace(/\s+/g,"");
+const BUBBLE="吹き出し";
+function toRows(states){
+  const out=[]; let lastMain=null, lastBubble="";
+  for(const s of states){
+    if(s.text){
+      const speaker=s.name||NARRATION;
+      if(lastMain && lastMain.speaker===speaker && norm(s.text).startsWith(norm(lastMain.text))){ lastMain.end=s.end; lastMain.text=s.text; }
+      else { lastMain={start:s.start,end:s.end,speaker,text:s.text}; out.push(lastMain); }
+    }
+    const bub=s.bubble||"";
+    if(bub && norm(bub)!==norm(lastBubble)){
+      const prev=out[out.length-1];
+      if(prev && prev.speaker===BUBBLE && norm(bub).startsWith(norm(prev.text))){ prev.text=bub; prev.end=s.end; }
+      else out.push({start:s.start,end:s.end,speaker:BUBBLE,text:bub});
+    }
+    lastBubble=bub;
+  }
+  return out;
+}
+
+/* ---------- 3段階目：吹き出しの話者を推定 ---------- */
+const GUESS_BLOCK=120, GUESS_CONTEXT=15;
+function applyGuesses(list, guesses){
+  if(!guesses) return list;
+  for(const r of list) if(r.speaker===BUBBLE){ const g=guesses[norm(r.text)]; if(g) r.guess=g; }
+  return list;
+}
+async function callGeminiText(prompt, signal){
+  const key=store.get("serifu:key"), model=$("model").value;
+  const gen={temperature:0,responseMimeType:"application/json"};
+  if(/2\.5-flash/.test(model)) gen.thinkingConfig={thinkingBudget:0};
+  const ctl=new AbortController(); let timedOut=false;
+  const onAbort=()=>ctl.abort(); signal.addEventListener("abort",onAbort,{once:true});
+  const timer=setTimeout(()=>{ timedOut=true; ctl.abort(); }, REQUEST_TIMEOUT);
+  try{
+    const res=await fetch(`${API}/${model}:generateContent`,{method:"POST",signal:ctl.signal,
+      headers:{"Content-Type":"application/json","x-goog-api-key":key},
+      body:JSON.stringify({contents:[{role:"user",parts:[{text:prompt}]}],generationConfig:gen})});
+    const j=await res.json().catch(()=>({}));
+    addUsage(j,"話者推定");
+    logApi({kind:"話者推定", status:res.status, ms:0, images:0, model, note:res.ok?"":(j?.error?.message||"").slice(0,160), snippet:JSON.stringify(j?.candidates?.[0]?.content?.parts?.[0]?.text??j).slice(0,300)});
+    if(res.status===429){ const msg=j?.error?.message||""; const e=new QuotaError(msg); e.daily=/per.?day|daily|PerDay/i.test(msg); throw e; }
+    if(!res.ok) throw new Error(j?.error?.message||`HTTP ${res.status}`);
+    const text=(j.candidates?.[0]?.content?.parts||[]).map(p=>p.text||"").join("");
+    return parseJsonArray(text)||[];
+  }catch(e){ if(timedOut && !signal.aborted) throw new Error("Geminiから2分以上応答がありませんでした"); throw e; }
+  finally{ clearTimeout(timer); signal.removeEventListener("abort",onAbort); }
+}
+const GUESS_PROMPT=(names, lines)=>`次はゲームの会話を書き起こしたものです。「？」の行は、名前欄のない吹き出しで表示された台詞です。
+前後の会話の流れ（呼びかけ、返事、口調、一人称、話題）から、「？」の行を誰が言ったかを推定してください。
+登場人物の候補: ${names.join("、")}
+・候補の中から選ぶ。根拠が弱く判断できない場合は name を空文字にする
+・説明は不要。次の形式のJSON配列だけを返す
+[{"n":行番号,"name":"話者名"}]
+
+${lines}`;
+async function guessPhase(job, signal){
+  job.guesses=job.guesses||{}; finishGuesses=job.guesses;
+  const list=toRows(job.states);
+  const names=[...new Set(list.filter(r=>r.speaker!==NARRATION&&r.speaker!==BUBBLE).map(r=>r.speaker))];
+  const targets=list.map((r,i)=>i).filter(i=>list[i].speaker===BUBBLE && !(norm(list[i].text) in job.guesses));
+  if(!names.length || !targets.length){ job.phase="done"; saveJob(job); return; }
+  const blocks=[]; for(let i=0;i<targets.length;){ const startIdx=targets[i]; const ts=[]; while(i<targets.length && targets[i]<startIdx+GUESS_BLOCK) ts.push(targets[i++]); blocks.push(ts); }
+  persistNow=()=>saveJob(job);
+  for(let b=job.gNext||0;b<blocks.length;b++){
+    const ts=blocks[b], from=Math.max(0,ts[0]-GUESS_CONTEXT), to=Math.min(list.length,ts[ts.length-1]+GUESS_CONTEXT+1);
+    const lines=list.slice(from,to).map((r,k)=>{ const n=from+k;
+      return r.speaker===BUBBLE ? `${n}: ？「${r.text}」` : r.speaker===NARRATION ? `${n}: （地の文）${r.text}` : `${n}: ${r.speaker}「${r.text}」`; }).join("\n");
+    setStatus(`吹き出しの話者を推定しています… ${b+1}/${blocks.length}`);
+    for(let attempt=0;;attempt++){
+      const wait=lastCall+MIN_INTERVAL-Date.now(); if(wait>0) await sleep(wait,signal); lastCall=Date.now();
+      try{
+        const arr=await callGeminiText(GUESS_PROMPT(names, lines), signal);
+        for(const it of arr){ const n=Number(it?.n); const nm=String(it?.name??"").trim();
+          if(ts.includes(n)) job.guesses[norm(list[n].text)] = names.includes(nm) ? nm : ""; }
+        break;
+      }catch(e){
+        if(e?.name==="AbortError"||e?.code==="cancelled") throw {code:"cancelled"};
+        if(e instanceof QuotaError){ if(e.daily||attempt>=3) throw e; setStatus("回数制限に達したので、1分待ってから続けます…"); await sleep(60000,signal); continue; }
+        lastError=e?.message||String(e);
+        if(!navigator.onLine){ setStatus("インターネットにつながっていません。つながると自動で続けます…"); await waitOnline(signal); attempt--; continue; }
+        if(attempt>=2) break; // 推定できなかった分は「（吹き出し）」のまま
+        await sleep(3000,signal);
+      }
+    }
+    job.gNext=b+1; saveJob(job);
+    rows=applyGuesses(toRows(job.states), job.guesses); saveResult(); render();
+  }
+  job.phase="done"; persistNow=null; saveJob(job);
+}
+
+/* ---------- 実行と再開 ---------- */
+function blockReason(){
+  if(!store.get("serifu:key")) return "先に「0 準備」でAPIキーを保存してください。";
+  if(!$("model").value) return "モデルが選ばれていません。「0 準備」でキーを保存し直してください。";
+  if(!video.videoWidth) return "録画ファイルが読み込めていません。もう一度ファイルを選んでください。";
+  if(!boxOk()) return "範囲が狭すぎます。上端が下端より上、左端が右端より左になっているか確認してください。";
+  return "";
+}
+function jobProgress(job){
+  if(job.phase==="scan") return `台詞の場面探し ${fmt(Math.max(0, job.scan?.t ?? (job.scan?.i||0)*job.step))} / ${fmt(job.dur)}`;
+  if(job.phase==="guess") return "吹き出しの話者推定";
+  return `読み取り ${job.next||0} / ${Math.ceil(job.states.length/BATCH)}組（全${job.states.length}場面）`;
+}
+function refreshResume(){
+  const job=loadJob(), boxEl=$("resumeBox");
+  const mine = job && job.phase!=="done" && sameRecording(job);
+  const other = job && job.phase!=="done" && !mine;
+  boxEl.hidden = !(mine || other);
+  $("resume").hidden = !mine; $("restart").hidden = !mine;
+  $("start").hidden = !!mine || !!abortCtl;
+  if(mine){
+    const b=job.box, pct=v=>Math.round(v*100);
+    const range=`範囲：上端${pct(b.y1)}%・下端${pct(b.y2)}%・左端${pct(b.x1)}%・右端${pct(b.x2)}%${job.box2?"・吹き出しあり":""}`;
+    const warn=job.lowCount?" ※見つかった場面が少ないため、範囲を直して「最初からやり直す」ことをおすすめします。":"";
+    $("resumeText").textContent=`この録画の途中経過があります（${jobProgress(job)}${job.trial?"・お試し":""}／${range}）。「続きから再開」はこの範囲のまま続けます。範囲を変えた場合は「最初からやり直す」を押してください。${warn}`;
+  }
+  else if(other) $("resumeText").textContent=`別の録画「${job.fileName}」の途中経過があります。その録画を選び直すと続きから再開できます。この録画で新しく始めると、その途中経過は消えます。`;
+}
+function applyJobSettings(job){
+  const b=job.box, set=(id,v)=>{ const el=$(id); el.value=String(v); el.dispatchEvent(new Event("input")); };
+  set("top",Math.round(b.y1*100)); set("bottom",Math.round(b.y2*100)); set("left",Math.round(b.x1*100)); set("right",Math.round(b.x2*100));
+  set("step",job.step); set("stable",job.stable); set("thresh",job.thresh);
+  $("useBubble").checked=!!job.box2; store.set("serifu:useBubble",job.box2?"1":"0"); syncBubbleUI();
+  if(job.box2){ const c=job.box2; set("top2",Math.round(c.y1*100)); set("bottom2",Math.round(c.y2*100)); set("left2",Math.round(c.x1*100)); set("right2",Math.round(c.x2*100)); }
+  drawPreview();
+}
+async function run(job){
+  const why=blockReason(); if(why){ setStatus(why,true); return; }
+  lastError=""; $("errBox").hidden=true; lastJobRef=job; finishGuesses=job.guesses||null;
+  job.usage=job.usage||{in:0,out:0,calls:0}; curUsage=job.usage; showCost();
+  abortCtl=new AbortController(); const signal=abortCtl.signal;
+  $("start").hidden=true; $("resumeBox").hidden=true; $("stop").hidden=false;
+  try{ wakeLock=await navigator.wakeLock?.request("screen"); }catch{}
+  try{
+    try{ await video.play(); video.pause(); }catch{}
+    store.set("serifu:running", JSON.stringify({since:Date.now(), file:job.fileName, phase:job.phase, build:APP_BUILD}));
+    currentStep="台詞の場面探し"; log(`開始：段階=${job.phase} 長さ${Math.round(job.dur)}秒 お試し=${job.trial} 範囲=${JSON.stringify(job.box)} 吹き出し=${JSON.stringify(job.box2||null)} モデル=${$("model").value}`);
+    if(job.phase==="scan") await scanPhase(job, signal);
+    currentStep="切り出しと読み取り";
+    if(!job.states.length){ clearJob(); setStatus("台詞の表示が見つかりませんでした。範囲と場面を確認するか、感度を下げてみてください。",true); return; }
+    if(job.phase==="read") await readPhase(job, signal);
+    currentStep="吹き出しの話者推定";
+    if(job.phase==="guess") await guessPhase(job, signal);
+    finish(job.states, "");
+    if(job.lowCount){
+      setStatus($("status").textContent+" 見つかった場面が少なめです。範囲を会話ウィンドウに絞ってやり直してみてください。それでも少ない場合は、下の診断内容をコピーしてClaudeに送ってください。");
+      reportError({message:"見つかった場面が少ない（診断）", name:"診断"}, "場面探しの結果", job);
+    }
+    clearJob();
+  }catch(e){
+    saveJob(job);
+    const tail="「続きから再開」で止まった地点から続けられます。";
+    if(e?.code==="cancelled") finish(job.states, `中止しました。${tail}`);
+    else if(e instanceof QuotaError) finish(job.states, e.daily ? `今日の無料枠を使い切ったため止めました。明日、${tail}` : `回数制限が続いたため止めました。少し時間をおいてから${tail}`, true);
+    else { setStatus(`エラーで止まりました：${e?.message||e}。${tail}`,true); reportError(e, "読み取り処理"); }
+  }finally{
+    try{ localStorage.removeItem("serifu:running"); }catch{}
+    persistNow=null; $("stop").hidden=true; abortCtl=null;
+    try{ await wakeLock?.release(); }catch{} wakeLock=null;
+    refreshResume();
+  }
+}
+$("start").addEventListener("click", ()=>{
+  if(blockReason()){ setStatus(blockReason(),true); return; }
+  const trial=$("trial").checked;
+  run({key:currentKey, rec:currentRec, fileName, box:box(), box2:box2(), guess:$("guessBubble").checked && !!box2(), guesses:{}, step:+$("step").value, stable:+$("stable").value, thresh:+$("thresh").value,
+       trial, dur: trial?Math.min(180,video.duration):video.duration, phase:"scan",
+       scan:{i:0,regs:[]}, states:[], next:0});
+});
+$("resume").addEventListener("click", ()=>{ const job=loadJob(); if(job){ job.key=currentKey; job.rec=currentRec; applyJobSettings(job); run(job); } });
+$("restart").addEventListener("click", ()=>{ clearJob(); refreshResume(); setStatus("途中経過を消しました。設定を確認して「読み取りを始める」を押してください。"); });
+$("stop").addEventListener("click",()=>abortCtl?.abort());
+let finishGuesses=null;
+function finish(states, prefix, err){
+  const readable=states.filter(s=>s.ok);
+  if(readable.length){ rows=applyGuesses(toRows(states), finishGuesses); saveResult(); render(); }
+  const failed=states.filter(s=>s.tried && !s.ok).length;
+  const tried=states.filter(s=>s.tried).length;
+  const why = lastError ? `理由：${lastError}` : (tried && !readable.some(s=>s.text||s.bubble) ? "読み取った画面に台詞が見つかりませんでした。" : "");
+  const body = readable.length ? `${rows.length}行の台詞を読み取りました。${failed?`（${failed}場面は読み取れていません。${why}）`:""}`
+           : (prefix ? "" : `台詞を読み取れませんでした。${why || "範囲に名前欄と台詞が入っているか確認してください。"}`);
+  if(!prefix) setBar(1);
+  setStatus(`${prefix}${body}`, err || (!readable.length && !prefix));
+}
+
+/* ---------- 表示と書き出し ---------- */
+function render(){
+  $("secResult").hidden=!rows.length;
+  const narr=rows.filter(r=>r.speaker===NARRATION).length;
+  $("resultInfo").textContent=`${fileName}：${rows.length}行（うちナレーション${narr}行）${resultMadeAt?`　作成：${resultMadeAt}`:""}`;
+  const ol=$("lines"); ol.replaceChildren();
+  for(const r of rows){
+    const li=document.createElement("li"); if(r.speaker===NARRATION||r.speaker===BUBBLE) li.className="narr";
+    const p=document.createElement("span"); p.className="plate"; p.textContent=speakerLabel(r);
+    const x=document.createElement("div"); x.className="txt"; x.textContent=r.text;
+    li.append(p,x); ol.append(li);
+  }
+}
+const speakerLabel = r => r.speaker===BUBBLE && r.guess ? `${r.guess}（推定）` : r.speaker;
+const line = r => r.speaker===NARRATION ? `（ナレーション）${r.text}` : r.speaker===BUBBLE ? (r.guess ? `${r.guess}（推定）「${r.text}」` : `（吹き出し）${r.text}`) : `${r.speaker}「${r.text}」`;
+const csvCell = v => `"${String(v).replace(/"/g,'""')}"`;
+const builders = {
+  txt: () => rows.map(line).join("\n")+"\n",
+  srt: () => rows.map((r,i)=>`${i+1}\n${ts(r.start,true)} --> ${ts(Math.max(r.end,r.start+1),true)}\n${r.speaker===NARRATION?r.text:r.speaker===BUBBLE?(r.guess?`【${r.guess}（推定）】${r.text}`:`（吹き出し）${r.text}`):`【${r.speaker}】${r.text}`}\n`).join("\n"),
+  csv: () => "\uFEFF"+[["話者","台詞"],...rows.map(r=>[speakerLabel(r),r.text])].map(a=>a.map(csvCell).join(",")).join("\r\n")+"\r\n",
+};
+const MIME={txt:"text/plain",srt:"application/x-subrip",csv:"text/csv"};
+function showFallback(text){ const ta=$("fallback"); ta.hidden=false; ta.value=text; ta.focus(); ta.select(); }
+document.querySelectorAll("[data-fmt]").forEach(b=>b.addEventListener("click", async ()=>{
+  const f=b.dataset.fmt, data=builders[f]();
+  const file=new File([data],`${fileName}.${f}`,{type:MIME[f]+";charset=utf-8"});
+  try{
+    if(navigator.canShare?.({files:[file]})){ await navigator.share({files:[file]}); return; } // iPhone：共有シートから「ファイルに保存」
+    const a=document.createElement("a"); a.href=URL.createObjectURL(file); a.download=file.name;
+    document.body.append(a); a.click(); a.remove(); setTimeout(()=>URL.revokeObjectURL(a.href),10000);
+  }catch(e){ if(e?.name!=="AbortError") showFallback(data); }
+}));
+$("copy").addEventListener("click", async ()=>{
+  const data=builders.txt();
+  try{ await navigator.clipboard.writeText(data); $("copy").textContent="コピーしました"; setTimeout(()=>$("copy").textContent="テキストをコピー",2000); }
+  catch{ showFallback(data); }
+});
+
+/* ---------- 起動時のお知らせ ---------- */
+(() => {
+  let crashed=null; try{ crashed=JSON.parse(localStorage.getItem("serifu:running")||"null"); }catch{}
+  const job=loadJob(); const msgs=[];
+  if(crashed){
+    log(`前回、処理中にページが閉じられた（${crashed.file}・段階=${crashed.phase}・第${crashed.build}版）`);
+    try{ localStorage.removeItem("serifu:running"); }catch{}
+    msgs.push("前回の読み取り中にページが閉じられました（iPhoneのメモリ不足などでSafariが再読み込みした可能性があります）。");
+  }
+  if(job && job.phase!=="done") msgs.push(`「${job.fileName}」の途中経過が保存されています（${jobProgress(job)}）。同じ録画を選ぶと「続きから再開」が表示されます。`);
+  else if(crashed) msgs.push("途中経過は保存されていませんでした。お手数ですが「困ったとき」の「診断情報をコピー」をClaudeに送ってください。");
+  if(msgs.length){ const n=$("bootNote"); n.textContent=msgs.join(" "); n.hidden=false; }
+})();
+
+/* ---------- 前回の結果を保持 ---------- */
+let resultMadeAt="";
+function stamp(d=new Date()){ const p=n=>String(n).padStart(2,"0"); return `${d.getFullYear()}-${p(d.getMonth()+1)}-${p(d.getDate())} ${p(d.getHours())}:${p(d.getMinutes())}:${p(d.getSeconds())}`; }
+function saveResult(){ resultMadeAt=stamp(); store.set("serifu:last",JSON.stringify({fileName,rows,madeAt:resultMadeAt})); }
+(() => { try{ const d=JSON.parse(store.get("serifu:last")||"null"); if(d?.rows?.length){ fileName=d.fileName; rows=d.rows; resultMadeAt=d.madeAt||""; render(); $("resultInfo").textContent+=`（前回の結果${resultMadeAt?`・${resultMadeAt} 作成`:""}）`; } }catch{} })();
+</script>
+</body>
+</html>

@@ -1,0 +1,17 @@
+// キャラチャットのサーバー設定（Cloudflare Workers）
+// Cloudflare の「Builds」で、Root directory を server にして使います。
+// GEMINI_API_KEY と APP_TOKEN は Cloudflare 側のシークレットに保存済み（ここには書きません）。
+{
+  "name": "chara-chat",
+  "main": "worker.js",
+  "compatibility_date": "2025-09-01",
+  "d1_databases": [
+    {
+      "binding": "DB",
+      "database_name": "chara-chat-db",
+      "database_id": "7e589630-120d-446f-8859-e1dd2178223d"
+    }
+  ],
+  "triggers": { "crons": ["*/15 * * * *"] },
+  "observability": { "enabled": true }
+}

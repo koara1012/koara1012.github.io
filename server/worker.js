@@ -14,7 +14,7 @@
 //    ・Cron トリガー  * * * * *  （毎分。実際に動くのは13分おき）
 // =====================================================================
 
-const VERSION = '第15版（2026-10-15 03:10:00 更新・メッセージを選んで消せる）';
+const VERSION = '第16版（2026-10-15 03:30:00 更新・裏の返事の長さを選べる）';
 const DEFAULT_MODEL = 'gemini-flash-latest';
 const DEFAULT_GROK_MODEL = 'grok-4.7';                 // X（Twitter）の Grok と同じ最新世代
 const FALLBACK_GROK_MODEL = 'grok-4-fast-non-reasoning'; // 上が使えないときの予備
@@ -149,6 +149,7 @@ function normChar(c) {
     uraPrompt: String(c.uraPrompt || '').slice(0, 20000),    // 裏だけの追加設定（関係性など）
     uraScene: String(c.uraScene || '').slice(0, 2000),       // いまの場面
     uraNarration: c.uraNarration !== false,                  // ナレーションを入れるか
+    uraLength: ['short', 'normal', 'long'].includes(c.uraLength) ? c.uraLength : 'normal', // 裏の返事の長さ：短め／ふつう／長め（小説風）
     uraMaxSplit: clamp(Math.round(num(c.uraMaxSplit, 5)), 1, 8),
     // タイムライン用
     affinity: clamp(Math.round(num(c.affinity, 60)), 0, 100),     // あなたとの仲の良さ
@@ -776,11 +777,25 @@ function buildContents(hist, world = 'omote', images = {}) {
 function buildUraSystem(c, tlInfo = '') {
   const own = c.uraCharPrompt && c.uraCharPrompt.trim();
   const alias = !own && c.uraName && c.uraName !== c.name ? `\n（キャラクター設定では「${c.name}」と書かれていますが、この場面では「${c.uraName}」として振る舞います）` : '';
+  const len = c.uraLength || 'normal';
   const narr = c.uraNarration
-    ? `- 情景・キャラクターの動作・表情・しぐさなどの描写（ナレーション）は、先頭に「＊」を付けた別の吹き出しとして書く。三人称・現在形で、1〜3文程度の短さにする。
-- セリフの吹き出しには描写や（ ）書きを混ぜず、キャラクターが口にする言葉だけを書く。
-- ナレーションは場面が伝わるときに挟む程度でよい。毎回入れなくてよい。`
-    : '- ナレーションや地の文、（ ）での動作描写は書かず、キャラクターのセリフだけで表現する。';
+    ? {
+      short: `- 情景・キャラクターの動作・表情・しぐさなどの描写（ナレーション）は、先頭に「＊」を付けた別の吹き出しとして書く。三人称・現在形で、1〜3文程度の短さにする。
+- セリフの吹き出しには描写や（ ）書きを混ぜず、キャラクターが口にする言葉だけを書く。セリフは短めに。
+- ナレーションは場面が伝わるときに挟む程度でよい。毎回入れなくてよい。`,
+      normal: `- 情景・キャラクターの動作・表情・しぐさ・心の動きなどの描写（ナレーション）は、先頭に「＊」を付けた別の吹き出しとして書く。三人称・現在形で、2〜5文ほど。
+- セリフの吹き出しには描写や（ ）書きを混ぜず、キャラクターが口にする言葉だけを書く。気持ちが伝わるよう、ほどよく言葉を尽くす。
+- ほとんどの返答にナレーションを入れ、場面の空気が伝わるようにする。`,
+      long: `- 小説のような、地の文の多い長めの返答にする。全体でおおよそ400〜1000字。
+- 地の文（ナレーション）は先頭に「＊」を付けた吹き出しとして書く。三人称・現在形で、情景・光や音・距離感・表情・しぐさ・キャラクターの心の動きを、段落としてじっくり描く（1つの吹き出しに4〜10文ほど）。地の文の中に「」でキャラクターのセリフを織り交ぜてもよい。
+- 地の文の吹き出しとセリフだけの吹き出しを交互に組み合わせてよい。セリフだけの吹き出しには描写や（ ）書きを混ぜない。
+- これまでの返答が短くても、その長さに合わせず、毎回しっかり描写する。`,
+    }[len]
+    : {
+      short: '- ナレーションや地の文、（ ）での動作描写は書かず、キャラクターのセリフだけで表現する。セリフは短めに。',
+      normal: '- ナレーションや地の文、（ ）での動作描写は書かず、キャラクターのセリフだけで表現する。気持ちが伝わるよう、ほどよく言葉を尽くす。',
+      long: '- ナレーションや地の文、（ ）での動作描写は書かず、キャラクターのセリフだけで表現する。ただし長めに、気持ちや考えをじっくり言葉にする（全体で300〜700字ほど）。これまでの返答が短くても、その長さに合わせない。',
+    }[len];
   return `あなたは次のキャラクターになりきって、ユーザーと「実際に同じ場所で会っている場面」のロールプレイをしています。
 これはスマホのメッセージアプリ（SNS）でのやり取りとは完全に別の時間軸・別の世界線の出来事です。SNSでの会話の内容は知らないものとして振る舞ってください。
 
@@ -833,12 +848,12 @@ function parseMessages(text, maxSplit, label) {
 // 会話履歴は Gemini 用の contents と同じものを受け取り、OpenAI 形式（user / assistant）に変換して送る
 const MSG_SCHEMA = { type: 'object', properties: { messages: { type: 'array', items: { type: 'string' } } }, required: ['messages'], additionalProperties: false };
 
-async function callGrok(env, model, system, contents, maxSplit) {
-  return parseMessages(await grokText(env, model, system, contents, MSG_SCHEMA, 'chat_reply'), maxSplit, 'Grok');
+async function callGrok(env, model, system, contents, maxSplit, opts) {
+  return parseMessages(await grokText(env, model, system, contents, MSG_SCHEMA, 'chat_reply', opts), maxSplit, 'Grok');
 }
 
 // Grok に送って、返答の文字列（JSON）をそのまま返す
-async function grokText(env, model, system, contents, schema, schemaName) {
+async function grokText(env, model, system, contents, schema, schemaName, opts) {
   if (!env.XAI_API_KEY) throw new Error('シークレット XAI_API_KEY が設定されていません');
   const messages = [{ role: 'system', content: system }].concat(
     contents.map((t) => ({
@@ -850,7 +865,7 @@ async function grokText(env, model, system, contents, schema, schemaName) {
   const schemaFormat = { type: 'json_schema', json_schema: { name: schemaName, strict: true, schema } };
   let format = schemaFormat, data, lastErr;
   // 考えるモデル（grok-4.7 など）は、チャットの返事が遅くならないよう思考を軽めにする
-  let effort = /^grok-4\.[5-9]|^grok-[5-9]/.test(model) ? 'low' : null;
+  let effort = /^grok-4\.[5-9]|^grok-[5-9]/.test(model) ? ((opts && opts.effort) || 'low') : null; // 長め（小説風）のときは少し多めに考える
   for (let attempt = 0; attempt < 5; attempt++) {
     const req = { model, messages, temperature: 1.0, response_format: format };
     if (effort) req.reasoning_effort = effort;
@@ -916,9 +931,9 @@ async function callAIObj(env, world, system, contents, schema, schemaName) {
 }
 
 // ---------------------------------------------------------------- 使うAIを選んで呼ぶ
-async function callAI(env, world, system, contents, maxSplit) {
+async function callAI(env, world, system, contents, maxSplit, opts) {
   const st = await getSettings(env);
-  if (providerFor(st, world) === 'grok') return callGrok(env, grokModelFor(env, st), system, contents, maxSplit);
+  if (providerFor(st, world) === 'grok') return callGrok(env, grokModelFor(env, st), system, contents, maxSplit, opts);
   return callGemini(env, system, contents, maxSplit);
 }
 
@@ -971,7 +986,7 @@ async function generateAndStore(env, c, d, hist, lastRead, world = 'omote') {
   const tlInfo = await tlContextForTalk(env, c, world).catch(() => '');
   let texts, rich = null;
   if (ura) {
-    texts = (await callAI(env, 'ura', buildUraSystem(c, tlInfo), buildContents(hist, 'ura'), c.uraMaxSplit + 4))
+    texts = (await callAI(env, 'ura', buildUraSystem(c, tlInfo), buildContents(hist, 'ura'), c.uraMaxSplit + 4, c.uraLength === 'long' ? { effort: 'medium' } : null))
       .flatMap((t) => t.split(/\n(?=\s*[＊*])/)); // ナレーションとセリフが1つにまとまっていたら分ける
   } else {
     const st = await getSettings(env);

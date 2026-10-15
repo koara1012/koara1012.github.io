@@ -322,6 +322,11 @@ body.ura #list.tlMode{background:#efe9f0}
     <div class="field">
       <label class="t">嫉妬する</label>
       <div class="seg" id="edJealous"><button data-v="auto">おまかせ</button><button data-v="yes">する</button><button data-v="no">しない</button></div>
+    </div>
+    <div class="field">
+      <label class="t">返事の早さ（表）</label>
+      <div class="seg" id="edSpeed"><button data-v="auto">おまかせ</button><button data-v="fast">すぐ返す</button><button data-v="normal">ふつう</button><button data-v="slow">のんびり</button></div>
+      <div class="hint">その子が今していること（お風呂・食事・寝ている など）によって、返事が遅れたり、既読だけ付いたりします。ここではその子のもともとの早さを選べます。「おまかせ」ならキャラ設定から判断します。</div>
       <div class="hint">「おまかせ」なら、キャラ設定の文章から嫉妬しやすいかを読み取ります。嫉妬しやすい子だけ、あなたがほかの子とばかり話していると拗ねます。</div>
     </div>
     <div class="field" id="edLifeBox">
@@ -518,6 +523,7 @@ body.ura #list.tlMode{background:#efe9f0}
     <div class="sec">くらし（表のトーク）</div>
     <div class="field">
       <label class="chk"><input type="checkbox" id="stLife"> 記憶・毎日の様子・天気・記念日などを使う</label>
+      <label class="chk"><input type="checkbox" id="stDelay"> その子が今していることに合わせて、返事が遅れたり既読だけ付いたりする</label>
       <label class="chk"><input type="checkbox" id="stImages"> キャラから写真を送る・写真を加工して返す</label>
       <div class="hint">写真は料理や景色だけで、キャラ本人や人物は写しません。写真を作るたびに料金がかかります。</div>
       <label class="t" style="margin-top:10px">あなたの誕生日</label>
@@ -558,7 +564,7 @@ body.ura #list.tlMode{background:#efe9f0}
 
 <script>
 'use strict';
-const APP_VERSION = '第17版（2026-10-15 14:40:00 更新・共通の世界観（舞台・用語））';
+const APP_VERSION = '第18版（2026-10-16 03:30:00 更新・1日の予定表で返事・話しかけ・TLが動く）';
 const $ = (id) => document.getElementById(id);
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 const esc = (s) => String(s).replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
@@ -595,6 +601,8 @@ const S = {
   hidden: new Set(),      // 「入力中…」のあと表示する予定のメッセージ
   typingFor: null,        // 入力中表示を出しているキャラ
   replyBusy: {}, replyAgain: {}, synced: false,
+  replyLive: {},          // 相手が今まさに読んで返事を打っている
+  charRead: {},           // 表：返事はまだだが、相手がここまで読んだ（既読）時刻
   world: store.get('chat.world', 'omote') === 'ura' ? 'ura' : 'omote', // 表 / 裏
   mode: store.get('chat.mode', 'talk') === 'tl' ? 'tl' : 'talk',      // トーク / タイムライン
   tl: { omote: null, ura: null },  // タイムライン（世界ごとに完全に別）
@@ -640,7 +648,7 @@ async function sync() {
     let more = true;
     while (more) {
       const d = await api('GET', '/sync?since=' + S.maxId);
-      S.chars = d.chars; S.reads = d.reads || {}; S.settings = d.settings || S.settings;
+      S.chars = d.chars; S.reads = d.reads || {}; S.charRead = d.charRead || {}; S.settings = d.settings || S.settings;
       const fresh = [];
       for (const m of d.messages) if (addMsg(m)) fresh.push(m);
       applyRetracted(d.retracted || []);
@@ -774,11 +782,17 @@ function scheduleReply(charId) {
 async function requestReply(charId) {
   if (S.replyBusy[charId]) { S.replyAgain[charId] = true; return; }
   S.replyBusy[charId] = true;
-  const t0 = Date.now();
-  renderAll(true); // 既読をつける
-  await sleep(500 + Math.random() * 900);
-  if (S.view === 'chat' && curKey() === charId && !revealing) setTyping(charId);
+  let t0 = Date.now();
   try {
+    // 表：相手が今すぐ読めるかを先に聞く。今は手が離せないなら、既読も付かず、あとで返事が届く
+    if (!isUraKey(charId)) {
+      const dd = await api('POST', '/reply/decide', { charId });
+      if (!dd.now) return;
+    }
+    S.replyLive[charId] = true; t0 = Date.now();
+    renderAll(true); // 既読をつける
+    await sleep(500 + Math.random() * 900);
+    if (S.view === 'chat' && curKey() === charId && !revealing) setTyping(charId);
     const d = await api('POST', '/reply', { charId });
     if (d.delayed) { setTyping(null); return; } // 相手が忙しくて、まだ読んでいない（あとで返事が届く）
     const fresh = d.messages.filter((m) => addMsg(m) || S.hidden.has(m.id));
@@ -789,7 +803,7 @@ async function requestReply(charId) {
     setTyping(null);
     toast('返信を作れませんでした：' + e.message, 4000);
   } finally {
-    S.replyBusy[charId] = false;
+    S.replyBusy[charId] = false; S.replyLive[charId] = false;
     renderAll(true);
     if (S.replyAgain[charId]) {
       S.replyAgain[charId] = false;
@@ -899,7 +913,8 @@ function renderChat(keepPos, forceBottom) {
   let lastCharIdx = -1;
   (S.msgs[k] || []).forEach((m, i) => { if (m.sender !== 'me') lastCharIdx = i; });
   const all = S.msgs[k] || [];
-  const readUpTo = S.replyBusy[k] || S.typingFor === k ? Infinity : lastCharIdx;
+  const readUpTo = S.replyLive[k] || S.typingFor === k ? Infinity : lastCharIdx;
+  const readAt = S.charRead[k] || 0;
   let html = '', prevDay = '', prev = null;
   for (const m of v) {
     const dk = dayKey(m.at);
@@ -909,7 +924,7 @@ function renderChat(keepPos, forceBottom) {
       html += `<div class="narr ${m.text.length > 70 ? 'long' : ''}" data-id="${esc(m.id)}">${esc(m.text)}</div>`;
     } else if (m.sender === 'me') {
       const idx = all.indexOf(m);
-      const read = !m.pending && !m.failed && idx < readUpTo;
+      const read = !m.pending && !m.failed && (idx < readUpTo || m.at <= readAt);
       const meta = m.failed ? '<span>送信失敗</span>' : m.pending ? '<span>送信中</span>' : `${read ? '<span>既読</span>' : ''}<span>${hm(m.at)}</span>`;
       html += `<div class="msg me ${m.failed ? 'fail' : ''}" data-id="${esc(m.id)}"><div class="meta">${meta}</div>${bubHTML(m)}</div>`;
     } else {
@@ -1340,6 +1355,7 @@ function openEdit(id) {
   $('edUraTlPer').value = def(c && c.uraTlPerDay, 1);
   $('edNewsKw').value = c ? c.newsKeywords || '' : '';
   edit.jealous = c && c.jealous ? c.jealous : 'auto';
+  edit.replySpeed = c && c.replySpeed ? c.replySpeed : 'auto';
   $('edLifeBox').style.display = c ? '' : 'none';
   if (c) loadLife(c.id);
   edit.uraNarration = c ? c.uraNarration !== false : true;
@@ -1380,6 +1396,7 @@ function syncEditLabels() {
   $('edUraLen').querySelectorAll('button').forEach((b) => b.classList.toggle('on', b.dataset.v === (edit.uraLength || 'normal')));
   $('edTyping').querySelectorAll('button').forEach((b) => b.classList.toggle('on', b.dataset.v === edit.typing));
   $('edJealous').querySelectorAll('button').forEach((b) => b.classList.toggle('on', b.dataset.v === (edit.jealous || 'auto')));
+  $('edSpeed').querySelectorAll('button').forEach((b) => b.classList.toggle('on', b.dataset.v === (edit.replySpeed || 'auto')));
 }
 function drawEditIcon() {
   const el = $('edIcon');
@@ -1412,7 +1429,7 @@ async function saveEdit() {
     uraName: $('edUraName').value.trim(), uraCharPrompt: $('edUraCharPrompt').value, uraPrompt: $('edUraPrompt').value, uraScene: $('edUraScene').value,
     uraNarration: edit.uraNarration, uraLength: edit.uraLength || 'normal', uraMaxSplit: +$('edUraSplit').value,
     affinity: +$('edAff').value, snsActivity: +$('edAct').value, tlPerDay: +$('edTlPer').value, uraTlPerDay: +$('edUraTlPer').value,
-    newsKeywords: $('edNewsKw').value.trim(), jealous: edit.jealous || 'auto',
+    newsKeywords: $('edNewsKw').value.trim(), jealous: edit.jealous || 'auto', replySpeed: edit.replySpeed || 'auto',
   };
   if (edit.icon !== undefined) char.icon = edit.icon;
   if (edit.uraIcon !== undefined) char.uraIcon = edit.uraIcon;
@@ -1515,7 +1532,7 @@ function openSettings() {
   aiProv = { omote: S.settings.omoteProvider === 'grok' ? 'grok' : 'gemini', ura: S.settings.uraProvider === 'gemini' ? 'gemini' : 'grok' };
   $('stGrokModel').value = S.settings.grokModel || '';
   $('stNews').checked = S.settings.newsEnabled !== false;
-  $('stLife').checked = S.settings.lifeEnabled !== false; $('stImages').checked = S.settings.imagesEnabled !== false;
+  $('stLife').checked = S.settings.lifeEnabled !== false; $('stImages').checked = S.settings.imagesEnabled !== false; $('stDelay').checked = S.settings.delayEnabled !== false;
   const two = (n) => String(n).padStart(2, '0');
   $('stBdM').innerHTML = '<option value="">--</option>' + Array.from({ length: 12 }, (_, i) => `<option value="${two(i + 1)}">${i + 1}</option>`).join('');
   $('stBdD').innerHTML = '<option value="">--</option>' + Array.from({ length: 31 }, (_, i) => `<option value="${two(i + 1)}">${i + 1}</option>`).join('');
@@ -1779,6 +1796,7 @@ $('msgs').addEventListener('click', (e) => {
 $('edUraLen').addEventListener('click', (e) => { const b = e.target.closest('button'); if (b) { edit.uraLength = b.dataset.v; syncEditLabels(); } });
 $('edUraNarr').addEventListener('click', (e) => { const b = e.target.closest('button'); if (b) { edit.uraNarration = b.dataset.v === '1'; syncEditLabels(); } });
 $('edTyping').addEventListener('click', (e) => { const b = e.target.closest('button'); if (b) { edit.typing = b.dataset.v; syncEditLabels(); } });
+$('edSpeed').addEventListener('click', (e) => { const b = e.target.closest('button'); if (b) { edit.replySpeed = b.dataset.v; syncEditLabels(); } });
 $('edJealous').addEventListener('click', (e) => { const b = e.target.closest('button'); if (b) { edit.jealous = b.dataset.v; syncEditLabels(); } });
 $('edMems').addEventListener('click', async (e) => {
   const b = e.target.closest('[data-mem]'); if (!b) return;
@@ -1803,7 +1821,7 @@ document.addEventListener('click', (e) => {
 $('stLifeSave').onclick = async () => {
   const m = $('stBdM').value, d = $('stBdD').value;
   try {
-    const r = await api('POST', '/settings', { settings: { lifeEnabled: $('stLife').checked, imagesEnabled: $('stImages').checked, birthday: m && d ? `${m}-${d}` : '' } });
+    const r = await api('POST', '/settings', { settings: { lifeEnabled: $('stLife').checked, imagesEnabled: $('stImages').checked, delayEnabled: $('stDelay').checked, birthday: m && d ? `${m}-${d}` : '' } });
     S.settings = r.settings; toast('くらしの設定を保存しました');
   } catch (err) { toast(err.message); }
 };

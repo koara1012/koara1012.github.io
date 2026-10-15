@@ -14,7 +14,7 @@
 //    ・Cron トリガー  * * * * *  （毎分。実際に動くのは13分おき）
 // =====================================================================
 
-const VERSION = '第16版（2026-10-15 03:30:00 更新・裏の返事の長さを選べる）';
+const VERSION = '第17版（2026-10-15 14:40:00 更新・共通の世界観（舞台・用語））';
 const DEFAULT_MODEL = 'gemini-flash-latest';
 const DEFAULT_GROK_MODEL = 'grok-4.7';                 // X（Twitter）の Grok と同じ最新世代
 const FALLBACK_GROK_MODEL = 'grok-4-fast-non-reasoning'; // 上が使えないときの予備
@@ -106,6 +106,49 @@ async function kvGet(env, k, def) {
 }
 async function kvSet(env, k, v) {
   await env.DB.prepare('INSERT INTO kv (k,v) VALUES (?,?) ON CONFLICT(k) DO UPDATE SET v=excluded.v').bind(k, JSON.stringify(v)).run();
+}
+
+// ---------------------------------------------------------------- 共通の世界観（全キャラ共通・表裏共通）
+// 項目はあとから増やせるように一覧で持つ。今は「舞台」と「用語」
+const WORLD_SECTIONS = [
+  { key: 'stage', title: '舞台', hint: '物語の舞台・時代・場所・暮らしている施設や部屋の様子など' },
+  { key: 'terms', title: '用語', hint: '1行に1つ「用語：説明」の形で' },
+];
+const WORLD_MAX = 20000; // 1項目あたりの上限（文字）
+let worldMemo = null;
+async function loadWorld(env) {
+  if (worldMemo && Date.now() - worldMemo.at < 60e3) return worldMemo.v;
+  const v = await kvGet(env, 'worldbook', {});
+  worldMemo = { at: Date.now(), v };
+  return v;
+}
+function normWorld(body) {
+  const v = {};
+  for (const s of WORLD_SECTIONS) v[s.key] = String((body && body[s.key]) || '').replace(/\r\n?/g, '\n').trim().slice(0, WORLD_MAX);
+  return v;
+}
+// 用語は、量が少なければ全部、多ければ今の話に出てくる言葉の分だけ渡す
+function pickTerms(text, ctx) {
+  const lines = String(text || '').split('\n').map((l) => l.trim()).filter(Boolean);
+  if (text.length <= 1500) return lines.join('\n');
+  const c = String(ctx || '');
+  return lines.filter((l) => {
+    const m = l.match(/^(.+?)\s*[：:]/);
+    if (!m) return true; // 「用語：説明」の形でない行は、いつも渡す
+    return m[1].split(/[／/、,・]/).map((w) => w.trim()).filter((w) => w.length >= 1).some((w) => c.includes(w));
+  }).join('\n');
+}
+// AIへの指示の先頭に付ける。毎回同じ文章で始まるので、割引（キャッシュ）も効きやすい
+async function worldBlock(env, ctx) {
+  let w;
+  try { w = await loadWorld(env); } catch (_) { return ''; }
+  const parts = [];
+  for (const s of WORLD_SECTIONS) {
+    const t = s.key === 'terms' ? pickTerms(w[s.key] || '', ctx) : (w[s.key] || '').trim();
+    if (t) parts.push(`## ${s.title}\n${t}`);
+  }
+  if (!parts.length) return '';
+  return `# 作品の世界観（登場するキャラクター全員に共通。キャラクター個人の設定と食い違うときは個人の設定を優先する）\n${parts.join('\n\n')}\n\n`;
 }
 
 async function log(env, msg) {
@@ -312,6 +355,17 @@ async function route(key, url, body, env, ctx) {
         env.DB.prepare('DELETE FROM reads WHERE char_id=?').bind(key),
       ]);
       return json({ ok: true });
+    }
+
+    case 'GET /world': { // 共通の世界観
+      return json({ world: normWorld(await loadWorld(env)), sections: WORLD_SECTIONS, max: WORLD_MAX });
+    }
+
+    case 'POST /world': {
+      const v = normWorld(body.world || {});
+      await kvSet(env, 'worldbook', v);
+      worldMemo = { at: Date.now(), v };
+      return json({ ok: true, world: v });
     }
 
     case 'POST /messages/delete': { // 選んだメッセージだけ消す（表・裏それぞれ）
@@ -986,7 +1040,8 @@ async function generateAndStore(env, c, d, hist, lastRead, world = 'omote') {
   const tlInfo = await tlContextForTalk(env, c, world).catch(() => '');
   let texts, rich = null;
   if (ura) {
-    texts = (await callAI(env, 'ura', buildUraSystem(c, tlInfo), buildContents(hist, 'ura'), c.uraMaxSplit + 4, c.uraLength === 'long' ? { effort: 'medium' } : null))
+    const wb = await worldBlock(env, c.prompt + '\n' + (c.uraCharPrompt || '') + '\n' + (c.uraScene || '') + '\n' + hist.slice(-20).map((m) => m.text).join('\n'));
+    texts = (await callAI(env, 'ura', wb + buildUraSystem(c, tlInfo), buildContents(hist, 'ura'), c.uraMaxSplit + 4, c.uraLength === 'long' ? { effort: 'medium' } : null))
       .flatMap((t) => t.split(/\n(?=\s*[＊*])/)); // ナレーションとセリフが1つにまとまっていたら分ける
   } else {
     const st = await getSettings(env);
@@ -1004,7 +1059,8 @@ async function generateAndStore(env, c, d, hist, lastRead, world = 'omote') {
       typo: st.lifeEnabled && !special && Math.random() < 0.05,
       retract: st.lifeEnabled && !special && Math.random() < 0.05,
     };
-    const system = buildSystem(c, special ? { ...d } : d, hist, now, tlInfo, lifeInfo);
+    const wb = await worldBlock(env, c.prompt + '\n' + hist.slice(-20).map((m) => m.text).join('\n'));
+    const system = wb + buildSystem(c, special ? { ...d } : d, hist, now, tlInfo, lifeInfo);
     const contents = buildContents(hist, 'omote', images);
     if (opt.news || opt.photo || opt.edit || opt.typo || opt.retract || special) {
       rich = await callOmoteRich(env, { ...c, maxSplit: special ? 2 : c.maxSplit }, d, system, contents, opt);
@@ -1213,7 +1269,7 @@ ${charPersona(c, world, 2000)}`).join('\n\n')}
 - bond: 投稿者との親しさ。投稿者がユーザーなら、そのキャラクターのユーザーへの好意の強さ。
 - note: 反応するとしたら、どんな気持ちで何に触れそうか（20字以内）。
 すべてのキャラクターについて、idはそのまま返してください。`;
-  const r = await aiJson(env, world, system, user, SCORE_SCHEMA, 'tl_scores');
+  const r = await aiJson(env, world, (await worldBlock(env, system + '\n' + user)) + system, user, SCORE_SCHEMA, 'tl_scores');
   const out = {};
   for (const s of (r && r.scores) || []) if (s && s.id) out[String(s.id)] = s;
   return out;
@@ -1326,7 +1382,7 @@ ${replyTo ? `\n# あなたが返信するコメント\n${nameOf(replyTo.author)}
 ${await talkContext(env, c, world)}
 ${note ? `\n# 反応の方向性\n${note}\n` : ''}
 ${replyTo ? 'このコメントへの返信を書いてください。' : 'この投稿へのコメントを書いてください。'}`;
-  const r = await aiJson(env, world, system, user, TEXT_SCHEMA, 'tl_comment');
+  const r = await aiJson(env, world, (await worldBlock(env, system + '\n' + user)) + system, user, TEXT_SCHEMA, 'tl_comment');
   const text = String((r && r.text) || '').trim();
   if (!text) throw new Error('コメントが空でした');
   return text.slice(0, 500);
@@ -1368,7 +1424,7 @@ ${await talkContext(env, c, world)}
 ${life ? life.info + '\n\n# 今回の投稿のテーマ\n' + life.hint + '\n' : ''}${world === 'omote' && isQuiet(now, st) ? '\n# 時間帯\n' + nightNote(now).replace(/相手は[^。]*。/, '') + 'テーマより時間帯らしさを優先してよい。\n' : ''}
 この世界のSNSに、新しい投稿を1つ書いてください。`;
   const schema = life && life.photo ? PHOTO_POST_SCHEMA : TEXT_SCHEMA;
-  const r = await aiJson(env, world, system, user, schema, 'tl_post');
+  const r = await aiJson(env, world, (await worldBlock(env, system + '\n' + user)) + system, user, schema, 'tl_post');
   const text = String((r && r.text) || '').trim();
   if (!text) throw new Error('投稿が空でした');
   if (life && life.done) await life.done();
@@ -1663,7 +1719,7 @@ done：上の「まだ結果を聞いていない」もののうち、今回の�
 user_state：今回のやり取りから見えるユーザーの様子（疲れている・元気がない・忙しそう・機嫌がいい・夜更かし など）を1文。特になければ ""。
 affinity_delta：今回のやり取りで、キャラクターから見たユーザーとの距離がどう変わったか。-3〜+3（ふつうは 0 か +1。冷たくされたら −）。
 birthday：ユーザーが自分の誕生日を言っていれば "MM-DD"、なければ ""。`;
-  const r = await aiJson(env, 'omote', system, user, EXTRACT_SCHEMA, 'memory_extract');
+  const r = await aiJson(env, 'omote', (await worldBlock(env, user)) + system, user, EXTRACT_SCHEMA, 'memory_extract');
   const stmts = [];
   for (const m of (r && r.new) || []) {
     const kind = MEM_KINDS.includes(m.kind) ? m.kind : null;
@@ -1747,7 +1803,7 @@ ${mems.filter((m) => m.kind === 'fact').slice(0, 10).map((m) => '- ' + m.text).j
       ? 'キャラクターの身の回りで、何日かかけて進む小さな出来事を新しく始める（例「猫を拾った」「料理の練習を始めた」「友達の誕生日プレゼントを選んでいる」）。story_title に題名、story_update に最初の様子。story_finished は false。'
       : '今日は新しい出来事を始めない。story_title と story_update は ""、story_finished は false。'}
 - busy：今日の忙しさ 0〜100。`;
-  const r = await aiJson(env, 'omote', system, user, DAILY_SCHEMA, 'daily_life');
+  const r = await aiJson(env, 'omote', (await worldBlock(env, user)) + system, user, DAILY_SCHEMA, 'daily_life');
   state.day = today;
   state.mood = String(r.mood || '').slice(0, 60);
   state.moodReason = String(r.mood_reason || '').slice(0, 80);

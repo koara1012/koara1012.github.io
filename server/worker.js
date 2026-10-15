@@ -14,7 +14,7 @@
 //    ・Cron トリガー  * * * * *  （毎分。実際に動くのは13分おき）
 // =====================================================================
 
-const VERSION = '第17版（2026-10-15 14:40:00 更新・共通の世界観（舞台・用語））';
+const VERSION = '第18版（2026-10-16 03:30:00 更新・1日の予定表で返事・話しかけ・TLが動く）';
 const DEFAULT_MODEL = 'gemini-flash-latest';
 const DEFAULT_GROK_MODEL = 'grok-4.7';                 // X（Twitter）の Grok と同じ最新世代
 const FALLBACK_GROK_MODEL = 'grok-4-fast-non-reasoning'; // 上が使えないときの予備
@@ -57,6 +57,7 @@ export default {
   async scheduled(event, env, ctx) {
     // Cronの書き方では「13分ごと」をぴったり指定できないので、毎分呼ばれて13分おきのときだけ動く
     const minute = Math.floor(Number(event && event.scheduledTime) / 60000);
+    ctx.waitUntil(runDueReplies(env).catch((e) => log(env, 'あとで返す返事: ' + e.message))); // 予約した返事は毎分確認（軽い）
     if (Number.isFinite(minute) && minute % TICK_MIN !== 0) return;
     ctx.waitUntil(tick(env).catch((e) => log(env, 'tick全体: ' + e.message)));
   },
@@ -165,7 +166,7 @@ const DEFAULT_SETTINGS = {
   quietEnabled: true, quietStart: 1, quietEnd: 7, omoteProvider: 'gemini', uraProvider: 'grok', grokModel: '',
   meName: '', meNameUra: '', meIconVer: 0, meUraIconVer: 0, // あなたのTLでの名前（表・裏）とアイコンの版
   newsEnabled: true, // 表で話題を切り替えるとき、最近のニュースも話題にする
-  lifeEnabled: true, imagesEnabled: true, birthday: '', // くらし（記憶・毎日の様子など）、写真、あなたの誕生日 MM-DD
+  lifeEnabled: true, imagesEnabled: true, delayEnabled: true, birthday: '', // くらし（記憶・毎日の様子など）、写真、あなたの誕生日 MM-DD
   weatherLat: 35.927, weatherLon: 139.604, weatherPlace: '埼玉県さいたま市北区日進町',
 };
 async function getSettings(env) {
@@ -200,6 +201,7 @@ function normChar(c) {
     tlPerDay: clamp(num(c.tlPerDay, 2), 0, 12),                   // 表のTLに自分から投稿する回数（1日の目安）
     uraTlPerDay: clamp(num(c.uraTlPerDay, 1), 0, 12),             // 裏のTLに投稿する回数
     newsKeywords: String(c.newsKeywords || '').slice(0, 200),     // 興味のあるニュースのキーワード（空ならキャラ設定からAIが考える）
+    replySpeed: ['fast', 'normal', 'slow'].includes(c.replySpeed) ? c.replySpeed : 'auto', // 返事の早さ：おまかせ（設定から判断）／すぐ返す／ふつう／のんびり
     jealous: ['yes', 'no'].includes(c.jealous) ? c.jealous : 'auto', // 嫉妬する：おまかせ（設定から判断）／する／しない
   };
 }
@@ -278,9 +280,13 @@ async function route(key, url, body, env, ctx) {
       const { results: rr } = await env.DB.prepare('SELECT char_id,at FROM reads').all();
       const reads = Object.fromEntries(rr.map((r) => [r.char_id, r.at]));
       const { results: rt } = await env.DB.prepare('SELECT id FROM messages WHERE retracted=1 AND at>?').bind(Date.now() - 7 * 864e5).all();
+      // 表：返事はまだだけど、もう読んだ（既読だけ付いている）
+      const charRead = {};
+      const { results: pr } = await env.DB.prepare("SELECT v FROM kv WHERE k LIKE 'reply:%'").all();
+      for (const r of pr) { try { const p = JSON.parse(r.v); if (p.readAt <= Date.now()) charRead[p.key] = p.readAt; } catch (_) {} }
       // アプリの表示用に、記憶ではない原文は返さない
       messages = messages.map((m) => { const { origText, ...rest } = m; return rest; });
-      return json({ chars, messages, more, reads, retracted: rt.map((r) => r.id), settings: await getSettings(env), now: Date.now(), version: VERSION });
+      return json({ chars, messages, more, reads, charRead, retracted: rt.map((r) => r.id), settings: await getSettings(env), now: Date.now(), version: VERSION });
     }
 
     case 'GET /icons': {
@@ -333,6 +339,7 @@ async function route(key, url, body, env, ctx) {
       const id = url.searchParams.get('id') || '';
       await env.DB.batch([
         env.DB.prepare('DELETE FROM chars WHERE id=?').bind(id),
+        env.DB.prepare('DELETE FROM kv WHERE k IN (?,?,?)').bind('reply:' + id, 'rhythm:' + id, 'jealous:' + id),
         env.DB.prepare('DELETE FROM messages WHERE char_id=? OR char_id=?').bind(id, id + URA),
         env.DB.prepare('DELETE FROM reads WHERE char_id=? OR char_id=?').bind(id, id + URA),
         env.DB.prepare('DELETE FROM ura_icons WHERE char_id=?').bind(id),
@@ -353,6 +360,7 @@ async function route(key, url, body, env, ctx) {
       await env.DB.batch([
         env.DB.prepare('DELETE FROM messages WHERE char_id=?').bind(key),
         env.DB.prepare('DELETE FROM reads WHERE char_id=?').bind(key),
+        env.DB.prepare('DELETE FROM kv WHERE k=?').bind('reply:' + key),
       ]);
       return json({ ok: true });
     }
@@ -407,25 +415,31 @@ async function route(key, url, body, env, ctx) {
       const hist = await recent(env, key, 60);
       const last = hist[hist.length - 1];
       if (!last || last.sender !== 'me') return json({ messages: [] });
-      // 表：ときどき、忙しくてすぐには読めない（あとでサーバーが返事をする）
-      if (world === 'omote') {
-        const st = await getSettings(env);
-        const state = await getState(env, c.id);
-        const now = Date.now();
-        if (state.busyUntil && now < state.busyUntil) return json({ messages: [], delayed: true });
-        const firstOfBurst = hist.length - 1 - hist.map((m) => m.sender).lastIndexOf('char') === 1; // 続けて送られた最初のメッセージのときだけ
-        if (st.lifeEnabled && firstOfBurst && !last.image && hist.some((m) => m.sender === 'char')) {
-          const h = jstParts(now).h;
-          const pBusy = 0.1 + nz(state.busy, 30) / 100 * 0.2 + (h >= 1 && h < 7 ? 0.25 : 0);
-          if (Math.random() < pBusy) {
-            state.busyUntil = now + (4 + Math.random() * 40) * MIN;
-            await setState(env, c.id, state);
-            return json({ messages: [], delayed: true });
-          }
+      // 表：その子が今していることによって、すぐ返す／あとで返す（あとで返す分はサーバーが毎分確認して送る）
+      const d = { mode: 'reply' };
+      if (world === 'omote' && delayOn(await getSettings(env))) {
+        const t = await decideReply(env, c, hist, Date.now());
+        await env.DB.prepare('DELETE FROM kv WHERE k=?').bind('replygo:' + c.id).run();
+        if (!t.now) return json({ messages: [], delayed: true });
+        if (t.pend) { // 予約の時間が来ていた
+          const claimed = await env.DB.prepare('DELETE FROM kv WHERE k=? RETURNING k').bind('reply:' + c.id).first();
+          if (!claimed) return json({ messages: [], delayed: true }); // ほかの処理がもう返している
+          d.late = t.pend;
         }
       }
-      const msgs = await generateAndStore(env, c, { mode: 'reply' }, hist, await getRead(env, key), world);
+      const msgs = await generateAndStore(env, c, d, hist, await getRead(env, key), world);
       return json({ messages: msgs });
+    }
+
+    case 'POST /reply/decide': { // 表：すぐ返すかどうかだけ先に決める（アプリが「既読」「入力中…」を出すため）
+      const { base, world, key } = splitCid(body.charId);
+      const c = await getChar(env, base);
+      if (world !== 'omote' || !delayOn(await getSettings(env))) return json({ now: true });
+      const hist = await recent(env, key, 60);
+      const last = hist[hist.length - 1];
+      if (!last || last.sender !== 'me') return json({ now: false });
+      const t = await decideReply(env, c, hist, Date.now());
+      return json({ now: !!t.now });
     }
 
     case 'POST /read': {
@@ -464,6 +478,7 @@ async function route(key, url, body, env, ctx) {
       if ('newsEnabled' in s) v.newsEnabled = !!s.newsEnabled;
       if ('lifeEnabled' in s) v.lifeEnabled = !!s.lifeEnabled;
       if ('imagesEnabled' in s) v.imagesEnabled = !!s.imagesEnabled;
+      if ('delayEnabled' in s) v.delayEnabled = !!s.delayEnabled;
       if ('birthday' in s) v.birthday = /^\d{2}-\d{2}$/.test(String(s.birthday)) ? String(s.birthday) : '';
       if (s.notify && typeof s.notify === 'object') {
         for (const k of Object.keys(NOTIFY_DEFAULT)) if (k in s.notify) v.notify[k] = !!s.notify[k];
@@ -640,7 +655,7 @@ function isQuiet(ts, s) {
 }
 
 // 戻り値: null（送らない）または { mode, ... }
-function decide(c, hist, lastRead, now, settings, force = false) {
+function decide(c, hist, lastRead, now, settings, force = false, factor = 1) {
   const last = hist[hist.length - 1];
   if (!force && last && last.sender === 'me') {
     return now - last.at > REPLY_WAIT ? { mode: 'reply' } : null; // アプリが閉じられて返信しそびれた分
@@ -650,7 +665,7 @@ function decide(c, hist, lastRead, now, settings, force = false) {
     if (last && now - last.at < 20 * 60 * 1000) return null; // 会話の直後は割り込まない
   }
   const activeTicks = Math.max(1, ((24 - quietSpan(settings)) * 60) / TICK_MIN);
-  const p = (c.perDay / activeTicks) * (!force && isQuiet(now, settings) ? QUIET_RATE : 1); // 1回のCronで話しかける確率（静かな時間は大幅に下げる）
+  const p = (c.perDay / activeTicks) * (!force && isQuiet(now, settings) ? QUIET_RATE : 1) * (force ? 1 : factor); // 1回のCronで話しかける確率（静かな時間は大幅に下げる・今していることで変わる）
   const roll = (q) => force || Math.random() < q;
 
   if (!last) return roll(p * 4) ? { mode: 'first' } : null;
@@ -696,12 +711,19 @@ async function tick(env) {
       const hist = await recent(env, c.id, 60);
       const lastRead = await getRead(env, c.id);
       let d = await lifeDecide(env, c, hist, lastRead, now, settings, ctxAll).catch((e) => { log(env, `くらし（${c.name}）: ${e.message}`); return null; });
+      let boost = { f: 1 };
       if (!d) {
-        const state = await getState(env, c.id);
-        d = decide(c, hist, lastRead, now, settings);
-        if (d && d.mode === 'reply' && state.busyUntil && now < state.busyUntil) d = null; // まだ忙しい
+        boost = await activityBoost(env, c, settings, now).catch(() => ({ f: 1 }));
+        d = decide(c, hist, lastRead, now, settings, false, boost.f);
+        if (d && d.mode === 'reply' && delayOn(settings)) { // アプリが閉じられて返事をもらいそびれた分も、予定に合わせて返す
+          const t = await decideReply(env, c, hist, now);
+          await env.DB.prepare('DELETE FROM kv WHERE k=?').bind('replygo:' + c.id).run();
+          if (!t.now) d = null;
+          else if (t.pend) { await env.DB.prepare('DELETE FROM kv WHERE k=?').bind('reply:' + c.id).run(); d.late = t.pend; }
+        }
       }
       if (!d) continue;
+      if (d.mode !== 'reply' && boost.justDone) d.justDone = boost.justDone;
       if (d.mode !== 'reply' && isQuiet(now, settings)) d.night = true; // 深夜・早朝らしい内容に
       if (d.mode === 'topic') await attachNews(env, c, d, settings); // ときどき最近のニュースも話題の候補に
       if (d.mode === 'topic' && settings.lifeEnabled) await chooseFlavor(env, c, d, settings, now);
@@ -795,7 +817,7 @@ ${tlInfo}${lifeInfo}
 ${fmtTime(now)}
 
 # 今の状況
-${situation(d, hist, now)}${d.night ? '\n' + nightNote(now) : ''}
+${situation(d, hist, now)}${d.night ? '\n' + nightNote(now) : ''}${d.mode === 'reply' && d.late ? '\n' + lateNote(d.late, hist, now) : ''}${d.justDone ? `\n（ちょうど「${d.justDone}」が終わって、ひと段落したところ。それをきっかけに話しかけてもよい）` : ''}
 
 出力は {"messages": ["吹き出し1", "吹き出し2"]} の形のJSONのみ。`;
 }
@@ -1304,8 +1326,8 @@ async function planReactions(env, post) {
     const doComment = Math.random() < pComment;
     const doLike = Math.random() < (doComment ? Math.min(0.97, pLike + 0.25) : pLike);
     const note = String(s.note || '').slice(0, 60);
-    if (doLike) plan.push({ c, kind: 'like', due: deferQuiet(now + reactDelay(x, false), st, world, undefined, post.at), x });
-    if (doComment) plan.push({ c, kind: 'comment', due: deferQuiet(now + reactDelay(x, true), st, world, undefined, post.at), note, x });
+    if (doLike) plan.push({ c, kind: 'like', due: await schedDue(env, c.id, deferQuiet(now + reactDelay(x, false), st, world, undefined, post.at), post, st), x });
+    if (doComment) plan.push({ c, kind: 'comment', due: await schedDue(env, c.id, deferQuiet(now + reactDelay(x, true), st, world, undefined, post.at), post, st), note, x });
   }
   if (plan.length) {
     await env.DB.batch(plan.map((j) => env.DB.prepare('INSERT INTO tl_jobs (world,char_id,kind,post_id,comment_id,due,note) VALUES (?,?,?,?,NULL,?,?)')
@@ -1336,7 +1358,7 @@ async function planReplyToMe(env, post, comment, replyTo) {
   const p = clamp((replyTo ? 0.55 : 0.45) + 0.35 * aff + 0.15 * act, 0, 0.98);
   if (Math.random() >= p) return;
   const x = clamp(0.4 + 0.6 * aff + (Math.random() - 0.5) * 0.2, 0, 1);
-  const due = deferQuiet(Date.now() + reactDelay(x, true), st, post.world, undefined, post.at);
+  const due = await schedDue(env, c.id, deferQuiet(Date.now() + reactDelay(x, true), st, post.world, undefined, post.at), post, st);
   await env.DB.prepare('INSERT INTO tl_jobs (world,char_id,kind,post_id,comment_id,due,note) VALUES (?,?,?,?,?,?,?)')
     .bind(post.world, c.id, 'reply', post.id, comment.id, due, '').run();
 }
@@ -1460,6 +1482,7 @@ async function tlLifeTheme(env, c, st, now) {
 ${(state.diary || []).slice(-2).map((x) => `${fmtDay(x.d)}の出来事：${x.t}`).join('\n')}${state.story ? `
 続いている出来事「${state.story.title}」：${state.story.log.map((x) => `${fmtDay(x.d)} ${x.t}`).join(' → ')}${state.story.finished ? '（区切りがついた）' : ''}` : ''}`);
   }
+  info.push(`# あなたが今していること\n${activityText(state, now, c.id)}\n（投稿は今していること・ひと段落したことに自然につながるように）`);
   info.push(`# 天気・季節（ユーザーの住んでいる地域）
 ${w ? '天気：' + weatherText(w, st) + '\n' : ''}${seasonText(now)}／${weekdayText(now)}`);
   const hints = {
@@ -1482,10 +1505,11 @@ ${w ? '天気：' + weatherText(w, st) + '\n' : ''}${seasonText(now)}／${weekda
 async function shouldCharPost(env, c, world, now, st) {
   const perDay = nz(world === 'ura' ? c.uraTlPerDay : c.tlPerDay, world === 'ura' ? 1 : 2);
   if (perDay <= 0) return false;
+  const boost = world === 'omote' ? await activityBoost(env, c, st, now).catch(() => ({ f: 1 })) : { f: 1 };
   const last = await env.DB.prepare('SELECT at FROM tl_posts WHERE world=? AND author=? ORDER BY id DESC LIMIT 1').bind(world, c.id).first();
   if (last && now - last.at < 60 * MIN) return false; // 続けて投稿しすぎない
   const activeTicks = Math.max(1, ((24 - quietSpan(st)) * 60) / TICK_MIN);
-  return Math.random() < (perDay / activeTicks) * (isQuiet(now, st) ? QUIET_RATE : 1); // 静かな時間は大幅に下げる
+  return Math.random() < (perDay / activeTicks) * (isQuiet(now, st) ? QUIET_RATE : 1) * boost.f; // 静かな時間は大幅に下げる・今していることで変わる
 }
 
 async function charPostNow(env, c, world, st) {
@@ -1563,7 +1587,7 @@ async function execJob(env, j) {
   if (!replyTo && post.author !== ME && post.author !== c.id) {
     const author = (await loadChars(env)).find((x) => x.id === post.author);
     if (author && Math.random() < clamp(0.2 + 0.45 * (nz(author.snsActivity, 50) / 100), 0, 0.8)) {
-      const due = deferQuiet(Date.now() + reactDelay(0.5, true), st, world, undefined, post.at);
+      const due = await schedDue(env, author.id, deferQuiet(Date.now() + reactDelay(0.5, true), st, world, undefined, post.at), post, st);
       await env.DB.prepare('INSERT INTO tl_jobs (world,char_id,kind,post_id,comment_id,due,note) VALUES (?,?,?,?,?,?,?)')
         .bind(world, author.id, 'reply', post.id, commentId, due, '').run();
     }
@@ -1755,13 +1779,20 @@ birthday：ユーザーが自分の誕生日を言っていれば "MM-DD"、な�
 }
 
 // ---- キャラの毎日（1日1回）：気分・今日していること・日記・何日も続く出来事
+const PLAN_KINDS = ['sleep', 'nap', 'busy', 'meal', 'bath', 'chores', 'out', 'social', 'free'];
+const PLAN_SCHEMA_ITEM = {
+  type: 'object',
+  properties: { start: { type: 'string' }, end: { type: 'string' }, act: { type: 'string' }, kind: { type: 'string' }, avail: { type: 'integer' } },
+  required: ['start', 'end', 'act', 'kind', 'avail'], additionalProperties: false,
+};
 const DAILY_SCHEMA = {
   type: 'object',
   properties: {
     mood: { type: 'string' }, mood_reason: { type: 'string' }, today: { type: 'string' }, diary: { type: 'string' },
     story_title: { type: 'string' }, story_update: { type: 'string' }, story_finished: { type: 'boolean' }, busy: { type: 'integer' },
+    fatigue: { type: 'integer' }, plan: { type: 'array', items: PLAN_SCHEMA_ITEM },
   },
-  required: ['mood', 'mood_reason', 'today', 'diary', 'story_title', 'story_update', 'story_finished', 'busy'], additionalProperties: false,
+  required: ['mood', 'mood_reason', 'today', 'diary', 'story_title', 'story_update', 'story_finished', 'busy', 'fatigue', 'plan'], additionalProperties: false,
 };
 async function dailyUpdate(env, c, st, now, force = false) {
   const today = jstDay(now);
@@ -1772,7 +1803,12 @@ async function dailyUpdate(env, c, st, now, force = false) {
   const story = state.story && !state.story.finished ? state.story : null;
   const mayStart = !story && Math.random() < 0.3;
   const mems = await loadMemories(env, c.id, 40);
-  const system = 'あなたは、キャラクターの日々の暮らしを考える係です。キャラクター設定に合った、自然で小さな日常を考えます。大事件は起こしません。';
+  const rh = await getRhythm(env, c);
+  const wd = jstParts(now).w, holiday = wd === '土' || wd === '日';
+  const yPlan = state.plan && state.plan.blocks ? state.plan.blocks : [];
+  const ySleep = yPlan.filter((b) => b.kind === 'sleep' && b.s > jstDayStart(state.plan.day) + 12 * 3600e3)[0];
+  const dueToday = mems.filter((m) => m.status === 'open' && m.due === today && m.kind !== 'user_state');
+  const system = 'あなたは、キャラクターの日々の暮らしを考える係です。キャラクター設定と作品の世界観に合った、自然で小さな日常を考えます。大事件は起こしません。';
   const user = `# キャラクター: ${c.name}
 ${trunc(c.prompt || '（設定なし）', 2500)}
 
@@ -1785,6 +1821,19 @@ ${weather ? '天気：' + weather : ''}
 昨日していたこと：${state.today || '（不明）'}
 最近の日記：
 ${(state.diary || []).slice(-5).map((x) => `- ${fmtDay(x.d)} ${x.t}`).join('\n') || '（なし）'}
+
+# ふだんの生活リズム
+平日：${rh.weekday || '（キャラクター設定から考える）'}
+休日：${rh.holiday || '（キャラクター設定から考える）'}
+今日は${holiday ? '休日' : '平日'}（作品の世界観で別の決まりがあればそちらに従う）
+
+# 昨日の過ごし方
+${yPlan.length ? yPlan.filter((b) => !['sleep', 'free'].includes(b.kind)).map((b) => `${hmJ(b.s)} ${b.act}`).join('／').slice(0, 600) : '（記録なし）'}
+${ySleep ? `昨夜寝た時刻：${hmJ(ySleep.s)}` : ''}
+昨日の疲れ：${nz(state.fatigue, 30)}/100
+
+# 今日のユーザーとの予定・約束（あれば）
+${dueToday.map((m) => '- ' + m.text).join('\n') || '（なし）'}
 
 # 続いている出来事
 ${story ? `「${story.title}」（${fmtDay(story.start)}から）\n${story.log.map((x) => `- ${fmtDay(x.d)} ${x.t}`).join('\n')}` : '（なし）'}
@@ -1802,13 +1851,25 @@ ${mems.filter((m) => m.kind === 'fact').slice(0, 10).map((m) => '- ' + m.text).j
     : mayStart
       ? 'キャラクターの身の回りで、何日かかけて進む小さな出来事を新しく始める（例「猫を拾った」「料理の練習を始めた」「友達の誕生日プレゼントを選んでいる」）。story_title に題名、story_update に最初の様子。story_finished は false。'
       : '今日は新しい出来事を始めない。story_title と story_update は ""、story_finished は false。'}
-- busy：今日の忙しさ 0〜100。`;
+- busy：今日の忙しさ 0〜100。
+- fatigue：今日一日を終えたときの疲れ具合 0〜100（明日に引き継ぐ）。
+- plan：今日の予定表。今朝起きる時刻から、明日の朝起きるまでを、時刻の順に隙間なく並べる。
+  - start / end は "HH:MM"。日付をまたぐときは 24 を足して "25:30" のように書く（夜の就寝は "23:30"〜"31:00" など）。
+  - act：していることを短く（例「紅茶を淹れて読書」「訓練」「お風呂」「夕ごはんを作る」）。
+  - kind：sleep（夜の睡眠）／nap（昼寝・うたた寝）／busy（訓練・授業・仕事など手が離せない）／meal（食事）／bath（お風呂）／chores（料理・掃除・身支度）／out（外出・移動）／social（友達と過ごす）／free（自由時間）のどれか。
+  - avail：そのあいだスマホを見て返事できる度合い 0〜100（自由時間やベッドでくつろぐ時間は高く、訓練・お風呂・睡眠は低く）。
+  - ふだんの生活リズムを土台に、曜日・天気・気分・続いている出来事・ユーザーとの約束に合わせて今日らしく変える。毎日同じ時刻にしない（10〜30分ほどずれてよい）。
+  - 昨日疲れていたり夜ふかししたりして、今日が休日なら、遅く起きる・昼寝をする（nap）など。昼寝や二度寝のしやすさ：${rh.napper}/100。
+  - 夜ふかしの度合い：${rh.nightOwl}/100。寝る時刻に反映する。`;
   const r = await aiJson(env, 'omote', (await worldBlock(env, user)) + system, user, DAILY_SCHEMA, 'daily_life');
   state.day = today;
   state.mood = String(r.mood || '').slice(0, 60);
   state.moodReason = String(r.mood_reason || '').slice(0, 80);
   state.today = String(r.today || '').slice(0, 200);
   state.busy = clamp(Math.round(nz(r.busy, 30)), 0, 100);
+  state.fatigue = clamp(Math.round(nz(r.fatigue, 30)), 0, 100);
+  const plan = parsePlan(r.plan, today);
+  if (plan) { state.prevPlan = state.plan && state.plan.day !== today ? state.plan : state.prevPlan || null; state.plan = plan; }
   if (r.diary) state.diary = (state.diary || []).concat({ d: addDays(today, -1), t: String(r.diary).slice(0, 160) }).slice(-14);
   const title = String(r.story_title || '').trim();
   if (title && String(r.story_update || '').trim()) {
@@ -1820,6 +1881,266 @@ ${mems.filter((m) => m.kind === 'fact').slice(0, 10).map((m) => '- ' + m.text).j
   }
   await setState(env, c.id, state);
   return true;
+}
+
+
+// ---------------------------------------------------------------- 1日の予定表（表のトークだけ。ユーザーには見せない）
+// 毎朝「毎日の様子」と一緒にAIが作る。返事の早さ・既読のタイミング・話しかけ・TL投稿のタイミングをこれで決める
+function seed01(str) { // 同じ文字列なら同じ値（0〜1）。予定の小さな変更を、何度見ても同じにするため
+  let h = 2166136261;
+  for (const ch of String(str)) { h ^= ch.codePointAt(0); h = Math.imul(h, 16777619); }
+  return ((h >>> 0) % 100000) / 100000;
+}
+const rndR = (a, b) => a + Math.random() * (b - a);
+function jstDayStart(day) { return Date.parse(day + 'T00:00:00+09:00'); }
+function hmJ(ts) { const p = jstParts(ts); return `${p.h}:${String(p.mi).padStart(2, '0')}`; }
+
+// AIが書いた予定（"HH:MM"、日付をまたぐときは "25:30" など）を時刻に直す
+function parsePlan(arr, today) {
+  const base = jstDayStart(today);
+  const toMin = (x) => { const m = String(x || '').match(/(\d{1,2})\s*[:：]\s*(\d{2})/); return m ? +m[1] * 60 + +m[2] : null; };
+  const out = [];
+  let off = 0, prevS = -Infinity;
+  for (const b of Array.isArray(arr) ? arr.slice(0, 40) : []) {
+    let s = toMin(b.start), e = toMin(b.end);
+    if (s == null || e == null || s > 40 * 60) continue;
+    s = s + off;
+    if (s < prevS - 6 * 60) { off += 24 * 60; s += 24 * 60; } // 書き方が「01:00」に戻っていたら翌日
+    e = e + off;
+    while (e <= s) e += 24 * 60;
+    prevS = s;
+    const blk = { s: base + s * 60e3, e: base + Math.min(e, s + 16 * 60) * 60e3, act: String(b.act || '').trim().slice(0, 40) || '過ごしている', kind: PLAN_KINDS.includes(b.kind) ? b.kind : 'free', avail: clamp(Math.round(nz(b.avail, 60)), 0, 100) };
+    const last = out[out.length - 1];
+    if (last && blk.s < last.e) blk.s = last.e;
+    if (blk.e - blk.s < 5 * 60e3) continue;
+    if (last && blk.s > last.e) out.push({ s: last.e, e: blk.s, act: 'ひと息ついている', kind: 'free', avail: 65 });
+    out.push(blk);
+  }
+  if (!out.length) return null;
+  // 朝起きるまでは眠っている
+  if (out[0].kind !== 'sleep' && out[0].s > base + 3 * 3600e3) out.unshift({ s: base, e: out[0].s, act: '眠っている', kind: 'sleep', avail: 0 });
+  return { day: today, blocks: out };
+}
+// 予定がまだないときの、ざっくりした1日
+function defaultActivity(t) {
+  const h = jstParts(t).h, base = jstDayStart(jstDay(t));
+  const B = (s, e, act, kind, avail) => ({ s: base + s * 3600e3, e: base + e * 3600e3, act, kind, avail });
+  if (h < 7) return B(0, 7, '眠っている', 'sleep', 0);
+  if (h < 8) return B(7, 8, '身支度', 'chores', 40);
+  if (h < 12) return B(8, 12, '日中の用事', 'busy', 35);
+  if (h < 13) return B(12, 13, 'お昼ごはん', 'meal', 50);
+  if (h < 18) return B(13, 18, '午後の用事', 'busy', 45);
+  if (h < 19) return B(18, 19, '自由時間', 'free', 75);
+  if (h < 20) return B(19, 20, '夕ごはん', 'meal', 45);
+  if (h < 21) return B(20, 21, '自由時間', 'free', 80);
+  if (h < 22) return B(21, 22, 'お風呂', 'bath', 5);
+  return h < 24 ? B(22, 24, '部屋でのんびり', 'free', 85) : B(0, 7, '眠っている', 'sleep', 0);
+}
+// 予定どおりにいかないこと（長引く・急な用事）を足した予定
+function withChanges(blocks, key) {
+  const bs = blocks.map((b) => ({ ...b }));
+  const out = [];
+  for (let i = 0; i < bs.length; i++) {
+    const b = bs[i];
+    const last = out[out.length - 1];
+    if (last && b.s < last.e) b.s = last.e;
+    if (b.e <= b.s) continue;
+    if (['busy', 'out', 'chores', 'social'].includes(b.kind) && seed01(key + b.s + 'o') < 0.15) {
+      b.e += Math.round(10 + seed01(key + b.s + 'O') * 30) * 60e3; b.act += '（長引いている）'; // 思ったより長引いた
+    }
+    if (b.kind === 'free' && b.e - b.s >= 60 * 60e3 && seed01(key + b.s + 'q') < 0.06) { // 急な用事
+      const at = b.s + Math.round(seed01(key + b.s + 'Q') * (b.e - b.s - 30 * 60e3) / 60e3) * 60e3;
+      const len = Math.round(30 + seed01(key + b.s + 'L') * 30) * 60e3;
+      out.push({ ...b, e: at });
+      out.push({ s: at, e: Math.min(b.e, at + len), act: '急な用事', kind: 'busy', avail: 15 });
+      if (at + len < b.e) out.push({ ...b, s: at + len });
+      continue;
+    }
+    out.push(b);
+  }
+  return out.filter((b) => b.e > b.s);
+}
+// ある時刻にしていること（{act, kind, avail, s, e, prev, next}）
+function activityAt(state, t, key = '') {
+  for (const p of [state.plan, state.prevPlan]) {
+    if (!p || !p.blocks || !p.blocks.length) continue;
+    const bs = withChanges(p.blocks, key + p.day);
+    const i = bs.findIndex((b) => b.s <= t && t < b.e);
+    if (i >= 0) return { ...bs[i], prev: bs[i - 1] || null, next: bs[i + 1] || null };
+  }
+  return { ...defaultActivity(t), prev: null, next: null };
+}
+const isSleepKind = (k) => k === 'sleep' || k === 'nap';
+
+// 生活リズム（キャラ設定と世界観から1回だけ作る。設定を変えたら作り直す）
+const RHYTHM_SCHEMA = {
+  type: 'object',
+  properties: { weekday: { type: 'string' }, holiday: { type: 'string' }, reply_speed: { type: 'string' }, night_owl: { type: 'integer' }, napper: { type: 'integer' } },
+  required: ['weekday', 'holiday', 'reply_speed', 'night_owl', 'napper'], additionalProperties: false,
+};
+const DEFAULT_RHYTHM = { weekday: '', holiday: '', speed: 'normal', nightOwl: 30, napper: 30 };
+async function getRhythm(env, c, allowAI = true) {
+  const w = await loadWorld(env).catch(() => ({}));
+  const h = strHash(c.name + '\n' + (c.prompt || '') + '\n' + (w.stage || ''));
+  const cached = await kvGet(env, 'rhythm:' + c.id, null);
+  if (cached && (cached.h === h || !allowAI)) return cached.r;
+  if (!allowAI) return DEFAULT_RHYTHM;
+  const user = `# キャラクター: ${c.name}
+${trunc(c.prompt || '（設定なし）', 3000)}
+
+このキャラクターのふだんの生活リズムを考えてください。
+- weekday：平日の典型的な1日（起きる時刻・食事・日中にしていること・お風呂・寝る時刻など）を時刻つきで短く。
+- holiday：休日の典型的な1日を同じように。
+- reply_speed：メッセージへの返事の早さ。"fast"（すぐ返す）／"normal"／"slow"（マイペース・気づくのが遅い）のどれか。
+- night_owl：夜ふかしの度合い 0〜100。
+- napper：昼寝や二度寝をしやすい度合い 0〜100。`;
+  try {
+    const r = await aiJson(env, 'omote', (await worldBlock(env, user)) + 'あなたは、キャラクターの暮らしぶりを考える係です。キャラクター設定と作品の世界観に合った、自然な生活リズムを考えます。', user, RHYTHM_SCHEMA, 'rhythm');
+    const v = {
+      weekday: String(r.weekday || '').slice(0, 400), holiday: String(r.holiday || '').slice(0, 400),
+      speed: ['fast', 'normal', 'slow'].includes(r.reply_speed) ? r.reply_speed : 'normal',
+      nightOwl: clamp(Math.round(nz(r.night_owl, 30)), 0, 100), napper: clamp(Math.round(nz(r.napper, 30)), 0, 100),
+    };
+    await kvSet(env, 'rhythm:' + c.id, { h, r: v });
+    return v;
+  } catch (e) {
+    await log(env, `生活リズム（${c.name}）: ${e.message}`);
+    return cached ? cached.r : DEFAULT_RHYTHM;
+  }
+}
+
+// ---- 返事をいつするか（すぐ／あとで）。AIは使わずに決める
+function replyTiming(c, rh, state, hist, now) {
+  const speed = ['fast', 'normal', 'slow'].includes(c.replySpeed) ? c.replySpeed : rh.speed || 'normal';
+  const sf = { fast: 0.6, normal: 1, slow: 1.6 }[speed];
+  const a = activityAt(state, now, c.id);
+  const endMin = Math.max(0, (a.e - now) / MIN);
+  const res = (readMin, replyMin, extra = {}) => {
+    readMin = Math.max(0, readMin); replyMin = Math.min(Math.max(readMin, replyMin), 14 * 60);
+    if (replyMin < 1) return { now: true, act: a };
+    return { now: false, readAt: now + readMin * MIN, replyAt: now + replyMin * MIN, act: a.act, kind: a.kind, ...extra };
+  };
+  // 会話が続いているときは、だいたいそのまま返す
+  const lastChar = [...hist].reverse().find((m) => m.sender === 'char');
+  if (lastChar && now - lastChar.at < 6 * MIN && !isSleepKind(a.kind) && a.avail >= 25 && Math.random() < { fast: 0.95, normal: 0.85, slow: 0.7 }[speed]) return { now: true, act: a };
+  if (isSleepKind(a.kind)) {
+    let pAwake = a.kind === 'nap' ? 0.3 : 0.04 + (rh.nightOwl || 30) / 100 * 0.3;
+    if (a.kind === 'sleep' && now - a.s < 60 * MIN) pAwake += 0.35; // まだ寝付いていない
+    if (Math.random() < pAwake) return res(rndR(0, 2) * sf, rndR(0.5, 6) * sf, { awake: true });
+    if (endMin < 120 && Math.random() < 0.2 + (rh.napper || 30) / 100 * 0.25) { // 一度目が覚めて読んだのに、二度寝
+      return res(rndR(1, 6), endMin + rndR(20, 70), { glanced: true, twice: true });
+    }
+    const r = endMin + rndR(2, 25) * sf;
+    return res(r, r + rndR(0, 8));
+  }
+  if (a.avail >= 70) { const d = Math.random() < 0.45 ? 0 : rndR(0.5, 6) * sf; return res(d * 0.5, d); }
+  if (a.avail >= 30) {
+    if (Math.random() < 0.2 / sf) return { now: true, act: a };
+    if (Math.random() < 0.6) { const r = rndR(1, 10); return res(r, Math.min(r + rndR(5, 25) * sf, endMin + rndR(1, 10)), { glanced: true }); } // 作業の合間に見た
+    const r = Math.min(rndR(5, 30) * sf, endMin + rndR(1, 10));
+    return res(r, r + rndR(0, 3));
+  }
+  if (endMin > 120 && Math.random() < 0.5) { const r = rndR(5, 40); return res(r, r + rndR(15, 60), { glanced: true }); } // 長い作業の休憩中に
+  if (Math.random() < 0.25) return res(rndR(1, 6), endMin + rndR(1, 12) * sf, { glanced: true });
+  const r = endMin + rndR(0, 10) * sf; // 終わるまで既読も付かない
+  return res(r, r + rndR(0, 4));
+}
+const delayOn = (st) => st.lifeEnabled && st.delayEnabled !== false; // 予定に合わせて返事が遅れる（設定で切れる）
+async function getPending(env, cid) { return kvGet(env, 'reply:' + cid, null); }
+// 返事を後回しにするか決めて、後回しなら予約する。{ now: true } ならすぐ返してよい
+async function decideReply(env, c, hist, now) {
+  const go = await kvGet(env, 'replygo:' + c.id, 0);
+  if (go && now - go < 3 * MIN) return { now: true };
+  const pend = await getPending(env, c.id);
+  if (pend) return pend.replyAt <= now ? { now: true, pend } : { now: false, pend };
+  const state = await getState(env, c.id);
+  const rh = await getRhythm(env, c, false);
+  const t = replyTiming(c, rh, state, hist, now);
+  if (t.now) { await kvSet(env, 'replygo:' + c.id, now); return t; } // 「すぐ返す」と決めたことを覚えておく（続く /reply で使う）
+  const lastMe = [...hist].reverse().find((m) => m.sender === 'me');
+  const pend2 = { key: c.id, readAt: t.readAt, replyAt: t.replyAt, act: t.act, kind: t.kind, glanced: !!t.glanced, twice: !!t.twice, awake: !!t.awake, from: lastMe ? lastMe.at : now };
+  await kvSet(env, 'reply:' + c.id, pend2);
+  return { now: false, pend: pend2 };
+}
+// 予約していた返事（毎分確認する）
+async function runDueReplies(env) {
+  await ensureSchema(env);
+  const now = Date.now();
+  const { results } = await env.DB.prepare("SELECT k,v FROM kv WHERE k LIKE 'reply:%'").all();
+  let n = 0;
+  for (const row of results) {
+    let p; try { p = JSON.parse(row.v); } catch (_) { p = null; }
+    if (p && p.replyAt > now) continue;
+    const claimed = await env.DB.prepare('DELETE FROM kv WHERE k=? RETURNING k').bind(row.k).first();
+    if (!claimed || !p) continue;
+    try {
+      const c = (await loadChars(env)).find((x) => x.id === p.key);
+      if (!c) continue;
+      const hist = await recent(env, c.id, 60);
+      const last = hist[hist.length - 1];
+      if (!last || last.sender !== 'me') continue; // もう返事済み
+      const msgs = await generateAndStore(env, c, { mode: 'reply', late: p }, hist, await getRead(env, c.id), 'omote');
+      if (msgs.length) await pushToAll(env, c, msgs);
+      n++;
+    } catch (e) { await log(env, `あとで返す返事: ${e.message}`); }
+  }
+  return n;
+}
+// 返事が遅れたことを、AIにどう伝えるか
+function lateNote(late, hist, now) {
+  if (!late) return '';
+  const firstWait = (() => { let i = hist.length - 1; while (i > 0 && hist[i - 1].sender === 'me') i--; return hist[i]; })();
+  const waited = firstWait ? now - firstWait.at : 0;
+  const n = (() => { let k = 0; for (let i = hist.length - 1; i >= 0 && hist[i].sender === 'me'; i--) k++; return k; })();
+  const out = [];
+  if (waited >= 3 * MIN) {
+    const what = late.awake ? `本来は眠っている時間（${late.act}）だったが、たまたま起きていた`
+      : late.kind === 'sleep' || late.kind === 'nap' ? `${late.act}（眠っていた）` : `「${late.act}」の最中だった`;
+    const mention = late.twice ? 0.9 : waited >= 60 * MIN ? 0.7 : waited >= 20 * MIN ? 0.5 : 0.2;
+    out.push(`（実はあなたは${what}ため、メッセージが届いてから返すまで${fmtDur(waited)}ほどかかった。${late.twice ? '一度目が覚めてメッセージを読んだのに、そのまま二度寝してしまった。' : late.glanced ? '途中で一度メッセージは読んだ（既読は付いた）が、すぐには返せなかった。' : ''}${Math.random() < mention ? '遅れた理由に一言だけ自然に触れてよい（例「お風呂に入っていました」）。言い訳を長くしない。' : '遅れた理由には特に触れず、自然に返す。'}）`);
+  }
+  if (n >= 2) out.push(`（ユーザーから${n}通のメッセージが溜まっている。それぞれに順番に答え、いつもより少し長めにまとめて返してよい）`);
+  return out.join('\n');
+}
+// 今していることで、話しかけ・投稿のしやすさを変える（1日の合計がほぼ変わらないよう平均で割る）
+function actFactor(a, now) {
+  if (isSleepKind(a.kind)) return 0.04;
+  let f = 0.15 + a.avail / 100 * 1.4;
+  if (a.prev && a.prev.avail < 40 && a.avail >= 40 && now - a.s < 25 * MIN) f *= 2.2; // ひと段落した直後
+  return f;
+}
+const normMemo = {};
+function actNorm(state, st, key, now) {
+  const day = jstDay(now), mk = key + day + (state.plan ? state.plan.day : '');
+  if (normMemo[mk]) return normMemo[mk];
+  const base = jstDayStart(day);
+  let sum = 0, n = 0;
+  for (let t = base; t < base + 864e5; t += 15 * MIN) {
+    if (isQuiet(t, st)) continue;
+    sum += actFactor(activityAt(state, t, key), t); n++;
+  }
+  return (normMemo[mk] = n ? Math.max(0.2, sum / n) : 1);
+}
+async function activityBoost(env, c, st, now) {
+  if (!st.lifeEnabled) return { f: 1 };
+  const state = await getState(env, c.id);
+  const a = activityAt(state, now, c.id);
+  const f = actFactor(a, now) / actNorm(state, st, c.id, now);
+  const justDone = a.prev && a.prev.avail < 40 && a.avail >= 40 && now - a.s < 25 * MIN ? a.prev.act : '';
+  return { f, a, justDone };
+}
+// TLの反応（いいね・コメント）も、その子の予定に合わせて遅らせる
+async function schedDue(env, cid, due, post, st) {
+  if (post.world !== 'omote' || !st.lifeEnabled || isQuiet(post.at, st)) return due;
+  const state = await getState(env, cid);
+  const a = activityAt(state, due, cid);
+  if (isSleepKind(a.kind)) return Math.random() < (a.kind === 'nap' ? 0.3 : 0.1) ? due : a.e + rndR(5, 40) * MIN;
+  if (a.avail < 30 && Math.random() < 0.65) return a.e + rndR(1, 15) * MIN;
+  return due;
+}
+function activityText(state, now, key) {
+  const a = activityAt(state, now, key);
+  return `いま：${a.act}（${hmJ(a.s)}〜${hmJ(a.e)}ごろ）${isSleepKind(a.kind) ? '…本来は眠っている時間だが、今はたまたま起きている' : ''}${a.prev && now - a.prev.e < 40 * MIN ? `／少し前まで：${a.prev.act}` : ''}${a.next ? `／このあと：${a.next.act}` : ''}`;
 }
 
 // 話しかけるときにAIへ渡す「くらし」の情報
@@ -1836,6 +2157,9 @@ ${(state.diary || []).slice(-2).map((x) => `${fmtDay(x.d)}の出来事：${x.t}`
 続いている出来事「${state.story.title}」：${state.story.log.map((x) => `${fmtDay(x.d)} ${x.t}`).join(' → ')}${state.story.finished ? '（区切りがついた）' : ''}` : ''}
 （気分や体調は話し方に自然ににじませる。毎回説明しなくてよい）`);
   }
+  out.push(`# あなたが今していること（だいたいの予定）
+${activityText(state, now, c.id)}
+（今していることと矛盾しない内容にする。毎回説明しなくてよい）`);
   let w = '';
   try { w = weatherText(await getWeather(env, st), st); } catch (_) {}
   out.push(`# 天気・季節・曜日（ユーザーの住んでいる地域）

@@ -508,6 +508,13 @@ body.ura #list.tlMode{background:#efe9f0}
       <button class="btn sub" id="meSave" style="margin-top:10px">プロフィールを保存</button>
     </div>
 
+    <div class="sec">共通の世界観（キャラ全員・表裏共通）</div>
+    <div class="field">
+      <div class="hint" style="margin-top:0">同じ作品のキャラ全員に共通する設定です。トーク・TLのすべてに反映されます。キャラ個人の設定と食い違うときは、個人の設定が優先されます。</div>
+      <div id="worldFields"><div class="hint">読み込み中…</div></div>
+      <button class="btn sub" id="worldSave" style="margin-top:10px">世界観を保存</button>
+    </div>
+
     <div class="sec">くらし（表のトーク）</div>
     <div class="field">
       <label class="chk"><input type="checkbox" id="stLife"> 記憶・毎日の様子・天気・記念日などを使う</label>
@@ -551,7 +558,7 @@ body.ura #list.tlMode{background:#efe9f0}
 
 <script>
 'use strict';
-const APP_VERSION = '第16版（2026-10-15 03:30:00 更新・裏の返事の長さを選べる）';
+const APP_VERSION = '第17版（2026-10-15 14:40:00 更新・共通の世界観（舞台・用語））';
 const $ = (id) => document.getElementById(id);
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 const esc = (s) => String(s).replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
@@ -1484,7 +1491,21 @@ async function enablePush() {
 }
 
 // ------------------------------------------------ 設定画面
+async function loadWorldSettings() {
+  const box = $('worldFields');
+  if (!S.cfg.url) { box.innerHTML = '<div class="hint">サーバーを設定すると使えます</div>'; return; }
+  try {
+    const d = await api('GET', '/world');
+    const ph = { stage: '例：〇〇学園の寮。部隊のメンバー8人が同じ部屋で寝起きしている。窓からは基地のグラウンドが見える……', terms: '例：\nセラフ部隊：〇〇と戦う部隊\nキャンサー：……' };
+    box.innerHTML = d.sections.map((x) => `<label class="t" style="margin-top:10px" for="world_${x.key}">${esc(x.title)} <span class="rangeval" id="worldN_${x.key}"></span></label>
+      <textarea id="world_${x.key}" data-wkey="${x.key}" maxlength="${d.max}" style="min-height:140px" placeholder="${esc(ph[x.key] || '')}">${esc(d.world[x.key] || '')}</textarea>
+      <div class="hint">${esc(x.hint)}${x.key === 'terms' ? '。用語が多いときは、会話に出てきた言葉の説明だけをAIに渡すので、たくさん書いても重くなりにくいです。' : ''}</div>`).join('');
+    const count = () => box.querySelectorAll('textarea[data-wkey]').forEach((t) => { $('worldN_' + t.dataset.wkey).textContent = t.value.length + '字'; });
+    box.oninput = count; count();
+  } catch (e) { box.innerHTML = `<div class="hint">読み込めませんでした：${esc(e.message)}</div>`; }
+}
 function openSettings() {
+  loadWorldSettings();
   $('stUrl').value = S.cfg.url; $('stToken').value = S.cfg.token;
   $('verLine').textContent = 'アプリ ' + APP_VERSION;
   const opts = Array.from({ length: 24 }, (_, h) => `<option value="${h}">${h}</option>`).join('');
@@ -1646,6 +1667,12 @@ $('list').addEventListener('click', (e) => {
 $('worldTabs').addEventListener('click', (e) => { const b = e.target.closest('button'); if (b) setWorld(b.dataset.w); });
 $('btnAdd').onclick = () => { if (!S.cfg.url) { openSettings(); return; } openEdit(null); };
 $('btnSettings').onclick = openSettings;
+$('worldSave').onclick = async () => {
+  const world = {};
+  document.querySelectorAll('#worldFields textarea[data-wkey]').forEach((t) => { world[t.dataset.wkey] = t.value; });
+  if (!Object.keys(world).length) return;
+  try { await api('POST', '/world', { world }); toast('世界観を保存しました'); } catch (e) { toast(e.message); }
+};
 $('btnBack').onclick = () => { endSelect(); show('list'); renderAll(); };
 $('btnSelect').onclick = () => (sel.on ? endSelect() : startSelect());
 $('selCancel').onclick = endSelect;

@@ -345,7 +345,7 @@ body.ura #list.tlMode{background:#efe9f0}
     <div class="field">
       <label class="t" for="edNewsKw">興味のあるニュース（任意）</label>
       <input type="text" id="edNewsKw" maxlength="200" placeholder="例：ロシア料理、猫、天体観測">
-      <div class="hint">話題を切り替えるとき、ときどきこの言葉で最近のニュースを探して話題にします。空欄なら、キャラ設定の文章からAIが考えます。読点やスペースで区切ってください。</div>
+      <div class="hint">話題を切り替えるとき、ときどきこの言葉で最近のニュースを探して話題にします。空欄なら、キャラ設定の文章からAIが考えます。「、」かスペースで区切って、15個まで（「・」は区切りになりません）。見出しに出てきそうな具体的な言葉ほど、よく見つかります。</div>
     </div>
     <div class="sec">タイムライン</div>
     <div class="field">
@@ -615,7 +615,7 @@ body.ura #list.tlMode{background:#efe9f0}
 
 <script>
 'use strict';
-const APP_VERSION = '第23版（2026-10-17 04:10:00 更新・AIの利用料金の表示・話しかけが重ならない）';
+const APP_VERSION = '第24版（2026-10-17 04:20:00 更新・興味のあるニュースは15個まで）';
 const $ = (id) => document.getElementById(id);
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 const esc = (s) => String(s).replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));

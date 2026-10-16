@@ -532,6 +532,24 @@ body.ura #list.tlMode{background:#efe9f0}
       <button class="btn sub" id="stLifeSave" style="margin-top:10px">くらしの設定を保存</button>
     </div>
 
+    <div class="sec">災害・停電（表のトーク・TL）</div>
+    <div class="field">
+      <label class="chk"><input type="checkbox" id="stDis"> 地震・台風・大雨・大雪などの本物の情報に、キャラたちも反応する</label>
+      <label class="t" style="margin-top:8px">地震で必ず連絡が来る震度</label>
+      <select id="stQuake"><option value="3">震度3以上</option><option value="4">震度4以上</option><option value="5-">震度5弱以上</option><option value="5+">震度5強以上</option><option value="6-">震度6弱以上</option></select>
+      <div class="hint">さいたま市北区（なければ埼玉県南部）の震度で判断します。大きな地震と緊急地震速報は、静かな時間でも届きます。</div>
+      <div class="inline" style="margin-top:12px;gap:10px;align-items:center"><button class="btn sub" id="stOutage" style="flex:1">停電中にする</button></div>
+      <div class="hint" id="stOutageNote">実際に停電したら押してください。キャラたちも停電の中にいることになります。東京電力の情報から自動で気づけることもあります。</div>
+      <div class="hint" id="stDisStatus"></div>
+      <label class="t" style="margin-top:12px">テスト（反応はすぐ届きます。トークとTLに本当に投稿されます）</label>
+      <div class="inline" style="flex-wrap:wrap;gap:6px">
+        <button class="btn sub" data-distest="quake" style="flex:1 1 45%">地震（震度5弱）</button>
+        <button class="btn sub" data-distest="eew_false" style="flex:1 1 45%">緊急地震速報の誤報</button>
+        <button class="btn sub" data-distest="typhoon" style="flex:1 1 45%">台風の直撃</button>
+        <button class="btn sub" data-distest="snow" style="flex:1 1 45%">大雪</button>
+      </div>
+    </div>
+
     <div class="sec">静かな時間（深夜・早朝）</div>
     <div class="field">
       <label class="inline"><input type="checkbox" id="stQuietOn"> 静かな時間を使う</label>
@@ -564,7 +582,7 @@ body.ura #list.tlMode{background:#efe9f0}
 
 <script>
 'use strict';
-const APP_VERSION = '第18版（2026-10-16 03:30:00 更新・1日の予定表で返事・話しかけ・TLが動く）';
+const APP_VERSION = '第19版（2026-10-16 14:30:00 更新・災害・季節の出来事・停電）';
 const $ = (id) => document.getElementById(id);
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 const esc = (s) => String(s).replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
@@ -648,7 +666,7 @@ async function sync() {
     let more = true;
     while (more) {
       const d = await api('GET', '/sync?since=' + S.maxId);
-      S.chars = d.chars; S.reads = d.reads || {}; S.charRead = d.charRead || {}; S.settings = d.settings || S.settings;
+      S.chars = d.chars; S.reads = d.reads || {}; S.charRead = d.charRead || {}; S.outage = d.outage || null; S.settings = d.settings || S.settings;
       const fresh = [];
       for (const m of d.messages) if (addMsg(m)) fresh.push(m);
       applyRetracted(d.retracted || []);
@@ -1508,6 +1526,26 @@ async function enablePush() {
 }
 
 // ------------------------------------------------ 設定画面
+function showOutage() {
+  const on = !!(S.outage && S.outage.on);
+  $('stOutage').textContent = on ? '停電が復旧した' : '停電中にする';
+  $('stOutage').classList.toggle('danger', on);
+  $('stOutageNote').textContent = on
+    ? `いま停電中です（${S.outage.source === 'manual' ? 'あなたが切り替え' : '自動で検知'}）。復旧したら押してください。`
+    : '実際に停電したら押してください。キャラたちも停電の中にいることになります。東京電力の情報から自動で気づけることもあります。';
+}
+async function loadDisStatus() {
+  showOutage();
+  if (!S.cfg.url) return;
+  try {
+    const d = await api('GET', '/disaster');
+    S.outage = d.outage; showOutage();
+    const ago = (t) => (t ? Math.max(0, Math.round((Date.now() - t) / 60000)) + '分前' : 'まだ');
+    const names = { quake: '地震', eew: '緊急地震速報', outage_on: '停電', outage_off: '停電の復旧', rain: '激しい雨', gust: '雷雨', tornado: '竜巻', wind: '強風', typhoon: '台風', snow: '雪', far: '遠くの災害', ash: '降灰' };
+    const rec = d.recent.map((e) => `${names[e.type] || e.type}${e.level ? '（震度' + e.level + '）' : ''}${e.outcome === 'false' ? '（誤報）' : ''}${e.sim ? '［テスト］' : ''}`).join('、');
+    $('stDisStatus').textContent = `確認：地震 ${ago(d.checks.quake)}／天気 ${ago(d.checks.forecast)}／台風 ${ago(d.checks.typhoon)}${d.checks.tepcoBad ? '／停電情報は自動で読めていません（手動で切り替えてください）' : ''}${d.saga ? `／いま：${d.saga.name}` : ''}${rec ? `／最近：${rec}` : ''}`;
+  } catch (e) { $('stDisStatus').textContent = '状態を読み込めませんでした：' + e.message; }
+}
 async function loadWorldSettings() {
   const box = $('worldFields');
   if (!S.cfg.url) { box.innerHTML = '<div class="hint">サーバーを設定すると使えます</div>'; return; }
@@ -1532,6 +1570,8 @@ function openSettings() {
   aiProv = { omote: S.settings.omoteProvider === 'grok' ? 'grok' : 'gemini', ura: S.settings.uraProvider === 'gemini' ? 'gemini' : 'grok' };
   $('stGrokModel').value = S.settings.grokModel || '';
   $('stNews').checked = S.settings.newsEnabled !== false;
+  $('stDis').checked = S.settings.disasterEnabled !== false; $('stQuake').value = S.settings.quakeMin || '4';
+  loadDisStatus();
   $('stLife').checked = S.settings.lifeEnabled !== false; $('stImages').checked = S.settings.imagesEnabled !== false; $('stDelay').checked = S.settings.delayEnabled !== false;
   const two = (n) => String(n).padStart(2, '0');
   $('stBdM').innerHTML = '<option value="">--</option>' + Array.from({ length: 12 }, (_, i) => `<option value="${two(i + 1)}">${i + 1}</option>`).join('');
@@ -1684,6 +1724,18 @@ $('list').addEventListener('click', (e) => {
 $('worldTabs').addEventListener('click', (e) => { const b = e.target.closest('button'); if (b) setWorld(b.dataset.w); });
 $('btnAdd').onclick = () => { if (!S.cfg.url) { openSettings(); return; } openEdit(null); };
 $('btnSettings').onclick = openSettings;
+$('stOutage').onclick = async () => {
+  const on = !(S.outage && S.outage.on);
+  if (!confirm(on ? '停電中にしますか？キャラたちにも停電が起きます。' : '停電が復旧したことにしますか？')) return;
+  try { const d = await api('POST', '/outage', { on }); S.outage = d.outage; showOutage(); toast(on ? '停電中にしました' : '復旧しました'); } catch (e) { toast(e.message); }
+};
+$('stDis').onchange = $('stQuake').onchange = async () => {
+  try { const r = await api('POST', '/settings', { settings: { disasterEnabled: $('stDis').checked, quakeMin: $('stQuake').value } }); S.settings = r.settings; toast('災害の設定を保存しました'); } catch (e) { toast(e.message); }
+};
+document.querySelectorAll('[data-distest]').forEach((b) => b.onclick = async () => {
+  if (!confirm('テストの「' + b.textContent + '」を起こします。数分のうちに、キャラたちからトークとTLが届きます。よろしいですか？')) return;
+  try { await api('POST', '/disaster/test', { type: b.dataset.distest }); toast('テストを起こしました。数分お待ちください'); loadDisStatus(); } catch (e) { toast(e.message); }
+});
 $('worldSave').onclick = async () => {
   const world = {};
   document.querySelectorAll('#worldFields textarea[data-wkey]').forEach((t) => { world[t.dataset.wkey] = t.value; });

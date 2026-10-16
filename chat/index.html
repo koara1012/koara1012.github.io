@@ -591,7 +591,7 @@ body.ura #list.tlMode{background:#efe9f0}
 
 <script>
 'use strict';
-const APP_VERSION = '第20版（2026-10-17 00:40:00 更新・Barkで好きな通知音とキャラのアイコン）';
+const APP_VERSION = '第21版（2026-10-17 00:50:00 更新・Barkの暗号化は通知ごとにIVを変える）';
 const $ = (id) => document.getElementById(id);
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 const esc = (s) => String(s).replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
@@ -1561,7 +1561,7 @@ async function loadBarkState() {
   try {
     const d = await api('GET', '/bark/status');
     $('nfBarkState').textContent = d.deviceKey
-      ? `Bark の送り先：登録済み／暗号化：${d.encrypted ? (d.iv ? 'オン' : '鍵はあるが BARK_ENC_IV がありません') : 'オフ（BARK_ENC_KEY を登録すると暗号化されます）'}`
+      ? `Bark の送り先：登録済み／暗号化：${d.encrypted ? 'オン' : 'オフ（BARK_ENC_KEY を登録すると暗号化されます）'}`
       : 'Bark の送り先（BARK_DEVICE_KEY）が、まだ Cloudflare のシークレットに登録されていません。';
   } catch (e) { $('nfBarkState').textContent = '状態を読み込めませんでした：' + e.message; }
 }

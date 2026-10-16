@@ -14,7 +14,7 @@
 //    ・Cron トリガー  * * * * *  （毎分。実際に動くのは13分おき）
 // =====================================================================
 
-const VERSION = '第20版（2026-10-17 00:40:00 更新・Barkで好きな通知音とキャラのアイコン）';
+const VERSION = '第21版（2026-10-17 00:50:00 更新・Barkの暗号化は通知ごとにIVを変える）';
 const DEFAULT_MODEL = 'gemini-flash-latest';
 const DEFAULT_GROK_MODEL = 'grok-4.7';                 // X（Twitter）の Grok と同じ最新世代
 const FALLBACK_GROK_MODEL = 'grok-4-fast-non-reasoning'; // 上が使えないときの予備
@@ -682,7 +682,7 @@ async function route(key, url, body, env, ctx) {
     }
 
     case 'GET /bark/status': {
-      return json({ deviceKey: !!env.BARK_DEVICE_KEY, encrypted: !!env.BARK_ENC_KEY, iv: !!env.BARK_ENC_IV, origin: !!(await kvGet(env, 'origin', '')) });
+      return json({ deviceKey: !!env.BARK_DEVICE_KEY, encrypted: !!env.BARK_ENC_KEY, origin: !!(await kvGet(env, 'origin', '')) });
     }
 
     case 'POST /test-push': {
@@ -3232,7 +3232,7 @@ function truncBytes(s, max) {
 }
 
 // ================================================================ Bark（好きな通知音・キャラのアイコンで届く。中身は暗号化）
-// シークレット：BARK_DEVICE_KEY（送り先）、BARK_ENC_KEY（暗号の鍵：16・24・32文字）、BARK_ENC_IV（16文字）
+// シークレット：BARK_DEVICE_KEY（送り先）、BARK_ENC_KEY（暗号の鍵：16・24・32文字）。IVは通知ごとにランダムに作って一緒に送る
 const BARK_SERVER = 'https://api.day.app';
 async function iconSig(env, cid) {
   const k = await crypto.subtle.importKey('raw', new TextEncoder().encode(env.APP_TOKEN), { name: 'HMAC', hash: 'SHA-256' }, false, ['sign']);
@@ -3260,10 +3260,15 @@ async function barkIconUrl(env, cid) {
   if (!r || !r.has) return '';
   return `${origin}/icon/${cid}/${await iconSig(env, cid)}.png?v=${r.icon_ver || 0}`;
 }
+function randomAlnum(n) {
+  const a = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789';
+  const b = crypto.getRandomValues(new Uint8Array(n));
+  return [...b].map((x) => a[x % a.length]).join('');
+}
 async function barkEncrypt(keyStr, ivStr, plain) {
   const key = new TextEncoder().encode(keyStr), iv = new TextEncoder().encode(ivStr);
   if (![16, 24, 32].includes(key.length)) throw new Error('BARK_ENC_KEY は16・24・32文字（半角英数字）にしてください');
-  if (iv.length !== 16) throw new Error('BARK_ENC_IV は16文字（半角英数字）にしてください');
+  if (iv.length !== 16) throw new Error('IV は16文字にしてください');
   const k = await crypto.subtle.importKey('raw', key, { name: 'AES-CBC' }, false, ['encrypt']);
   const ct = new Uint8Array(await crypto.subtle.encrypt({ name: 'AES-CBC', iv }, k, new TextEncoder().encode(plain))); // PKCS7で詰める
   let bin = ''; for (const b of ct) bin += String.fromCharCode(b);
@@ -3277,9 +3282,10 @@ async function sendBark(env, st, { title, body, cid, group }) {
   if (icon) p.icon = icon;
   const server = (env.BARK_SERVER || BARK_SERVER).replace(/\/+$/, '');
   let r;
-  if (env.BARK_ENC_KEY) { // 暗号化して送る（途中のサーバーには中身が読めない）
-    const ciphertext = await barkEncrypt(env.BARK_ENC_KEY, env.BARK_ENC_IV || '', JSON.stringify(p));
-    r = await fetch(`${server}/${encodeURIComponent(env.BARK_DEVICE_KEY)}`, { method: 'POST', body: new URLSearchParams({ ciphertext, iv: env.BARK_ENC_IV || '' }) });
+  if (env.BARK_ENC_KEY) { // 暗号化して送る（途中のサーバーには中身が読めない）。IVは毎回ランダム
+    const iv = randomAlnum(16);
+    const ciphertext = await barkEncrypt(env.BARK_ENC_KEY, iv, JSON.stringify(p));
+    r = await fetch(`${server}/${encodeURIComponent(env.BARK_DEVICE_KEY)}`, { method: 'POST', body: new URLSearchParams({ ciphertext, iv }) });
   } else {
     r = await fetch(`${server}/push`, { method: 'POST', headers: { 'Content-Type': 'application/json; charset=utf-8' }, body: JSON.stringify({ ...p, device_key: env.BARK_DEVICE_KEY }) });
   }

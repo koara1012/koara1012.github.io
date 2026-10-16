@@ -97,6 +97,12 @@ body.ura .pbtn{display:none}
   background:#fff;line-height:1.4;outline:none}
 .send{flex:none;width:40px;height:40px;border-radius:50%;background:var(--accent);color:#fff;display:grid;place-items:center;font-size:18px}
 .send:disabled{background:#c5cbd5}
+.costbar{flex:none;font-size:11.5px;color:var(--sub);text-align:center;padding:4px 10px;background:#f3f5f8;border-bottom:1px solid var(--line);font-variant-numeric:tabular-nums}
+.costbar:empty{display:none}
+body.ura .costbar{background:#2e2333;color:#cbb9cf;border-color:#43354a}
+.costTable{width:100%;border-collapse:collapse;font-size:13.5px;margin-top:4px}
+.costTable td{padding:5px 4px;border-bottom:1px solid var(--line)}
+.costTable td:last-child{text-align:right;font-variant-numeric:tabular-nums}
 /* メッセージを選んで消す */
 .selbar{flex:none;display:none;align-items:center;gap:8px;background:#f5f6f8;border-top:1px solid var(--line);
   padding:8px 10px calc(env(safe-area-inset-bottom) + 8px)}
@@ -227,6 +233,7 @@ body.ura #list.tlMode{background:#efe9f0}
   <div class="tabs" id="worldTabs">
     <button data-w="omote">表（トーク）</button><button data-w="ura">裏（会う）</button>
   </div>
+  <div class="costbar" id="costBar" role="button" tabindex="0" title="AIの利用料金（目安）"></div>
   <div class="scroll" id="list"></div>
   <nav class="bnav" id="modeNav">
     <button data-m="talk"><span class="ic">💬</span>トーク</button>
@@ -541,6 +548,23 @@ body.ura #list.tlMode{background:#efe9f0}
       <button class="btn sub" id="stLifeSave" style="margin-top:10px">くらしの設定を保存</button>
     </div>
 
+    <div class="sec" id="secCost">AIの利用料金（目安）</div>
+    <div class="field">
+      <table class="costTable" id="costTable"></table>
+      <div class="hint">返事・投稿・判定などで AI が使った量に単価を掛けて足した目安です。実際の請求額は Google（Gemini）と xAI（Grok）の管理画面で確認してください。Gemini の無料枠で使った分は、実際には請求されません。</div>
+      <label class="t" style="margin-top:10px">1ドル＝</label>
+      <div class="inline"><input type="number" id="costYen" min="50" max="500" step="1" style="width:6em"> 円</div>
+      <label class="t" style="margin-top:10px">単価（1Mトークンあたりのドル。空欄ならモデルに合わせて自動）</label>
+      <div class="inline" style="flex-wrap:wrap;gap:6px">
+        <input type="number" step="0.01" min="0" id="costGeminiIn" placeholder="Gemini 入力" style="flex:1 1 45%">
+        <input type="number" step="0.01" min="0" id="costGeminiOut" placeholder="Gemini 出力" style="flex:1 1 45%">
+        <input type="number" step="0.01" min="0" id="costGrokIn" placeholder="Grok 入力" style="flex:1 1 45%">
+        <input type="number" step="0.01" min="0" id="costGrokOut" placeholder="Grok 出力" style="flex:1 1 45%">
+        <input type="number" step="0.001" min="0" id="costImage" placeholder="写真1枚（ドル）" style="flex:1 1 45%">
+      </div>
+      <button class="btn sub" id="costSave" style="margin-top:10px">料金の設定を保存</button>
+    </div>
+
     <div class="sec">災害・停電（表のトーク・TL）</div>
     <div class="field">
       <label class="chk"><input type="checkbox" id="stDis"> 地震・台風・大雨・大雪などの本物の情報に、キャラたちも反応する</label>
@@ -591,7 +615,7 @@ body.ura #list.tlMode{background:#efe9f0}
 
 <script>
 'use strict';
-const APP_VERSION = '第22版（2026-10-17 03:50:00 更新・遠くの災害ニュースは本物の警報だけ・1〜2人だけ）';
+const APP_VERSION = '第23版（2026-10-17 04:10:00 更新・AIの利用料金の表示・話しかけが重ならない）';
 const $ = (id) => document.getElementById(id);
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 const esc = (s) => String(s).replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
@@ -675,7 +699,7 @@ async function sync() {
     let more = true;
     while (more) {
       const d = await api('GET', '/sync?since=' + S.maxId);
-      S.chars = d.chars; S.reads = d.reads || {}; S.charRead = d.charRead || {}; S.outage = d.outage || null; S.settings = d.settings || S.settings;
+      S.chars = d.chars; S.reads = d.reads || {}; S.charRead = d.charRead || {}; S.outage = d.outage || null; S.cost = d.cost || S.cost; renderCost(); S.settings = d.settings || S.settings;
       const fresh = [];
       for (const m of d.messages) if (addMsg(m)) fresh.push(m);
       applyRetracted(d.retracted || []);
@@ -1030,7 +1054,18 @@ async function deleteSelected() {
   } catch (e) { toast('消せませんでした：' + e.message); }
 }
 
+// ---- AIの利用料金（目安）：表・裏それぞれ、いつも上に表示
+function yenText(usd) {
+  const y = (usd || 0) * (S.settings.yen || 150);
+  return y < 1 ? '1円未満' : y < 100 ? '約' + y.toFixed(1) + '円' : '約' + Math.round(y).toLocaleString('ja-JP') + '円';
+}
+function renderCost() {
+  const el = $('costBar'); if (!el) return;
+  const c = S.cost && S.cost[S.world === 'ura' ? 'ura' : 'omote'];
+  el.textContent = c ? `AIの料金（${S.world === 'ura' ? '裏' : '表'}・目安）　今月 ${yenText(c.month)}　累計 ${yenText(c.total)}` : '';
+}
 function applyWorld() {
+  renderCost();
   document.body.classList.toggle('ura', S.world === 'ura');
   const tl = S.mode === 'tl';
   $('worldTabs').querySelectorAll('button').forEach((b) => {
@@ -1565,6 +1600,11 @@ async function loadBarkState() {
       : 'Bark の送り先（BARK_DEVICE_KEY）が、まだ Cloudflare のシークレットに登録されていません。';
   } catch (e) { $('nfBarkState').textContent = '状態を読み込めませんでした：' + e.message; }
 }
+function renderCostTable() {
+  const c = S.cost; if (!c) { $('costTable').innerHTML = '<tr><td>まだ記録がありません</td><td></td></tr>'; return; }
+  const row = (w, label) => `<tr><td>${label}・今月（${c[w].calls}回${c[w].images ? `・写真${c[w].images}枚` : ''}）</td><td>${yenText(c[w].month)}</td></tr><tr><td>${label}・累計</td><td>${yenText(c[w].total)}</td></tr>`;
+  $('costTable').innerHTML = row('omote', '表') + row('ura', '裏');
+}
 async function loadWorldSettings() {
   const box = $('worldFields');
   if (!S.cfg.url) { box.innerHTML = '<div class="hint">サーバーを設定すると使えます</div>'; return; }
@@ -1589,6 +1629,10 @@ function openSettings() {
   aiProv = { omote: S.settings.omoteProvider === 'grok' ? 'grok' : 'gemini', ura: S.settings.uraProvider === 'gemini' ? 'gemini' : 'grok' };
   $('stGrokModel').value = S.settings.grokModel || '';
   $('stNews').checked = S.settings.newsEnabled !== false;
+  renderCostTable();
+  $('costYen').value = S.settings.yen || 150;
+  const cs = S.settings.cost || {};
+  [['costGeminiIn', 'geminiIn'], ['costGeminiOut', 'geminiOut'], ['costGrokIn', 'grokIn'], ['costGrokOut', 'grokOut'], ['costImage', 'image']].forEach(([id, k]) => { $(id).value = cs[k] != null ? cs[k] : ''; });
   $('stDis').checked = S.settings.disasterEnabled !== false; $('stQuake').value = S.settings.quakeMin || '4';
   loadDisStatus();
   $('stLife').checked = S.settings.lifeEnabled !== false; $('stImages').checked = S.settings.imagesEnabled !== false; $('stDelay').checked = S.settings.delayEnabled !== false;
@@ -1754,6 +1798,12 @@ $('nfBarkTest').onclick = async () => {
     toast(`Bark に送りました（暗号化：${d.encrypted ? 'オン' : 'オフ'}／アイコン：${d.icon ? 'あり' : 'なし'}／音：${d.sound}）`, 5000);
   } catch (e) { toast(e.message, 5000); }
 };
+$('costSave').onclick = async () => {
+  const cost = {};
+  [['costGeminiIn', 'geminiIn'], ['costGeminiOut', 'geminiOut'], ['costGrokIn', 'grokIn'], ['costGrokOut', 'grokOut'], ['costImage', 'image']].forEach(([id, k]) => { if ($(id).value !== '') cost[k] = Number($(id).value); });
+  try { const r = await api('POST', '/settings', { settings: { yen: Number($('costYen').value) || 150, cost } }); S.settings = r.settings; renderCost(); renderCostTable(); toast('料金の設定を保存しました'); } catch (e) { toast(e.message); }
+};
+$('costBar').onclick = () => { openSettings(); setTimeout(() => $('secCost').scrollIntoView({ block: 'start' }), 50); };
 $('stOutage').onclick = async () => {
   const on = !(S.outage && S.outage.on);
   if (!confirm(on ? '停電中にしますか？キャラたちにも停電が起きます。' : '停電が復旧したことにしますか？')) return;

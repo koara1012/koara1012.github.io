@@ -14,7 +14,7 @@
 //    ・Cron トリガー  * * * * *  （毎分。実際に動くのは13分おき）
 // =====================================================================
 
-const VERSION = '第22版（2026-10-17 03:50:00 更新・遠くの災害ニュースは本物の警報だけ・1〜2人だけ）';
+const VERSION = '第23版（2026-10-17 04:10:00 更新・AIの利用料金の表示・話しかけが重ならない）';
 const DEFAULT_MODEL = 'gemini-flash-latest';
 const DEFAULT_GROK_MODEL = 'grok-4.7';                 // X（Twitter）の Grok と同じ最新世代
 const FALLBACK_GROK_MODEL = 'grok-4-fast-non-reasoning'; // 上が使えないときの予備
@@ -62,6 +62,7 @@ export default {
     // Cronの書き方では「13分ごと」をぴったり指定できないので、毎分呼ばれて13分おきのときだけ動く
     const minute = Math.floor(Number(event && event.scheduledTime) / 60000);
     ctx.waitUntil(runDueReplies(env).catch((e) => log(env, 'あとで返す返事: ' + e.message))); // 予約した返事は毎分確認（軽い）
+    ctx.waitUntil(runDueProactive(env).catch((e) => log(env, '自動送信: ' + e.message))); // 時間をずらした話しかけ
     ctx.waitUntil(runDisasters(env, minute).catch((e) => log(env, '災害の確認: ' + e.message))); // 地震・速報は毎分、ほかは間をあけて確認
     if (Number.isFinite(minute) && minute % TICK_MIN !== 0) return;
     ctx.waitUntil(tick(env).catch((e) => log(env, 'tick全体: ' + e.message)));
@@ -94,6 +95,7 @@ async function ensureSchema(env) {
     env.DB.prepare('CREATE INDEX IF NOT EXISTS idx_memories ON memories(char_id, id)'),
     env.DB.prepare('CREATE TABLE IF NOT EXISTS char_state (char_id TEXT PRIMARY KEY, data TEXT NOT NULL)'),
     env.DB.prepare('CREATE TABLE IF NOT EXISTS images (id TEXT NOT NULL, part INTEGER NOT NULL, mime TEXT NOT NULL, data TEXT NOT NULL, PRIMARY KEY (id, part))'),
+    env.DB.prepare('CREATE TABLE IF NOT EXISTS ai_cost (world TEXT NOT NULL, month TEXT NOT NULL, usd REAL NOT NULL DEFAULT 0, calls INTEGER NOT NULL DEFAULT 0, tin INTEGER NOT NULL DEFAULT 0, tout INTEGER NOT NULL DEFAULT 0, images INTEGER NOT NULL DEFAULT 0, PRIMARY KEY (world, month))'), // AIの利用料金（目安）
   ]);
   // 既存の messages に写真・送信取り消し用の列を足す（2回目以降は「もうある」で失敗するので無視）
   for (const col of ['image TEXT', 'alt TEXT', 'retracted INTEGER NOT NULL DEFAULT 0', 'retract_at INTEGER']) {
@@ -171,7 +173,7 @@ const DEFAULT_SETTINGS = {
   quietEnabled: true, quietStart: 1, quietEnd: 7, omoteProvider: 'gemini', uraProvider: 'grok', grokModel: '',
   meName: '', meNameUra: '', meIconVer: 0, meUraIconVer: 0, // あなたのTLでの名前（表・裏）とアイコンの版
   newsEnabled: true, // 表で話題を切り替えるとき、最近のニュースも話題にする
-  lifeEnabled: true, imagesEnabled: true, delayEnabled: true, disasterEnabled: true, quakeMin: '4', notifyVia: 'web', barkSound: '', birthday: '', // くらし（記憶・毎日の様子など）、写真、あなたの誕生日 MM-DD
+  lifeEnabled: true, imagesEnabled: true, delayEnabled: true, disasterEnabled: true, quakeMin: '4', notifyVia: 'web', barkSound: '', yen: 150, cost: {}, birthday: '', // くらし（記憶・毎日の様子など）、写真、あなたの誕生日 MM-DD
   weatherLat: 35.927, weatherLon: 139.604, weatherPlace: '埼玉県さいたま市北区日進町',
 };
 async function getSettings(env) {
@@ -292,7 +294,7 @@ async function route(key, url, body, env, ctx) {
       // アプリの表示用に、記憶ではない原文は返さない
       messages = messages.map((m) => { const { origText, ...rest } = m; return rest; });
       const dis = await kvGet(env, 'dis:state', null);
-      return json({ chars, messages, more, reads, charRead, outage: dis && dis.outage ? dis.outage : null, retracted: rt.map((r) => r.id), settings: await getSettings(env), now: Date.now(), version: VERSION });
+      return json({ chars, messages, more, reads, charRead, cost: await costSummary(env).catch(() => null), outage: dis && dis.outage ? dis.outage : null, retracted: rt.map((r) => r.id), settings: await getSettings(env), now: Date.now(), version: VERSION });
     }
 
     case 'GET /icons': {
@@ -345,7 +347,7 @@ async function route(key, url, body, env, ctx) {
       const id = url.searchParams.get('id') || '';
       await env.DB.batch([
         env.DB.prepare('DELETE FROM chars WHERE id=?').bind(id),
-        env.DB.prepare('DELETE FROM kv WHERE k IN (?,?,?)').bind('reply:' + id, 'rhythm:' + id, 'jealous:' + id),
+        env.DB.prepare('DELETE FROM kv WHERE k IN (?,?,?,?)').bind('reply:' + id, 'rhythm:' + id, 'jealous:' + id, 'proj:' + id),
         env.DB.prepare('DELETE FROM messages WHERE char_id=? OR char_id=?').bind(id, id + URA),
         env.DB.prepare('DELETE FROM reads WHERE char_id=? OR char_id=?').bind(id, id + URA),
         env.DB.prepare('DELETE FROM ura_icons WHERE char_id=?').bind(id),
@@ -366,7 +368,7 @@ async function route(key, url, body, env, ctx) {
       await env.DB.batch([
         env.DB.prepare('DELETE FROM messages WHERE char_id=?').bind(key),
         env.DB.prepare('DELETE FROM reads WHERE char_id=?').bind(key),
-        env.DB.prepare('DELETE FROM kv WHERE k=?').bind('reply:' + key),
+        env.DB.prepare('DELETE FROM kv WHERE k IN (?,?)').bind('reply:' + key, 'proj:' + key),
       ]);
       return json({ ok: true });
     }
@@ -528,6 +530,12 @@ async function route(key, url, body, env, ctx) {
       if ('imagesEnabled' in s) v.imagesEnabled = !!s.imagesEnabled;
       if ('delayEnabled' in s) v.delayEnabled = !!s.delayEnabled;
       if ('notifyVia' in s && ['web', 'bark', 'both'].includes(s.notifyVia)) v.notifyVia = s.notifyVia;
+      if ('yen' in s) v.yen = clamp(num(s.yen, 150), 50, 500);
+      if (s.cost && typeof s.cost === 'object') { // 単価の上書き（空ならモデルに合わせて自動）
+        const cst = {};
+        for (const k of ['geminiIn', 'geminiOut', 'grokIn', 'grokOut', 'image']) { const x = s.cost[k]; if (x !== '' && x != null && Number.isFinite(Number(x)) && Number(x) >= 0) cst[k] = Number(x); }
+        v.cost = cst;
+      }
       if ('barkSound' in s) v.barkSound = String(s.barkSound || '').trim().replace(/\.(caf|m4a|mp3|wav)$/i, '').slice(0, 60);
       if ('disasterEnabled' in s) v.disasterEnabled = !!s.disasterEnabled;
       if ('quakeMin' in s && QUAKE_MIN[s.quakeMin]) v.quakeMin = s.quakeMin;
@@ -786,10 +794,17 @@ async function tick(env) {
         }
       }
       if (!d) continue;
+      if (d.mode !== 'reply' && (await kvGet(env, 'proj:' + c.id, null))) continue; // もう話しかける予定が入っている
       if (d.mode !== 'reply' && boost.justDone) d.justDone = boost.justDone;
       if (d.mode !== 'reply' && isQuiet(now, settings)) d.night = true; // 深夜・早朝らしい内容に
       if (d.mode === 'topic') await attachNews(env, c, d, settings); // ときどき最近のニュースも話題の候補に
       if (d.mode === 'topic' && settings.lifeEnabled) await chooseFlavor(env, c, d, settings, now);
+      if (d.mode !== 'reply') { // 自分から話しかけるときは、ほかの子と時間をずらして送る（何人も同時に届かないように）
+        const due = await nextProactiveSlot(env, now);
+        await kvSet(env, 'proj:' + c.id, { d, due, at: now });
+        done.push(c.name + ':' + d.mode + (d.flavor ? '/' + d.flavor : '') + `（${Math.round((due - now) / MIN)}分後）`);
+        continue;
+      }
       const msgs = await generateAndStore(env, c, d, hist, lastRead);
       if (msgs.length) await pushToAll(env, c, msgs);
       await lifeAfterSend(env, c, d, now);
@@ -1007,6 +1022,7 @@ async function grokText(env, model, system, contents, schema, schemaName, opts) 
   let format = schemaFormat, data, lastErr;
   // 考えるモデル（grok-4.7 など）は、チャットの返事が遅くならないよう思考を軽めにする
   let effort = /^grok-4\.[5-9]|^grok-[5-9]/.test(model) ? ((opts && opts.effort) || 'low') : null; // 長め（小説風）のときは少し多めに考える
+  const world = (opts && opts.world) || 'omote';
   for (let attempt = 0; attempt < 5; attempt++) {
     const req = { model, messages, temperature: 1.0, response_format: format };
     if (effort) req.reasoning_effort = effort;
@@ -1034,6 +1050,12 @@ async function grokText(env, model, system, contents, schema, schemaName, opts) 
   if (!data) throw new Error(lastErr);
   const ch = data.choices && data.choices[0];
   const text = ch && ch.message && typeof ch.message.content === 'string' ? ch.message.content : '';
+  const u = data.usage || {};
+  const reasoning = nz(u.completion_tokens_details && u.completion_tokens_details.reasoning_tokens, 0);
+  // 考えた分（reasoning）も出力として請求される。completion_tokens に含まれていなければ足す
+  const inCompletion = nz(u.total_tokens, 0) <= nz(u.prompt_tokens, 0) + nz(u.completion_tokens, 0);
+  const outTok = nz(u.completion_tokens, 0) + (inCompletion ? 0 : reasoning);
+  await recordCost(env, world, 'grok', data.model || model, nz(u.prompt_tokens, 0), nz(u.prompt_tokens_details && u.prompt_tokens_details.cached_tokens, 0), outTok).catch(() => {});
   if (!text) throw new Error('Grokの返答が空でした（' + ((ch && ch.finish_reason) || '理由不明') + '）');
   return text;
 }
@@ -1066,24 +1088,24 @@ async function aiJson(env, world, system, userText, schema, schemaName) {
 async function callAIObj(env, world, system, contents, schema, schemaName) {
   const st = await getSettings(env);
   if (providerFor(st, world) === 'grok') {
-    return parseJsonLoose(await grokText(env, grokModelFor(env, st), system, contents, schema, schemaName), 'Grok');
+    return parseJsonLoose(await grokText(env, grokModelFor(env, st), system, contents, schema, schemaName, { world }), 'Grok');
   }
-  return parseJsonLoose(await geminiText(env, system, contents, toGeminiSchema(schema)), 'Gemini');
+  return parseJsonLoose(await geminiText(env, system, contents, toGeminiSchema(schema), world), 'Gemini');
 }
 
 // ---------------------------------------------------------------- 使うAIを選んで呼ぶ
 async function callAI(env, world, system, contents, maxSplit, opts) {
   const st = await getSettings(env);
-  if (providerFor(st, world) === 'grok') return callGrok(env, grokModelFor(env, st), system, contents, maxSplit, opts);
-  return callGemini(env, system, contents, maxSplit);
+  if (providerFor(st, world) === 'grok') return callGrok(env, grokModelFor(env, st), system, contents, maxSplit, { ...(opts || {}), world });
+  return callGemini(env, system, contents, maxSplit, world);
 }
 
-async function callGemini(env, system, contents, maxSplit) {
-  return parseMessages(await geminiText(env, system, contents, toGeminiSchema(MSG_SCHEMA)), maxSplit, 'Gemini');
+async function callGemini(env, system, contents, maxSplit, world = 'omote') {
+  return parseMessages(await geminiText(env, system, contents, toGeminiSchema(MSG_SCHEMA), world), maxSplit, 'Gemini');
 }
 
 // Gemini に送って、返答の文字列（JSON）をそのまま返す
-async function geminiText(env, system, contents, responseSchema) {
+async function geminiText(env, system, contents, responseSchema, world = 'omote') {
   if (!env.GEMINI_API_KEY) throw new Error('シークレット GEMINI_API_KEY が設定されていません');
   const model = env.GEMINI_MODEL || DEFAULT_MODEL;
   const req = {
@@ -1115,8 +1137,43 @@ async function geminiText(env, system, contents, responseSchema) {
   const cand = data.candidates && data.candidates[0];
   const parts = (cand && cand.content && cand.content.parts) || [];
   const text = parts.filter((p) => !p.thought && typeof p.text === 'string').map((p) => p.text).join('');
+  const u = data.usageMetadata || {};
+  await recordCost(env, world, 'gemini', data.modelVersion || model, nz(u.promptTokenCount, 0), nz(u.cachedContentTokenCount, 0), nz(u.candidatesTokenCount, 0) + nz(u.thoughtsTokenCount, 0)).catch(() => {});
   if (!text) throw new Error('Geminiの返答が空でした（' + ((cand && cand.finishReason) || (data.promptFeedback && data.promptFeedback.blockReason) || '理由不明') + '）');
   return text;
+}
+
+// ---- AIの利用料金（目安）。返事ごとに使った量 × 単価を足していく
+const PRICE = { // 1Mトークンあたりのドル（入力・読み込み済みの入力・出力）
+  gemini: [[/flash-lite/, 0.10, 0.01, 0.40], [/gemini-3|flash-latest/, 0.50, 0.05, 3.00], [/2\.5-pro|pro/, 1.25, 0.125, 10.00], [/flash/, 0.30, 0.03, 2.50]],
+  grok: [[/fast/, 0.20, 0.05, 0.50], [/grok-4\.[5-9]|grok-[5-9]/, 2.00, 0.50, 6.00], [/grok-3-mini/, 0.30, 0.075, 0.50], [/grok/, 3.00, 0.75, 15.00]],
+};
+const IMAGE_USD = 0.039; // 写真1枚（Gemini 2.5 Flash Image）
+function priceFor(provider, model, st) {
+  const ov = (st && st.cost) || {};
+  const row = (PRICE[provider] || []).find((r) => r[0].test(String(model || ''))) || [null, 0.3, 0.03, 2.5];
+  const pIn = ov[provider + 'In'] != null ? ov[provider + 'In'] : row[1];
+  const pOut = ov[provider + 'Out'] != null ? ov[provider + 'Out'] : row[3];
+  return { pIn, pCache: ov[provider + 'In'] != null ? pIn * (row[2] / row[1]) : row[2], pOut };
+}
+async function recordCost(env, world, provider, model, tin, tcached, tout, images = 0) {
+  const st = await getSettings(env).catch(() => ({}));
+  const p = priceFor(provider, model, st);
+  const usd = images ? images * (st.cost && st.cost.image != null ? st.cost.image : IMAGE_USD)
+    : ((tin - tcached) * p.pIn + tcached * p.pCache + tout * p.pOut) / 1e6;
+  const month = jstDay(Date.now()).slice(0, 7);
+  await env.DB.prepare('INSERT INTO ai_cost (world,month,usd,calls,tin,tout,images) VALUES (?,?,?,?,?,?,?) ON CONFLICT(world,month) DO UPDATE SET usd=usd+excluded.usd, calls=calls+excluded.calls, tin=tin+excluded.tin, tout=tout+excluded.tout, images=images+excluded.images')
+    .bind(world === 'ura' ? 'ura' : 'omote', month, usd, images ? 0 : 1, tin, tout, images).run();
+}
+async function costSummary(env) {
+  const month = jstDay(Date.now()).slice(0, 7);
+  const { results } = await env.DB.prepare('SELECT world,month,usd,calls,images FROM ai_cost').all();
+  const out = { omote: { month: 0, total: 0, calls: 0, images: 0 }, ura: { month: 0, total: 0, calls: 0, images: 0 } };
+  for (const r of results) {
+    const o = out[r.world] || (out[r.world] = { month: 0, total: 0, calls: 0, images: 0 });
+    o.total += r.usd; if (r.month === month) { o.month += r.usd; o.calls += r.calls; o.images += r.images; }
+  }
+  return out;
 }
 
 async function generateAndStore(env, c, d, hist, lastRead, world = 'omote') {
@@ -2140,6 +2197,40 @@ async function decideReply(env, c, hist, now) {
   await kvSet(env, 'reply:' + c.id, pend2);
   return { now: false, pend: pend2 };
 }
+// ---- 自分から話しかける時刻を、ほかの子とずらす
+// 13分ごとの判定で当たった子は、その13分の中のばらばらの時刻に送る。直前に別の子が送るなら数分あける
+async function nextProactiveSlot(env, now) {
+  const last = await kvGet(env, 'projLast', 0);
+  const due = Math.max(now + rndR(0, 11) * MIN, last + rndR(4, 9) * MIN);
+  await kvSet(env, 'projLast', due);
+  return due;
+}
+async function runDueProactive(env) {
+  await ensureSchema(env);
+  const now = Date.now();
+  const { results } = await env.DB.prepare("SELECT k,v FROM kv WHERE k LIKE 'proj:%'").all();
+  const due = results.map((r) => { try { return { k: r.k, ...JSON.parse(r.v) }; } catch (_) { return null; } }).filter((p) => p && p.due <= now).sort((a, b) => a.due - b.due);
+  if (!due.length) return 0;
+  const chars = await loadChars(env);
+  let n = 0;
+  for (const p of due.slice(0, 2)) {
+    const claimed = await env.DB.prepare('DELETE FROM kv WHERE k=? RETURNING k').bind(p.k).first();
+    if (!claimed) continue;
+    const c = chars.find((x) => 'proj:' + x.id === p.k);
+    if (!c) continue;
+    try {
+      const hist = await recent(env, c.id, 60);
+      // 予約したあとに、ユーザーやこの子が話していたら、この話しかけはやめる（状況が変わったため）
+      if (hist.some((m) => m.at > p.at)) continue;
+      const msgs = await generateAndStore(env, c, p.d, hist, await getRead(env, c.id));
+      if (msgs.length) await pushToAll(env, c, msgs);
+      await lifeAfterSend(env, c, p.d, now);
+      n++;
+    } catch (e) { await log(env, `自動送信（${c.name}）: ${e.message}`); }
+  }
+  return n;
+}
+
 // 予約していた返事（毎分確認する）
 async function runDueReplies(env) {
   await ensureSchema(env);
@@ -3006,7 +3097,7 @@ async function geminiImage(env, prompt, src) {
     if (!r.ok) { lastErr = `画像 ${model} ${r.status}: ${(data && data.error && data.error.message) || ''}`; if ([400, 403, 404].includes(r.status)) continue; throw new Error(lastErr); }
     const ps = (((data || {}).candidates || [])[0] || {}).content;
     const img = ((ps && ps.parts) || []).find((p) => p.inlineData && p.inlineData.data);
-    if (img) return `data:${img.inlineData.mimeType || 'image/png'};base64,${img.inlineData.data}`;
+    if (img) { await recordCost(env, 'omote', 'gemini', model, 0, 0, 0, 1).catch(() => {}); return `data:${img.inlineData.mimeType || 'image/png'};base64,${img.inlineData.data}`; }
     lastErr = '画像が返ってきませんでした';
   }
   throw new Error(lastErr);

@@ -14,7 +14,7 @@
 //    ・Cron トリガー  * * * * *  （毎分。実際に動くのは13分おき）
 // =====================================================================
 
-const VERSION = '第19版（2026-10-16 14:30:00 更新・災害・季節の出来事・停電）';
+const VERSION = '第20版（2026-10-17 00:40:00 更新・Barkで好きな通知音とキャラのアイコン）';
 const DEFAULT_MODEL = 'gemini-flash-latest';
 const DEFAULT_GROK_MODEL = 'grok-4.7';                 // X（Twitter）の Grok と同じ最新世代
 const FALLBACK_GROK_MODEL = 'grok-4-fast-non-reasoning'; // 上が使えないときの予備
@@ -45,7 +45,11 @@ export default {
     try {
       if (!env.DB) throw new HttpError(500, 'D1データベースが「DB」という名前で結び付けられていません');
       if (!env.APP_TOKEN) throw new HttpError(500, 'シークレット APP_TOKEN（合言葉）が設定されていません');
+      // Barkの通知に出すキャラのアイコン（推測できない長い名前のアドレスだけ、合言葉なしで見られる）
+      const im = url.pathname.match(/^\/icon\/([\w-]{1,64})\/([0-9a-f]{32})\.png$/);
+      if (req.method === 'GET' && im) return await publicIcon(env, im[1], im[2]);
       if (req.headers.get('X-App-Token') !== env.APP_TOKEN) throw new HttpError(401, '合言葉が違います');
+      if (ctx && ctx.waitUntil) ctx.waitUntil(rememberOrigin(env, url.origin).catch(() => {}));
       await ensureSchema(env);
       const body = req.method === 'POST' ? await req.json().catch(() => ({})) : {};
       return await route(req.method + ' ' + url.pathname, url, body, env, ctx);
@@ -167,7 +171,7 @@ const DEFAULT_SETTINGS = {
   quietEnabled: true, quietStart: 1, quietEnd: 7, omoteProvider: 'gemini', uraProvider: 'grok', grokModel: '',
   meName: '', meNameUra: '', meIconVer: 0, meUraIconVer: 0, // あなたのTLでの名前（表・裏）とアイコンの版
   newsEnabled: true, // 表で話題を切り替えるとき、最近のニュースも話題にする
-  lifeEnabled: true, imagesEnabled: true, delayEnabled: true, disasterEnabled: true, quakeMin: '4', birthday: '', // くらし（記憶・毎日の様子など）、写真、あなたの誕生日 MM-DD
+  lifeEnabled: true, imagesEnabled: true, delayEnabled: true, disasterEnabled: true, quakeMin: '4', notifyVia: 'web', barkSound: '', birthday: '', // くらし（記憶・毎日の様子など）、写真、あなたの誕生日 MM-DD
   weatherLat: 35.927, weatherLon: 139.604, weatherPlace: '埼玉県さいたま市北区日進町',
 };
 async function getSettings(env) {
@@ -523,6 +527,8 @@ async function route(key, url, body, env, ctx) {
       if ('lifeEnabled' in s) v.lifeEnabled = !!s.lifeEnabled;
       if ('imagesEnabled' in s) v.imagesEnabled = !!s.imagesEnabled;
       if ('delayEnabled' in s) v.delayEnabled = !!s.delayEnabled;
+      if ('notifyVia' in s && ['web', 'bark', 'both'].includes(s.notifyVia)) v.notifyVia = s.notifyVia;
+      if ('barkSound' in s) v.barkSound = String(s.barkSound || '').trim().replace(/\.(caf|m4a|mp3|wav)$/i, '').slice(0, 60);
       if ('disasterEnabled' in s) v.disasterEnabled = !!s.disasterEnabled;
       if ('quakeMin' in s && QUAKE_MIN[s.quakeMin]) v.quakeMin = s.quakeMin;
       if ('birthday' in s) v.birthday = /^\d{2}-\d{2}$/.test(String(s.birthday)) ? String(s.birthday) : '';
@@ -666,6 +672,17 @@ async function route(key, url, body, env, ctx) {
     case 'POST /unsubscribe': {
       await env.DB.prepare('DELETE FROM subs WHERE endpoint=?').bind(String(body.endpoint || '')).run();
       return json({ ok: true });
+    }
+
+    case 'POST /test-bark': { // Barkにテスト通知
+      const st = await getSettings(env);
+      const c = body.charId ? (await loadChars(env)).find((x) => x.id === body.charId) : (await loadChars(env))[0];
+      const r = await sendBark(env, st, { title: c ? c.name : 'テスト', body: 'Barkからの通知は届いていますか？', cid: c ? c.id : null, group: c ? c.name : 'トーク' });
+      return json({ ok: true, ...r });
+    }
+
+    case 'GET /bark/status': {
+      return json({ deviceKey: !!env.BARK_DEVICE_KEY, encrypted: !!env.BARK_ENC_KEY, iv: !!env.BARK_ENC_IV, origin: !!(await kvGet(env, 'origin', '')) });
     }
 
     case 'POST /test-push': {
@@ -1578,7 +1595,7 @@ async function charPostNow(env, c, world, st, opts = {}) {
   const at = Date.now();
   const r = await env.DB.prepare('INSERT INTO tl_posts (world,author,text,at,planned,image,alt) VALUES (?,?,?,?,0,?,?)').bind(world, c.id, text, at, image, alt).run();
   const post = { id: r.meta.last_row_id, world, author: c.id, text, at, planned: 0, image, alt };
-  await pushTL(env, st, world, 'tlCharPost', { title: cName(c, world), body: (image ? '📷 ' : '') + text, post });
+  await pushTL(env, st, world, 'tlCharPost', { title: cName(c, world), body: (image ? '📷 ' : '') + text, post, actor: c.id });
   const { image: im, alt: al, ...rest } = post;
   return { ...rest, ...(im ? { image: im, alt: al } : {}), likes: [], comments: [] };
 }
@@ -1614,7 +1631,7 @@ async function execJob(env, j) {
   if (j.kind === 'like') {
     const r = await env.DB.prepare('INSERT OR IGNORE INTO tl_likes (post_id,author,at) VALUES (?,?,?)').bind(post.id, c.id, Date.now()).run();
     if (r.meta && r.meta.changes === 0) return false;
-    if (post.author === ME) await pushTL(env, st, world, 'tlLike', { title: `${who}さんがいいねしました`, body: trunc(post.text, 80), post, tag: 'like-' + post.id });
+    if (post.author === ME) await pushTL(env, st, world, 'tlLike', { title: `${who}さんがいいねしました`, body: trunc(post.text, 80), post, tag: 'like-' + post.id, actor: c.id });
     return true;
   }
 
@@ -1633,9 +1650,9 @@ async function execJob(env, j) {
   const commentId = r.meta.last_row_id;
 
   if (replyTo && replyTo.author === ME) {
-    await pushTL(env, st, world, 'tlReply', { title: `${who}さんが返信しました`, body: text, post });
+    await pushTL(env, st, world, 'tlReply', { title: `${who}さんが返信しました`, body: text, post, actor: c.id });
   } else if (post.author === ME) {
-    await pushTL(env, st, world, 'tlComment', { title: `${who}さんがコメントしました`, body: text, post });
+    await pushTL(env, st, world, 'tlComment', { title: `${who}さんがコメントしました`, body: text, post, actor: c.id });
   }
 
   // キャラ同士：キャラの投稿にほかのキャラがコメントしたら、投稿したキャラが1回だけ返すことがある
@@ -1651,9 +1668,11 @@ async function execJob(env, j) {
 }
 
 // ---- 通知（表のTLだけ。4項目それぞれオン／オフ）
-async function pushTL(env, st, world, flag, { title, body, post, tag }) {
+async function pushTL(env, st, world, flag, { title, body, post, tag, actor }) {
   if (world !== 'omote') return;              // 裏は通知しない
   if (!st.notify || !st.notify[flag]) return; // 設定でオフ
+  if (st.notifyVia !== 'web') await sendBark(env, st, { title, body: truncBytes(body, 1500), cid: actor, group: 'タイムライン' }).catch((e) => log(env, 'Bark通知（TL）: ' + e.message));
+  if (st.notifyVia === 'bark') return;
   try {
     await pushPayload(env, {
       title, body: truncBytes(body, 1500), tl: 'omote', postId: post.id,
@@ -3212,6 +3231,63 @@ function truncBytes(s, max) {
   return out + '…';
 }
 
+// ================================================================ Bark（好きな通知音・キャラのアイコンで届く。中身は暗号化）
+// シークレット：BARK_DEVICE_KEY（送り先）、BARK_ENC_KEY（暗号の鍵：16・24・32文字）、BARK_ENC_IV（16文字）
+const BARK_SERVER = 'https://api.day.app';
+async function iconSig(env, cid) {
+  const k = await crypto.subtle.importKey('raw', new TextEncoder().encode(env.APP_TOKEN), { name: 'HMAC', hash: 'SHA-256' }, false, ['sign']);
+  const sig = new Uint8Array(await crypto.subtle.sign('HMAC', k, new TextEncoder().encode('icon:' + cid)));
+  return [...sig.slice(0, 16)].map((b) => b.toString(16).padStart(2, '0')).join('');
+}
+async function publicIcon(env, cid, sig) {
+  if (sig !== await iconSig(env, cid)) return new Response('not found', { status: 404 });
+  await ensureSchema(env);
+  const r = await env.DB.prepare('SELECT icon FROM chars WHERE id=?').bind(cid).first();
+  const m = r && r.icon && String(r.icon).match(/^data:(image\/[\w+.-]+);base64,(.+)$/);
+  if (!m) return new Response('not found', { status: 404 });
+  const bin = Uint8Array.from(atob(m[2]), (ch) => ch.charCodeAt(0));
+  return new Response(bin, { headers: { 'Content-Type': m[1], 'Cache-Control': 'public, max-age=86400' } });
+}
+async function rememberOrigin(env, origin) {
+  if (!/^https:\/\//.test(origin)) return;
+  if ((await kvGet(env, 'origin', '')) !== origin) await kvSet(env, 'origin', origin);
+}
+async function barkIconUrl(env, cid) {
+  if (!cid || cid === ME) return '';
+  const origin = await kvGet(env, 'origin', '');
+  if (!origin) return '';
+  const r = await env.DB.prepare('SELECT icon IS NOT NULL AS has, icon_ver FROM chars WHERE id=?').bind(cid).first();
+  if (!r || !r.has) return '';
+  return `${origin}/icon/${cid}/${await iconSig(env, cid)}.png?v=${r.icon_ver || 0}`;
+}
+async function barkEncrypt(keyStr, ivStr, plain) {
+  const key = new TextEncoder().encode(keyStr), iv = new TextEncoder().encode(ivStr);
+  if (![16, 24, 32].includes(key.length)) throw new Error('BARK_ENC_KEY は16・24・32文字（半角英数字）にしてください');
+  if (iv.length !== 16) throw new Error('BARK_ENC_IV は16文字（半角英数字）にしてください');
+  const k = await crypto.subtle.importKey('raw', key, { name: 'AES-CBC' }, false, ['encrypt']);
+  const ct = new Uint8Array(await crypto.subtle.encrypt({ name: 'AES-CBC', iv }, k, new TextEncoder().encode(plain))); // PKCS7で詰める
+  let bin = ''; for (const b of ct) bin += String.fromCharCode(b);
+  return btoa(bin);
+}
+async function sendBark(env, st, { title, body, cid, group }) {
+  if (!env.BARK_DEVICE_KEY) throw new Error('シークレット BARK_DEVICE_KEY が設定されていません');
+  const p = { title: String(title || ''), body: String(body || ''), group: group || 'トーク', level: 'active' };
+  if (st.barkSound) p.sound = st.barkSound;
+  const icon = await barkIconUrl(env, cid).catch(() => '');
+  if (icon) p.icon = icon;
+  const server = (env.BARK_SERVER || BARK_SERVER).replace(/\/+$/, '');
+  let r;
+  if (env.BARK_ENC_KEY) { // 暗号化して送る（途中のサーバーには中身が読めない）
+    const ciphertext = await barkEncrypt(env.BARK_ENC_KEY, env.BARK_ENC_IV || '', JSON.stringify(p));
+    r = await fetch(`${server}/${encodeURIComponent(env.BARK_DEVICE_KEY)}`, { method: 'POST', body: new URLSearchParams({ ciphertext, iv: env.BARK_ENC_IV || '' }) });
+  } else {
+    r = await fetch(`${server}/push`, { method: 'POST', headers: { 'Content-Type': 'application/json; charset=utf-8' }, body: JSON.stringify({ ...p, device_key: env.BARK_DEVICE_KEY }) });
+  }
+  const t = await r.text().catch(() => '');
+  if (!r.ok) throw new Error(`Barkへの送信に失敗しました（${r.status}）${t.slice(0, 120)}`);
+  return { status: r.status, encrypted: !!env.BARK_ENC_KEY, icon: !!icon, sound: p.sound || '（Barkの既定の音）' };
+}
+
 async function pushPayload(env, obj) {
   const { results } = await env.DB.prepare('SELECT endpoint,data FROM subs').all();
   if (!results.length) return [{ error: '通知の登録がありません（アプリの設定で「通知をオンにする」を押してください）' }];
@@ -3239,10 +3315,8 @@ async function pushPayload(env, obj) {
 
 async function pushToAll(env, c, msgs) {
   if (!msgs.length) return;
-  await pushPayload(env, {
-    title: c.name,
-    body: truncBytes(msgs.map((m) => m.text).join('\n'), 1800),
-    charId: c.id,
-    badge: await totalUnread(env),
-  });
+  const st = await getSettings(env);
+  const body = truncBytes(msgs.map((m) => (m.image && !m.text ? '📷 写真' : m.text)).filter(Boolean).join('\n'), 1800);
+  if (st.notifyVia !== 'bark') await pushPayload(env, { title: c.name, body, charId: c.id, badge: await totalUnread(env) });
+  if (st.notifyVia !== 'web') await sendBark(env, st, { title: c.name, body, cid: c.id, group: c.name }).catch((e) => log(env, 'Bark通知: ' + e.message));
 }

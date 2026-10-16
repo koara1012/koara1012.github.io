@@ -486,6 +486,15 @@ body.ura #list.tlMode{background:#efe9f0}
       <div class="hint">裏のトークと裏のタイムラインは、通知しません。</div>
       <button class="btn sub" id="nfSave" style="margin-top:10px">通知の設定を保存</button>
     </div>
+    <div class="field">
+      <label class="t">通知の届け方</label>
+      <div class="seg" id="nfVia"><button data-v="web">このアプリ</button><button data-v="bark">Bark</button><button data-v="both">両方</button></div>
+      <div class="hint">Bark にすると、好きな通知音で、キャラのアイコン付きで届きます（中身は暗号化されます）。Bark だけにすると、ホーム画面のアイコンの未読数は変わらなくなります。</div>
+      <label class="t" style="margin-top:10px" for="nfSound">Bark の通知音の名前</label>
+      <input type="text" id="nfSound" autocapitalize="off" autocomplete="off" placeholder="例：mysound（Barkに登録した音の名前）">
+      <div class="hint" id="nfBarkState"></div>
+      <div class="inline" style="gap:8px;margin-top:8px"><button class="btn sub" id="nfBarkSave" style="flex:1">保存</button><button class="btn sub" id="nfBarkTest" style="flex:1">Barkにテスト通知</button></div>
+    </div>
 
     <div class="sec">あなたのプロフィール（タイムライン）</div>
     <div class="field">
@@ -582,7 +591,7 @@ body.ura #list.tlMode{background:#efe9f0}
 
 <script>
 'use strict';
-const APP_VERSION = '第19版（2026-10-16 14:30:00 更新・災害・季節の出来事・停電）';
+const APP_VERSION = '第20版（2026-10-17 00:40:00 更新・Barkで好きな通知音とキャラのアイコン）';
 const $ = (id) => document.getElementById(id);
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 const esc = (s) => String(s).replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
@@ -1546,6 +1555,16 @@ async function loadDisStatus() {
     $('stDisStatus').textContent = `確認：地震 ${ago(d.checks.quake)}／天気 ${ago(d.checks.forecast)}／台風 ${ago(d.checks.typhoon)}${d.checks.tepcoBad ? '／停電情報は自動で読めていません（手動で切り替えてください）' : ''}${d.saga ? `／いま：${d.saga.name}` : ''}${rec ? `／最近：${rec}` : ''}`;
   } catch (e) { $('stDisStatus').textContent = '状態を読み込めませんでした：' + e.message; }
 }
+function syncVia() { $('nfVia').querySelectorAll('button').forEach((b) => b.classList.toggle('on', b.dataset.v === S.nfVia)); }
+async function loadBarkState() {
+  if (!S.cfg.url) return;
+  try {
+    const d = await api('GET', '/bark/status');
+    $('nfBarkState').textContent = d.deviceKey
+      ? `Bark の送り先：登録済み／暗号化：${d.encrypted ? (d.iv ? 'オン' : '鍵はあるが BARK_ENC_IV がありません') : 'オフ（BARK_ENC_KEY を登録すると暗号化されます）'}`
+      : 'Bark の送り先（BARK_DEVICE_KEY）が、まだ Cloudflare のシークレットに登録されていません。';
+  } catch (e) { $('nfBarkState').textContent = '状態を読み込めませんでした：' + e.message; }
+}
 async function loadWorldSettings() {
   const box = $('worldFields');
   if (!S.cfg.url) { box.innerHTML = '<div class="hint">サーバーを設定すると使えます</div>'; return; }
@@ -1581,6 +1600,7 @@ function openSettings() {
   $('stWeatherPlace').textContent = S.settings.weatherPlace || '埼玉県さいたま市北区日進町';
   syncAiUI();
   const nf = S.settings.notify || {};
+  S.nfVia = S.settings.notifyVia || 'web'; $('nfSound').value = S.settings.barkSound || ''; syncVia(); loadBarkState();
   $('nfComment').checked = nf.tlComment !== false; $('nfLike').checked = nf.tlLike !== false;
   $('nfCharPost').checked = nf.tlCharPost !== false; $('nfReply').checked = nf.tlReply !== false;
   meEdit = { icon: undefined, uraIcon: undefined };
@@ -1724,6 +1744,16 @@ $('list').addEventListener('click', (e) => {
 $('worldTabs').addEventListener('click', (e) => { const b = e.target.closest('button'); if (b) setWorld(b.dataset.w); });
 $('btnAdd').onclick = () => { if (!S.cfg.url) { openSettings(); return; } openEdit(null); };
 $('btnSettings').onclick = openSettings;
+$('nfVia').addEventListener('click', (e) => { const b = e.target.closest('button'); if (b) { S.nfVia = b.dataset.v; syncVia(); } });
+$('nfBarkSave').onclick = async () => {
+  try { const r = await api('POST', '/settings', { settings: { notifyVia: S.nfVia, barkSound: $('nfSound').value } }); S.settings = r.settings; $('nfSound').value = r.settings.barkSound || ''; toast('通知の届け方を保存しました'); } catch (e) { toast(e.message); }
+};
+$('nfBarkTest').onclick = async () => {
+  try {
+    const d = await api('POST', '/test-bark', { charId: S.chars[0] ? S.chars[0].id : null });
+    toast(`Bark に送りました（暗号化：${d.encrypted ? 'オン' : 'オフ'}／アイコン：${d.icon ? 'あり' : 'なし'}／音：${d.sound}）`, 5000);
+  } catch (e) { toast(e.message, 5000); }
+};
 $('stOutage').onclick = async () => {
   const on = !(S.outage && S.outage.on);
   if (!confirm(on ? '停電中にしますか？キャラたちにも停電が起きます。' : '停電が復旧したことにしますか？')) return;

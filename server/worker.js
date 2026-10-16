@@ -14,7 +14,7 @@
 //    ・Cron トリガー  * * * * *  （毎分。実際に動くのは13分おき）
 // =====================================================================
 
-const VERSION = '第21版（2026-10-17 00:50:00 更新・Barkの暗号化は通知ごとにIVを変える）';
+const VERSION = '第22版（2026-10-17 03:50:00 更新・遠くの災害ニュースは本物の警報だけ・1〜2人だけ）';
 const DEFAULT_MODEL = 'gemini-flash-latest';
 const DEFAULT_GROK_MODEL = 'grok-4.7';                 // X（Twitter）の Grok と同じ最新世代
 const FALLBACK_GROK_MODEL = 'grok-4-fast-non-reasoning'; // 上が使えないときの予備
@@ -2400,11 +2400,16 @@ async function checkNews(env, s, now, wantOutage) {
     } catch (_) {}
     found[q] = items.filter((x) => x.at && now - x.at < 24 * 3600e3);
   }
-  const recent = (q, h, re) => (found[q] || []).find((x) => now - x.at < h * 3600e3 && re.test(x.title));
-  for (const q of ['大津波警報', '大雨特別警報', '噴火 噴火警戒レベル']) {
-    const x = recent(q, 24, /大津波警報|特別警報|噴火/);
-    if (x && !/埼玉/.test(x.title)) addFar(s, x.title, now);
-  }
+  // 訓練・想定・特集・振り返りなど、いま起きていない出来事の記事は除く
+  const notReal = /訓練|想定|特集|解説|年前|周年|過去|教訓|シミュレーション|備え|啓発|講演|展示|ハザードマップ|もしも|仮に|検証|振り返|記念|追悼|研修|会議|計画|予測|可能性|とは[?？]?$|なぜ/;
+  const recent = (q, h, re) => (found[q] || []).find((x) => now - x.at < h * 3600e3 && re.test(x.title) && !notReal.test(x.title));
+  // 遠くの大きな災害：実際に警報が出た・噴火したという見出しだけ
+  const far = [
+    recent('大津波警報', 24, /大津波警報(が|を)?(発表|発令|出)|大津波警報([、　 ]|$)/),
+    recent('大雨特別警報', 24, /特別警報(が|を)?(発表|発令|出)/),
+    recent('噴火 噴火警戒レベル', 24, /噴火警報(が|を)?(発表|発令|出)|噴火警戒レベル.{0,6}[3-5３-５].{0,4}(に引き上げ|へ引き上げ|引き上げ)|噴火速報|(が|で)噴火(した|しました|が発生|[、　 ]|$)|入山規制/),
+  ];
+  for (const x of far) if (x && !/埼玉/.test(x.title)) addFar(s, x.title, now);
   return {
     senjo: recent('線状降水帯 埼玉', 6, /線状降水帯/),
     tornado: recent('竜巻 埼玉', 3, /竜巻|突風/),
@@ -2570,7 +2575,8 @@ function sagaStep(s, now, today, tc, snowDays, snowNow, f) {
 
 // ---- 出来事ごとの「必ず」「急ぎ」
 const EV_URGENT = { quake: 1, eew: 1, outage_on: 1, tornado: 1 };
-const EV_QUICK = { outage_off: 0, rain: 0.2, gust: 0.4, wind: 0.15 }; // その場で体験すること（起きていればすぐ。値は寝ていて気づく確率）
+const EV_QUICK = { outage_off: 0, rain: 0.2, gust: 0.4, wind: 0.15 };
+const EV_STYLES = ['まず自分の身の回りの様子から話す', 'まずユーザーのことを気づかう一言から入る', '短く、要点だけ', '少し長めに、気持ちを素直に', '質問を交えて、ユーザーの様子を聞く', '自分らしい冗談や軽さを少し混ぜる（深刻な場合は控える）']; // その場で体験すること（起きていればすぐ。値は寝ていて気づく確率）
 const EV_TL = { quake: 1, eew: 1, outage_on: 1, outage_off: 0.6, rain: 1, gust: 0.8, wind: 0.7, tornado: 1, typhoon: 1, snow: 1, far: 0.4, ash: 1 };
 
 // その子が、いつ・どんな状態で気づいて連絡するか
@@ -2611,12 +2617,17 @@ async function addEvent(env, st, s, ev, now) {
     if (e) ev.eewSent = Object.keys(e.sent || {});
     await env.DB.prepare("DELETE FROM kv WHERE k LIKE ?").bind('disjob:' + ev.eew + ':%').run();
   }
-  const chars = await loadChars(env);
+  let chars = await loadChars(env);
+  if (ev.type === 'far') { // 遠くのニュースは、1〜2人だけ（心配性な子ほど選ばれやすい）
+    const scored = [];
+    for (const c of chars) { const rh = await getRhythm(env, c, false); scored.push({ c, w: (100 - nz(rh.calm, 50)) / 100 + Math.random() }); }
+    chars = scored.sort((a, b) => b.w - a.w).slice(0, Math.random() < 0.6 ? 1 : 2).map((x) => x.c);
+  }
   for (const c of chars) {
-    if (ev.type === 'far' && Math.random() < 0.5) continue; // 遠くのニュースは、気にする子だけ
     const state = await getState(env, c.id);
     const rh = await getRhythm(env, c, false);
     const r = eventReaction(c, rh, state, ev, now);
+    r.info.style = EV_STYLES[Math.floor(Math.random() * EV_STYLES.length)]; // 子によって話し方を変える
     const jobs = [['talk', r.talkDue]];
     if (Math.random() < (EV_TL[ev.type] ?? 0.5)) jobs.push(['tl', r.tlDue]);
     if (ev.type === 'quake') jobs.push(['follow', r.talkDue + (ev.sim ? 3 : rndR(40, 90)) * MIN]);
@@ -2706,7 +2717,7 @@ function eventCore(ev, j, s, now) {
     case 'ash':
       return `遠くの火山の噴火の影響で、この辺りにも少し灰が降っているらしい（「${ev.detail}」）。`;
     case 'far':
-      return `ニュースで「${ev.detail}」と流れている。遠くの出来事だが、気にかけたり心配したりする。ふざけない。`;
+      return `ニュースで「${ev.detail}」と流れているのを見た。遠くの出来事。自分なりの受け止め方で（その土地に縁があれば心配する、詳しくは知らないなら軽く触れる程度、など）。見出しにないことは足さない。ふざけない。`;
     case 'typhoon':
       return {
         approach: `${ev.name}が近づいている（最接近まであと${ev.days || 2}日ほど）。日に日に天気や気圧が悪くなっていく様子、頭痛やだるさ、予定がどうなるかの心配や期待を。`,
@@ -2732,7 +2743,8 @@ function eventSituation(d, now) {
     : job.kind === 'outcome'
       ? `さっきの緊急地震速報は、結局${ev.outcome === 'false' ? '誤報だった（ほとんど揺れなかった）' : '小さな揺れで済んだ'}。さっき慌てて連絡したことを受けて、気が抜けた・ほっとした・恥ずかしい、などをキャラクターらしく短く。`
       : eventCore(ev, job, { outage: d.outage }, now);
-  return head + '\n（防災の呼びかけや、公式の情報を確認するよう促すような言い方はしない。あくまでこの地域で暮らしている一人として、自分の気持ちと様子を話す）';
+  return head + `\n話し方：${(job.info && job.info.style) || '自分らしく'}。` +
+    '\n（「胸がざわざわ」のようなありきたりな決まり文句は避けて、このキャラクターらしい言葉で。防災の呼びかけや、公式の情報を確認するよう促すような言い方はしない。あくまでこの地域で暮らしている一人として、自分の気持ちと様子を話す）';
 }
 function eventTL(ev, j, s, now) {
   if (j.kind === 'tl2') return `さっきの緊急地震速報は${ev.outcome === 'false' ? '誤報だった' : '小さな揺れで済んだ'}。そのことをつぶやく（例「速報が鳴って慌てて外に出たのに…」）。`;

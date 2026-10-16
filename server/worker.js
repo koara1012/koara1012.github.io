@@ -14,7 +14,7 @@
 //    ・Cron トリガー  * * * * *  （毎分。実際に動くのは13分おき）
 // =====================================================================
 
-const VERSION = '第18版（2026-10-16 03:30:00 更新・1日の予定表で返事・話しかけ・TLが動く）';
+const VERSION = '第19版（2026-10-16 14:30:00 更新・災害・季節の出来事・停電）';
 const DEFAULT_MODEL = 'gemini-flash-latest';
 const DEFAULT_GROK_MODEL = 'grok-4.7';                 // X（Twitter）の Grok と同じ最新世代
 const FALLBACK_GROK_MODEL = 'grok-4-fast-non-reasoning'; // 上が使えないときの予備
@@ -58,6 +58,7 @@ export default {
     // Cronの書き方では「13分ごと」をぴったり指定できないので、毎分呼ばれて13分おきのときだけ動く
     const minute = Math.floor(Number(event && event.scheduledTime) / 60000);
     ctx.waitUntil(runDueReplies(env).catch((e) => log(env, 'あとで返す返事: ' + e.message))); // 予約した返事は毎分確認（軽い）
+    ctx.waitUntil(runDisasters(env, minute).catch((e) => log(env, '災害の確認: ' + e.message))); // 地震・速報は毎分、ほかは間をあけて確認
     if (Number.isFinite(minute) && minute % TICK_MIN !== 0) return;
     ctx.waitUntil(tick(env).catch((e) => log(env, 'tick全体: ' + e.message)));
   },
@@ -166,7 +167,7 @@ const DEFAULT_SETTINGS = {
   quietEnabled: true, quietStart: 1, quietEnd: 7, omoteProvider: 'gemini', uraProvider: 'grok', grokModel: '',
   meName: '', meNameUra: '', meIconVer: 0, meUraIconVer: 0, // あなたのTLでの名前（表・裏）とアイコンの版
   newsEnabled: true, // 表で話題を切り替えるとき、最近のニュースも話題にする
-  lifeEnabled: true, imagesEnabled: true, delayEnabled: true, birthday: '', // くらし（記憶・毎日の様子など）、写真、あなたの誕生日 MM-DD
+  lifeEnabled: true, imagesEnabled: true, delayEnabled: true, disasterEnabled: true, quakeMin: '4', birthday: '', // くらし（記憶・毎日の様子など）、写真、あなたの誕生日 MM-DD
   weatherLat: 35.927, weatherLon: 139.604, weatherPlace: '埼玉県さいたま市北区日進町',
 };
 async function getSettings(env) {
@@ -286,7 +287,8 @@ async function route(key, url, body, env, ctx) {
       for (const r of pr) { try { const p = JSON.parse(r.v); if (p.readAt <= Date.now()) charRead[p.key] = p.readAt; } catch (_) {} }
       // アプリの表示用に、記憶ではない原文は返さない
       messages = messages.map((m) => { const { origText, ...rest } = m; return rest; });
-      return json({ chars, messages, more, reads, charRead, retracted: rt.map((r) => r.id), settings: await getSettings(env), now: Date.now(), version: VERSION });
+      const dis = await kvGet(env, 'dis:state', null);
+      return json({ chars, messages, more, reads, charRead, outage: dis && dis.outage ? dis.outage : null, retracted: rt.map((r) => r.id), settings: await getSettings(env), now: Date.now(), version: VERSION });
     }
 
     case 'GET /icons': {
@@ -362,6 +364,48 @@ async function route(key, url, body, env, ctx) {
         env.DB.prepare('DELETE FROM reads WHERE char_id=?').bind(key),
         env.DB.prepare('DELETE FROM kv WHERE k=?').bind('reply:' + key),
       ]);
+      return json({ ok: true });
+    }
+
+    case 'GET /disaster': { // 災害・停電の様子（設定画面用）
+      const s = await disLoad(env);
+      const now = Date.now();
+      return json({
+        outage: s.outage || null,
+        saga: s.saga ? { type: s.saga.type, name: s.saga.name, phase: s.saga.phase } : null,
+        recent: (s.events || []).filter((e) => now - e.at < 3 * 864e5).map((e) => ({ type: e.type, at: e.at, level: e.level || '', phase: e.phase || '', outcome: e.outcome || '', sim: !!e.sim })).slice(-6),
+        checks: { quake: s.mon && s.mon.quakeOk || 0, forecast: s.mon && s.mon.fcOk || 0, warn: s.mon && s.mon.warnOk || 0, typhoon: s.mon && s.mon.tcOk || 0, news: s.mon && s.mon.newsOk || 0, tepcoBad: !!(s.mon && s.mon.tepcoBad) },
+      });
+    }
+
+    case 'POST /outage': { // 停電中の切り替え（手動）
+      const st = await getSettings(env);
+      const s = await disLoad(env);
+      const now = Date.now(), evs = [];
+      setOutage(s, !!body.on, 'manual', null, now, evs);
+      if (disOn(st)) for (const ev of evs) await addEvent(env, st, s, ev, now);
+      await disSave(env, s);
+      return json({ ok: true, outage: s.outage || null });
+    }
+
+    case 'POST /disaster/test': { // テスト：模擬の災害（反応は早め）
+      const st = await getSettings(env);
+      if (!disOn(st)) throw new HttpError(400, '設定で「くらし」と「災害・停電」をオンにしてください');
+      const s = await disLoad(env);
+      const now = Date.now();
+      const t = String(body.type || '');
+      const map = {
+        quake: { type: 'quake', scale: 45, level: '5弱', place: '埼玉県南部' },
+        eew_false: { type: 'eew', eid: 'test' + now, place: '', simOutcome: 'false' },
+        typhoon: { type: 'typhoon', phase: body.phase || 'hit', name: '台風', days: 2 },
+        snow: { type: 'snow', phase: 'hit', name: '雪' },
+        rain: { type: 'rain', detail: '1時間に50ミリほどの激しい雨' },
+      };
+      if (!map[t]) throw new HttpError(400, 'テストの種類が正しくありません');
+      const ev = { ...map[t], at: now, sim: true };
+      await addEvent(env, st, s, ev, now);
+      if (ev.simOutcome) { ev.testResolveAt = now + 90e3; }
+      await disSave(env, s);
       return json({ ok: true });
     }
 
@@ -479,6 +523,8 @@ async function route(key, url, body, env, ctx) {
       if ('lifeEnabled' in s) v.lifeEnabled = !!s.lifeEnabled;
       if ('imagesEnabled' in s) v.imagesEnabled = !!s.imagesEnabled;
       if ('delayEnabled' in s) v.delayEnabled = !!s.delayEnabled;
+      if ('disasterEnabled' in s) v.disasterEnabled = !!s.disasterEnabled;
+      if ('quakeMin' in s && QUAKE_MIN[s.quakeMin]) v.quakeMin = s.quakeMin;
       if ('birthday' in s) v.birthday = /^\d{2}-\d{2}$/.test(String(s.birthday)) ? String(s.birthday) : '';
       if (s.notify && typeof s.notify === 'object') {
         for (const k of Object.keys(NOTIFY_DEFAULT)) if (k in s.notify) v.notify[k] = !!s.notify[k];
@@ -790,6 +836,8 @@ function situation(d, hist, now) {
         'キャラクターらしく返信を催促してください。ただし直前の会話が自然に終わっていた場合（おやすみ・またね等）は、催促ではなく新しい話題で話しかけてください。';
     case 'special': case 'absent': case 'followup': case 'jealous':
       return lifeSituation(d, now);
+    case 'event':
+      return eventSituation(d, now);
     case 'topic':
     default:
       return (d.flavor && flavorText(d) ? flavorText(d) + '\n' : '') + `最後のやり取りから${fmtDur(now - (hist.length ? hist[hist.length - 1].at : now))}たっています。` +
@@ -1067,6 +1115,10 @@ async function generateAndStore(env, c, d, hist, lastRead, world = 'omote') {
       .flatMap((t) => t.split(/\n(?=\s*[＊*])/)); // ナレーションとセリフが1つにまとまっていたら分ける
   } else {
     const st = await getSettings(env);
+    if (disOn(st)) { // 停電中は、充電を節約して短く返す
+      const dis = await kvGet(env, 'dis:state', null).catch(() => null);
+      if (dis && dis.outage && dis.outage.on) c = { ...c, maxSplit: Math.min(c.maxSplit, 2) };
+    }
     const lifeInfo = await lifeContext(env, c, st, now).catch(() => '');
     // ユーザーが送ったばかりの写真は、AIに見せる
     const lastCharIdx = hist.map((m) => m.sender).lastIndexOf('char');
@@ -1410,10 +1462,11 @@ ${replyTo ? 'このコメントへの返信を書いてください。' : 'こ�
   return text.slice(0, 500);
 }
 
-async function genPost(env, c, world) {
+async function genPost(env, c, world, opts = {}) {
   const now = Date.now();
   const st = await getSettings(env);
   const life = world === 'omote' ? await tlLifeTheme(env, c, st, now).catch(() => null) : null;
+  if (life && opts.eventHint) { life.hint = opts.eventHint; life.photo = !!opts.eventPhoto && st.imagesEnabled; life.done = null; } // 災害などの出来事についての投稿
   const chars = await loadChars(env);
   const { results: own } = await env.DB.prepare('SELECT text FROM tl_posts WHERE world=? AND author=? ORDER BY id DESC LIMIT 6').bind(world, c.id).all();
   const { results: others } = await env.DB.prepare('SELECT author,text FROM tl_posts WHERE world=? AND author<>? ORDER BY id DESC LIMIT 5').bind(world, c.id).all();
@@ -1483,6 +1536,8 @@ ${(state.diary || []).slice(-2).map((x) => `${fmtDay(x.d)}の出来事：${x.t}`
 続いている出来事「${state.story.title}」：${state.story.log.map((x) => `${fmtDay(x.d)} ${x.t}`).join(' → ')}${state.story.finished ? '（区切りがついた）' : ''}` : ''}`);
   }
   info.push(`# あなたが今していること\n${activityText(state, now, c.id)}\n（投稿は今していること・ひと段落したことに自然につながるように）`);
+  const dc = await disasterContext(env, st, now).catch(() => '');
+  if (dc) info.push(dc.trim());
   info.push(`# 天気・季節（ユーザーの住んでいる地域）
 ${w ? '天気：' + weatherText(w, st) + '\n' : ''}${seasonText(now)}／${weekdayText(now)}`);
   const hints = {
@@ -1512,8 +1567,8 @@ async function shouldCharPost(env, c, world, now, st) {
   return Math.random() < (perDay / activeTicks) * (isQuiet(now, st) ? QUIET_RATE : 1) * boost.f; // 静かな時間は大幅に下げる・今していることで変わる
 }
 
-async function charPostNow(env, c, world, st) {
-  const { text, photo } = await genPost(env, c, world);
+async function charPostNow(env, c, world, st, opts = {}) {
+  const { text, photo } = await genPost(env, c, world, opts);
   let image = null;
   if (photo && world === 'omote' && st.imagesEnabled) {
     try { image = await saveImage(env, await makeCharPhoto(env, photo)); }
@@ -1832,6 +1887,7 @@ ${yPlan.length ? yPlan.filter((b) => !['sleep', 'free'].includes(b.kind)).map((b
 ${ySleep ? `昨夜寝た時刻：${hmJ(ySleep.s)}` : ''}
 昨日の疲れ：${nz(state.fatigue, 30)}/100
 
+${await disasterContext(env, st, now).catch(() => '')}
 # 今日のユーザーとの予定・約束（あれば）
 ${dueToday.map((m) => '- ' + m.text).join('\n') || '（なし）'}
 
@@ -1860,7 +1916,8 @@ ${mems.filter((m) => m.kind === 'fact').slice(0, 10).map((m) => '- ' + m.text).j
   - avail：そのあいだスマホを見て返事できる度合い 0〜100（自由時間やベッドでくつろぐ時間は高く、訓練・お風呂・睡眠は低く）。
   - ふだんの生活リズムを土台に、曜日・天気・気分・続いている出来事・ユーザーとの約束に合わせて今日らしく変える。毎日同じ時刻にしない（10〜30分ほどずれてよい）。
   - 昨日疲れていたり夜ふかししたりして、今日が休日なら、遅く起きる・昼寝をする（nap）など。昼寝や二度寝のしやすさ：${rh.napper}/100。
-  - 夜ふかしの度合い：${rh.nightOwl}/100。寝る時刻に反映する。`;
+  - 夜ふかしの度合い：${rh.nightOwl}/100。寝る時刻に反映する。
+  - 身の回りの天気・災害の様子があれば反映する（台風や大雪で休校・外出の中止・家で過ごす、停電、地震のあとの片付け、など）。`;
   const r = await aiJson(env, 'omote', (await worldBlock(env, user)) + system, user, DAILY_SCHEMA, 'daily_life');
   state.day = today;
   state.mood = String(r.mood || '').slice(0, 60);
@@ -1975,15 +2032,15 @@ const isSleepKind = (k) => k === 'sleep' || k === 'nap';
 // 生活リズム（キャラ設定と世界観から1回だけ作る。設定を変えたら作り直す）
 const RHYTHM_SCHEMA = {
   type: 'object',
-  properties: { weekday: { type: 'string' }, holiday: { type: 'string' }, reply_speed: { type: 'string' }, night_owl: { type: 'integer' }, napper: { type: 'integer' } },
-  required: ['weekday', 'holiday', 'reply_speed', 'night_owl', 'napper'], additionalProperties: false,
+  properties: { weekday: { type: 'string' }, holiday: { type: 'string' }, reply_speed: { type: 'string' }, night_owl: { type: 'integer' }, napper: { type: 'integer' }, calm: { type: 'integer' } },
+  required: ['weekday', 'holiday', 'reply_speed', 'night_owl', 'napper', 'calm'], additionalProperties: false,
 };
-const DEFAULT_RHYTHM = { weekday: '', holiday: '', speed: 'normal', nightOwl: 30, napper: 30 };
+const DEFAULT_RHYTHM = { weekday: '', holiday: '', speed: 'normal', nightOwl: 30, napper: 30, calm: 50 };
 async function getRhythm(env, c, allowAI = true) {
   const w = await loadWorld(env).catch(() => ({}));
   const h = strHash(c.name + '\n' + (c.prompt || '') + '\n' + (w.stage || ''));
   const cached = await kvGet(env, 'rhythm:' + c.id, null);
-  if (cached && (cached.h === h || !allowAI)) return cached.r;
+  if (cached && ((cached.h === h && cached.r.calm != null) || !allowAI)) return cached.r;
   if (!allowAI) return DEFAULT_RHYTHM;
   const user = `# キャラクター: ${c.name}
 ${trunc(c.prompt || '（設定なし）', 3000)}
@@ -1993,13 +2050,14 @@ ${trunc(c.prompt || '（設定なし）', 3000)}
 - holiday：休日の典型的な1日を同じように。
 - reply_speed：メッセージへの返事の早さ。"fast"（すぐ返す）／"normal"／"slow"（マイペース・気づくのが遅い）のどれか。
 - night_owl：夜ふかしの度合い 0〜100。
-- napper：昼寝や二度寝をしやすい度合い 0〜100。`;
+- napper：昼寝や二度寝をしやすい度合い 0〜100。
+- calm：地震などとっさのときの落ち着き 0〜100（低いほど慌てて、しばらくスマホも触れない）。`;
   try {
     const r = await aiJson(env, 'omote', (await worldBlock(env, user)) + 'あなたは、キャラクターの暮らしぶりを考える係です。キャラクター設定と作品の世界観に合った、自然な生活リズムを考えます。', user, RHYTHM_SCHEMA, 'rhythm');
     const v = {
       weekday: String(r.weekday || '').slice(0, 400), holiday: String(r.holiday || '').slice(0, 400),
       speed: ['fast', 'normal', 'slow'].includes(r.reply_speed) ? r.reply_speed : 'normal',
-      nightOwl: clamp(Math.round(nz(r.night_owl, 30)), 0, 100), napper: clamp(Math.round(nz(r.napper, 30)), 0, 100),
+      nightOwl: clamp(Math.round(nz(r.night_owl, 30)), 0, 100), napper: clamp(Math.round(nz(r.napper, 30)), 0, 100), calm: clamp(Math.round(nz(r.calm, 50)), 0, 100),
     };
     await kvSet(env, 'rhythm:' + c.id, { h, r: v });
     return v;
@@ -2010,9 +2068,9 @@ ${trunc(c.prompt || '（設定なし）', 3000)}
 }
 
 // ---- 返事をいつするか（すぐ／あとで）。AIは使わずに決める
-function replyTiming(c, rh, state, hist, now) {
+function replyTiming(c, rh, state, hist, now, slow = 1) {
   const speed = ['fast', 'normal', 'slow'].includes(c.replySpeed) ? c.replySpeed : rh.speed || 'normal';
-  const sf = { fast: 0.6, normal: 1, slow: 1.6 }[speed];
+  const sf = { fast: 0.6, normal: 1, slow: 1.6 }[speed] * slow;
   const a = activityAt(state, now, c.id);
   const endMin = Math.max(0, (a.e - now) / MIN);
   const res = (readMin, replyMin, extra = {}) => {
@@ -2055,7 +2113,8 @@ async function decideReply(env, c, hist, now) {
   if (pend) return pend.replyAt <= now ? { now: true, pend } : { now: false, pend };
   const state = await getState(env, c.id);
   const rh = await getRhythm(env, c, false);
-  const t = replyTiming(c, rh, state, hist, now);
+  const dis = await kvGet(env, 'dis:state', null).catch(() => null);
+  const t = replyTiming(c, rh, state, hist, now, dis && dis.outage && dis.outage.on ? 1.6 : 1); // 停電中は充電を節約して、返事が少し遅れがち
   if (t.now) { await kvSet(env, 'replygo:' + c.id, now); return t; } // 「すぐ返す」と決めたことを覚えておく（続く /reply で使う）
   const lastMe = [...hist].reverse().find((m) => m.sender === 'me');
   const pend2 = { key: c.id, readAt: t.readAt, replyAt: t.replyAt, act: t.act, kind: t.kind, glanced: !!t.glanced, twice: !!t.twice, awake: !!t.awake, from: lastMe ? lastMe.at : now };
@@ -2143,6 +2202,547 @@ function activityText(state, now, key) {
   return `いま：${a.act}（${hmJ(a.s)}〜${hmJ(a.e)}ごろ）${isSleepKind(a.kind) ? '…本来は眠っている時間だが、今はたまたま起きている' : ''}${a.prev && now - a.prev.e < 40 * MIN ? `／少し前まで：${a.prev.act}` : ''}${a.next ? `／このあと：${a.next.act}` : ''}`;
 }
 
+
+// ---------------------------------------------------------------- 災害・季節の出来事（表のトークとTLだけ）
+// 本物の情報（地震・緊急地震速報・警報・台風・天気予報・大気・停電・ニュース）を見て、
+// キャラたちも同じ地域で暮らしている子として反応する。どう反応するかは、その子の予定と性格で決める。
+const SCALE_NAME = { 10: '1', 20: '2', 30: '3', 40: '4', 45: '5弱', 46: '5弱以上', 50: '5強', 55: '6弱', 60: '6強', 70: '7' };
+const scaleName = (s) => SCALE_NAME[s] || String(s);
+const QUAKE_MIN = { '3': 30, '4': 40, '5-': 45, '5+': 50, '6-': 55 };
+const quakeMin = (st) => QUAKE_MIN[st.quakeMin] || 40;
+const disOn = (st) => st.lifeEnabled && st.disasterEnabled !== false;
+const WARN_NAME = { '02': '暴風雪警報', '03': '大雨警報', '04': '洪水警報', '05': '暴風警報', '06': '大雪警報', '10': '大雨注意報', '12': '大雪注意報', '14': '雷注意報', '15': '強風注意報', '18': '洪水注意報', '21': '乾燥注意報', '23': '低温注意報', '32': '暴風雪特別警報', '33': '大雨特別警報', '35': '暴風特別警報', '36': '大雪特別警報' };
+function distKm(lat1, lon1, lat2, lon2) {
+  const R = 6371, r = Math.PI / 180;
+  const a = Math.sin((lat2 - lat1) * r / 2) ** 2 + Math.cos(lat1 * r) * Math.cos(lat2 * r) * Math.sin((lon2 - lon1) * r / 2) ** 2;
+  return 2 * R * Math.asin(Math.sqrt(a));
+}
+async function disLoad(env) {
+  const s = await kvGet(env, 'dis:state', null);
+  return s || { events: [], seen: {}, saga: null, outage: null, mon: {}, ctx: [], warn: [], far: [] };
+}
+async function disSave(env, s) {
+  s.events = (s.events || []).filter((e) => Date.now() - e.at < 7 * 864e5).slice(-30);
+  const seen = Object.entries(s.seen || {}).sort((a, b) => b[1] - a[1]).slice(0, 200);
+  s.seen = Object.fromEntries(seen);
+  await kvSet(env, 'dis:state', s);
+}
+async function getJSON(url, label) {
+  const r = await fetch(url, { headers: { 'User-Agent': 'Mozilla/5.0 (chara-chat)', Accept: 'application/json' } });
+  if (!r.ok) throw new Error(`${label}の取得に失敗しました（${r.status}）`);
+  return r.json();
+}
+async function disLog(env, s, key, msg) { // 同じ失敗は半日に1回だけ診断に残す
+  s.mon.logs = s.mon.logs || {};
+  if (Date.now() - (s.mon.logs[key] || 0) < 12 * 3600e3) return;
+  s.mon.logs[key] = Date.now();
+  await log(env, '災害の確認：' + msg);
+}
+
+// ---- 地震・緊急地震速報（P2P地震情報。毎分）
+async function checkQuakes(env, st, s, now) {
+  const list = await getJSON('https://api.p2pquake.net/v2/history?codes=551&codes=556&limit=12', '地震情報');
+  const first = !s.mon.quakeInit;
+  s.mon.quakeInit = 1;
+  const out = [];
+  for (const x of Array.isArray(list) ? list.slice().reverse() : []) {
+    const id = String(x.id || x._id || x.code + ':' + x.time);
+    const t = Date.parse(String(x.time || '').replace(/\//g, '-').replace(' ', 'T') + '+09:00') || now;
+    if (s.seen[id]) continue;
+    s.seen[id] = now;
+    if (first || now - t > 30 * MIN) continue; // 古い情報には反応しない
+    if (x.code === 556) { // 緊急地震速報（警報）
+      const eid = String((x.issue && x.issue.eventId) || id);
+      const ev = (s.events || []).find((e) => e.type === 'eew' && e.eid === eid);
+      if (x.cancelled) { if (ev && !ev.outcome) ev.outcome = 'false'; continue; }
+      const sai = (x.areas || []).filter((a) => a.pref === '埼玉県' || /埼玉/.test(a.name || ''));
+      if (!sai.length || ev) continue;
+      out.push({ type: 'eew', eid, at: now, place: (x.earthquake && x.earthquake.hypocenter && x.earthquake.hypocenter.name) || '' });
+    } else if (x.code === 551) { // 地震情報（震度）
+      const q = x.earthquake || {};
+      if (x.issue && x.issue.type === 'Foreign') continue;
+      const qt = String(q.time || x.time);
+      let local = 0, area = 0, pref = 0;
+      for (const p of x.points || []) {
+        if (p.pref !== '埼玉県') continue;
+        const a = String(p.addr || '');
+        pref = Math.max(pref, p.scale || 0);
+        if (/さいたま/.test(a) && /北区/.test(a)) local = Math.max(local, p.scale || 0);
+        else if (a === '埼玉県南部' || /さいたま/.test(a)) area = Math.max(area, p.scale || 0);
+      }
+      const sc = local || area || (pref >= 50 ? pref - 5 : 0); // 北区がなければ、さいたま市・県南部の震度で
+      const hypo = (q.hypocenter && q.hypocenter.name) || '';
+      // 直前の緊急地震速報の答え合わせ
+      const eew = (s.events || []).filter((e) => e.type === 'eew' && !e.outcome && now - e.at < 15 * MIN).pop();
+      const qev = (s.events || []).find((e) => e.type === 'quake' && e.qt === qt);
+      if (sc >= quakeMin(st)) {
+        if (qev) { if (sc > qev.scale) { qev.scale = sc; qev.level = scaleName(sc); } continue; }
+        if (eew) eew.outcome = 'real';
+        out.push({ type: 'quake', qt, at: now, scale: sc, level: scaleName(sc), place: hypo, mag: q.hypocenter && q.hypocenter.magnitude, eew: eew ? eew.id : null });
+      } else {
+        if (eew) eew.outcome = sc > 0 || pref > 0 ? 'small' : 'false';
+        if ((q.maxScale || 0) >= 55 && !/埼玉/.test(hypo)) addFar(s, `${hypo}で最大震度${scaleName(q.maxScale)}の地震`, now);
+      }
+    }
+  }
+  // 速報から6分たっても揺れの情報がなければ、誤報だったことにする
+  for (const e of s.events || []) if (e.type === 'eew' && !e.outcome && now - e.at > 6 * MIN) e.outcome = 'false';
+  return out;
+}
+function addFar(s, title, now) {
+  if ((s.far || []).some((f) => f.title === title)) return;
+  s.far = (s.far || []).filter((f) => now - f.at < 2 * 864e5).concat({ title, at: now }).slice(-4);
+  s.newFar = (s.newFar || []).concat(title); // 遠くの大きな災害：ニュースを見て話す
+}
+
+// ---- 天気予報（数日先まで）と大気
+async function getForecast(env, st) {
+  const c = await kvGet(env, 'forecast', null);
+  if (c && Date.now() - c.at < 3600e3) return c.f;
+  const f = await getJSON(`https://api.open-meteo.com/v1/forecast?latitude=${st.weatherLat}&longitude=${st.weatherLon}` +
+    '&hourly=precipitation,snowfall,wind_gusts_10m,weather_code,pressure_msl,temperature_2m,relative_humidity_2m' +
+    '&daily=weather_code,temperature_2m_max,temperature_2m_min,precipitation_sum,snowfall_sum,wind_gusts_10m_max' +
+    '&timezone=Asia%2FTokyo&forecast_days=5&wind_speed_unit=ms', '天気予報');
+  await kvSet(env, 'forecast', { at: Date.now(), f });
+  return f;
+}
+async function getAir(env, st) {
+  const c = await kvGet(env, 'air', null);
+  if (c && Date.now() - c.at < 2 * 3600e3) return c.a;
+  const a = await getJSON(`https://air-quality-api.open-meteo.com/v1/air-quality?latitude=${st.weatherLat}&longitude=${st.weatherLon}&hourly=ozone,dust,pm2_5&timezone=Asia%2FTokyo&forecast_days=2`, '大気の情報');
+  await kvSet(env, 'air', { at: Date.now(), a });
+  return a;
+}
+// 予報の時刻（"2026-10-16T13:00"、日本時間）→ ミリ秒
+const fcT = (s) => Date.parse(s + ':00+09:00');
+function hourlyNext(f, key, now, hours) {
+  const h = f.hourly || {}, t = h.time || [], v = h[key] || [];
+  const out = [];
+  for (let i = 0; i < t.length; i++) { const ts = fcT(t[i]); if (ts >= now - 3600e3 && ts <= now + hours * 3600e3) out.push({ t: ts, v: v[i] }); }
+  return out;
+}
+
+// ---- 気象庁の警報・注意報（埼玉県。形式が変わっていたら読めないので、読めた分だけ使う）
+async function checkWarnings(env, s) {
+  const j = await getJSON('https://www.jma.go.jp/bosai/warning/data/warning/110000.json', '警報・注意報');
+  const found = new Set();
+  const walk = (o, inCity) => {
+    if (!o || typeof o !== 'object') return;
+    if (Array.isArray(o)) { o.forEach((x) => walk(x, inCity)); return; }
+    const city = inCity || o.code === '1110000';
+    if (city && typeof o.code === 'string' && WARN_NAME[o.code] && o.status && !/解除|なし/.test(o.status)) found.add(o.code);
+    for (const v of Object.values(o)) if (v && typeof v === 'object') walk(v, city);
+  };
+  walk(j, false);
+  const prev = new Set((s.warn || []).map((w) => w.code));
+  s.warn = [...found].map((code) => ({ code, name: WARN_NAME[code] }));
+  return [...found].filter((c) => !prev.has(c));
+}
+
+// ---- 台風（気象庁の台風情報）
+async function checkTyphoon(env, st, s, now) {
+  const list = await getJSON('https://www.jma.go.jp/bosai/typhoon/data/targetTc.json', '台風情報');
+  let best = null;
+  for (const tc of Array.isArray(list) ? list : []) {
+    if (!tc.tropicalCyclone) continue;
+    const num = String(tc.typhoonNumber || '');
+    if (num.length <= 2) continue; // 台風になっていない熱帯低気圧
+    let fc;
+    try { fc = await getJSON(`https://www.jma.go.jp/bosai/typhoon/data/${tc.tropicalCyclone}/forecast.json`, '台風の予報'); } catch (_) { continue; }
+    for (const p of Array.isArray(fc) ? fc : []) {
+      if (!Array.isArray(p.center) || !p.validtime) continue;
+      const t = Date.parse(p.validtime.JST || p.validtime);
+      const d = distKm(st.weatherLat, st.weatherLon, p.center[0], p.center[1]);
+      if (!best || d < best.dist) best = { tc: tc.tropicalCyclone, name: '台風' + (+num.slice(-2)) + '号', dist: d, at: t };
+    }
+  }
+  return best;
+}
+
+// ---- 停電（東京電力の停電情報ページ。読めないときは手動の切り替えで）
+async function checkTepco(env, s) {
+  const r = await fetch('https://teideninfo.tepco.co.jp/', { headers: { 'User-Agent': 'Mozilla/5.0 (chara-chat)' } });
+  if (!r.ok) throw new Error('停電情報の取得に失敗しました（' + r.status + '）');
+  const text = await r.text();
+  if (!/埼玉|東京都|神奈川/.test(text)) throw new Error('停電情報のページを読み取れませんでした（形式が違う）');
+  return /さいたま市北区/.test(text) && /停電/.test(text);
+}
+
+// ---- ニュース（遠くの大災害・竜巻・降灰・線状降水帯・地域の停電）
+async function checkNews(env, s, now, wantOutage) {
+  const qs = ['大津波警報', '大雨特別警報', '噴火 噴火警戒レベル', '線状降水帯 埼玉', '竜巻 埼玉', '降灰 埼玉'];
+  if (wantOutage) qs.push('停電 さいたま市北区');
+  const found = {};
+  for (const q of qs) {
+    let items = [];
+    try {
+      const r = await fetch('https://news.google.com/rss/search?q=' + encodeURIComponent(q + ' when:1d') + '&hl=ja&gl=JP&ceid=JP:ja', { headers: { 'User-Agent': 'Mozilla/5.0 (chara-chat)' } });
+      if (r.ok) items = parseRss(await r.text());
+    } catch (_) {}
+    found[q] = items.filter((x) => x.at && now - x.at < 24 * 3600e3);
+  }
+  const recent = (q, h, re) => (found[q] || []).find((x) => now - x.at < h * 3600e3 && re.test(x.title));
+  for (const q of ['大津波警報', '大雨特別警報', '噴火 噴火警戒レベル']) {
+    const x = recent(q, 24, /大津波警報|特別警報|噴火/);
+    if (x && !/埼玉/.test(x.title)) addFar(s, x.title, now);
+  }
+  return {
+    senjo: recent('線状降水帯 埼玉', 6, /線状降水帯/),
+    tornado: recent('竜巻 埼玉', 3, /竜巻|突風/),
+    ash: recent('降灰 埼玉', 12, /降灰|火山灰/),
+    outage: wantOutage ? recent('停電 さいたま市北区', 2, /停電/) : null,
+  };
+}
+
+// ---- 毎分：確認して、出来事を作り、予定していた反応を届ける
+async function runDisasters(env, minute) {
+  await ensureSchema(env);
+  const st = await getSettings(env);
+  if (!disOn(st)) return;
+  const now = Date.now();
+  const s = await disLoad(env);
+  s.mon = s.mon || {};
+  let heavy = 0; // 1分に1つだけ重い確認をする（Cloudflareの1回あたりの通信回数の上限に収めるため）
+  const due = (k, mins) => { if (!heavy && now - (s.mon[k] || 0) >= mins * MIN) { s.mon[k] = now; heavy = 1; return true; } return false; };
+  const newEvents = [];
+  // 1) 地震・緊急地震速報：毎分
+  try { newEvents.push(...(await checkQuakes(env, st, s, now))); s.mon.quakeOk = now; } catch (e) { await disLog(env, s, 'quake', e.message); }
+  const stormy = s.saga && s.saga.phase === 'hit' || (s.events || []).some((e) => ['quake', 'rain', 'gust', 'wind', 'tornado'].includes(e.type) && now - e.at < 6 * 3600e3);
+  // 2) 天気予報・警報・台風：1時間ごと（荒れているときは20分ごと）
+  if (due('fc', stormy ? 20 : 60)) {
+    try { newEvents.push(...(await evalWeather(env, st, s, now))); s.mon.fcOk = now; } catch (e) { await disLog(env, s, 'fc', e.message); }
+  }
+  // 3) ニュース：3時間ごと（荒れているときは30分ごと）
+  if (due('news', stormy ? 30 : 180)) {
+    try {
+      const n = await checkNews(env, s, now, stormy);
+      if (!s.mon.newsInit) { s.mon.newsInit = 1; s.newFar = []; } // 最初の1回は、すでに流れていたニュースに反応しない
+      if (n.senjo && !recentEv(s, 'rain', now, 12)) newEvents.push({ type: 'rain', at: now, detail: '線状降水帯が発生していて、記録的な大雨' });
+      if (n.tornado && !recentEv(s, 'tornado', now, 12)) newEvents.push({ type: 'tornado', at: now, detail: n.tornado.title });
+      if (n.ash && !recentEv(s, 'ash', now, 48)) newEvents.push({ type: 'ash', at: now, detail: n.ash.title });
+      if (n.outage) setOutage(s, true, 'news', null, now, newEvents);
+      s.mon.newsOk = now;
+    } catch (e) { await disLog(env, s, 'news', e.message); }
+  }
+  // 4) 停電：荒れているときは15分ごと、ふだんは3時間ごと（読めないページなら半日ごと）
+  if (due('tepco', s.mon.tepcoBad ? 720 : stormy ? 15 : 180)) {
+    try {
+      const out = await checkTepco(env, s);
+      s.mon.tepcoBad = 0;
+      if (out) setOutage(s, true, 'tepco', null, now, newEvents);
+      else if (s.outage && s.outage.source === 'tepco') setOutage(s, false, 'tepco', null, now, newEvents);
+    } catch (e) { s.mon.tepcoBad = now; await disLog(env, s, 'tepco', e.message + '（停電は、設定の「停電中」で手動で切り替えられます）'); }
+  }
+  // ニュースで知った停電は3時間で終わりにする
+  if (s.outage && s.outage.source === 'news' && now - s.outage.since > 3 * 3600e3) setOutage(s, false, 'news', null, now, newEvents);
+  // 遠くの大きな災害のニュース（半日に1回まで）
+  if ((s.newFar || []).length) {
+    if (!recentEv(s, 'far', now, 12)) newEvents.push({ type: 'far', at: now, detail: s.newFar[s.newFar.length - 1] });
+    s.newFar = [];
+  }
+  // 5) 新しい出来事 → キャラごとに反応を予定する
+  for (const ev of newEvents) await addEvent(env, st, s, ev, now);
+  for (const e of s.events || []) if (e.testResolveAt && !e.outcome && now >= e.testResolveAt) e.outcome = e.simOutcome; // テストの速報は90秒で「誤報」
+  // 6) 速報の答え合わせ（誤報だった・小さな揺れだった）
+  for (const e of s.events || []) {
+    if (e.type === 'eew' && e.outcome && e.outcome !== 'real' && !e.outcomeDone) { e.outcomeDone = 1; await scheduleOutcome(env, s, e, now); }
+  }
+  await disSave(env, s);
+  // 7) 時間が来た反応を届ける
+  await runDisJobs(env, st, now, heavy ? 2 : 4);
+}
+function recentEv(s, type, now, hours) { return (s.events || []).some((e) => e.type === type && now - e.at < hours * 3600e3); }
+function setOutage(s, on, source, cause, now, newEvents) {
+  if (on && !(s.outage && s.outage.on)) {
+    const c = cause || (s.saga && s.saga.phase === 'hit' ? s.saga.name : recentEv(s, 'quake', now, 2) ? '地震' : recentEv(s, 'gust', now, 3) ? '雷' : recentEv(s, 'wind', now, 6) ? '強風' : '');
+    s.outage = { on: true, since: now, source, cause: c };
+    newEvents.push({ type: 'outage_on', at: now, cause: c, sim: source === 'test' });
+  } else if (!on && s.outage && s.outage.on) {
+    if (s.outage.source === 'manual' && source !== 'manual') return; // 手動で付けた停電は、手動でだけ戻す
+    newEvents.push({ type: 'outage_off', at: now, since: s.outage.since, cause: s.outage.cause, sim: s.outage.source === 'test' });
+    s.outage = null;
+  }
+}
+
+// ---- 天気予報から、大雨・雷雨・強風・雪・台風・季節のことを判断する
+async function evalWeather(env, st, s, now) {
+  const evs = [];
+  const f = await getForecast(env, st);
+  const d = f.daily || {};
+  const today = jstDay(now), m = jstParts(now).mo;
+  const ctx = [];
+  // 季節・日常
+  const tmax = (d.temperature_2m_max || [])[0], tmin = (d.temperature_2m_min || [])[0];
+  if (tmax >= 35) ctx.push(`今日は最高${tmax}℃の猛暑日。熱中症警戒アラートが出るような危険な暑さ`);
+  else if (tmax >= 30) ctx.push(`今日は最高${tmax}℃の真夏日`);
+  if (tmin <= 0) ctx.push(`今朝は${tmin}℃まで冷え込む寒さ`);
+  const hum = hourlyNext(f, 'relative_humidity_2m', now, 24).map((x) => x.v).filter((x) => x != null);
+  if ((m >= 11 || m <= 3) && hum.length && Math.min(...hum) <= 35) ctx.push('空気がとても乾燥している');
+  const codes = hourlyNext(f, 'weather_code', now, 18);
+  if (codes.some((x) => x.v >= 95)) ctx.push('雷雨の予報が出ている');
+  if (m >= 2 && m <= 4) ctx.push(m === 4 ? 'ヒノキ花粉の季節' : 'スギ花粉の季節' + ((d.wind_gusts_10m_max || [])[0] >= 10 && (d.weather_code || [])[0] <= 3 ? '（晴れて風が強く、花粉が多そうな日）' : ''));
+  try {
+    const a = await getAir(env, st);
+    const oz = hourlyNext({ hourly: a.hourly }, 'ozone', now, 12).map((x) => x.v).filter((x) => x != null);
+    const du = hourlyNext({ hourly: a.hourly }, 'dust', now, 12).map((x) => x.v).filter((x) => x != null);
+    if (m >= 4 && m <= 9 && oz.length && Math.max(...oz) >= 200) ctx.push('オゾンの濃度が高く、光化学スモッグ注意報が出そうな日');
+    if (du.length && Math.max(...du) >= 60) ctx.push('黄砂が飛んでいて、空がかすんでいる');
+  } catch (e) { await disLog(env, s, 'air', e.message); }
+  // 警報・注意報（読めたら）
+  try {
+    const newly = await checkWarnings(env, s);
+    s.mon.warnOk = now;
+    if (newly.some((c) => ['03', '04', '33'].includes(c)) && !recentEv(s, 'rain', now, 12)) evs.push({ type: 'rain', at: now, detail: newly.filter((c) => ['03', '04', '33'].includes(c)).map((c) => WARN_NAME[c]).join('・') + 'が出た' });
+    if (newly.some((c) => ['05', '35', '02', '32'].includes(c)) && !(s.saga && s.saga.type === 'typhoon') && !recentEv(s, 'wind', now, 12)) evs.push({ type: 'wind', at: now, detail: '暴風の警報が出た' });
+  } catch (e) { await disLog(env, s, 'warn', e.message); }
+  // 大雨・雷雨・強風（予報から）
+  const pr = hourlyNext(f, 'precipitation', now, 3);
+  if (pr.some((x) => x.v >= 30) && !recentEv(s, 'rain', now, 12)) evs.push({ type: 'rain', at: now, detail: `1時間に${Math.max(...pr.map((x) => x.v))}ミリほどの激しい雨（ゲリラ豪雨）` });
+  if (codes.filter((x) => x.t <= now + 2 * 3600e3).some((x) => x.v >= 96) && !recentEv(s, 'gust', now, 12)) evs.push({ type: 'gust', at: now, detail: '雷雨で、突風やひょうの恐れ' });
+  const gust = (d.wind_gusts_10m_max || [])[0];
+  if (gust >= 20 && !(s.saga && s.saga.type === 'typhoon') && !recentEv(s, 'wind', now, 20)) evs.push({ type: 'wind', at: now, detail: `最大瞬間風速${Math.round(gust)}メートルほどの強い風（春の嵐・発達した低気圧）` });
+  // 台風・雪（何日かかけて進む出来事）
+  let tc = null;
+  try { tc = await checkTyphoon(env, st, s, now); s.mon.tcOk = now; } catch (e) { await disLog(env, s, 'typhoon', e.message); }
+  const snowDays = (d.snowfall_sum || []).map((v, i) => ({ v, day: (d.time || [])[i] })).filter((x) => x.v >= 1);
+  const snowNow = hourlyNext(f, 'snowfall', now, 2).some((x) => x.v > 0.2);
+  evs.push(...sagaStep(s, now, today, tc, snowDays, snowNow, f));
+  s.ctx = ctx;
+  return evs;
+}
+// 台風・雪の段階：接近 → 前日 → 直撃 → 通過（または逸れた）
+function sagaStep(s, now, today, tc, snowDays, snowNow, f) {
+  const evs = [];
+  const go = (saga, phase, extra = {}) => {
+    if (saga.phase === phase) return;
+    saga.phase = phase; saga.phaseAt = now;
+    evs.push({ type: saga.type, phase, at: now, name: saga.name, ...extra });
+  };
+  let sg = s.saga;
+  if (sg && sg.type === 'typhoon') {
+    const near = tc && tc.tc === sg.tc && tc.dist <= 400;
+    const h = tc ? (tc.at - now) / 3600e3 : -99;
+    if (['approach', 'eve'].includes(sg.phase) && (!tc || tc.tc !== sg.tc || tc.dist > 550)) { go(sg, 'missed'); sg.endAt = now + 864e5; }
+    else if (sg.phase !== 'after' && sg.phase !== 'missed') {
+      const gusts = hourlyNext(f, 'wind_gusts_10m', now, 3).map((x) => x.v);
+      if ((near && Math.abs(h) <= 10 && (tc.dist <= 200 || Math.max(0, ...gusts) >= 15)) && sg.phase !== 'hit') go(sg, 'hit');
+      else if (sg.phase === 'hit' && (!near || h < -6)) { go(sg, 'after'); sg.endAt = now + 30 * 3600e3; }
+      else if (near && h > 0 && h <= 36 && sg.phase === 'approach') go(sg, 'eve');
+    }
+    if (sg.endAt && now > sg.endAt) s.saga = sg = null;
+  } else if (sg && sg.type === 'snow') {
+    if (snowNow && sg.phase !== 'hit') go(sg, 'hit');
+    else if (sg.phase === 'hit' && !snowNow && !snowDays.some((x) => x.day === today)) { go(sg, 'after'); sg.endAt = now + 30 * 3600e3; }
+    else if (sg.phase === 'approach' && !snowDays.length) { go(sg, 'missed'); sg.endAt = now + 864e5; }
+    if (sg && sg.endAt && now > sg.endAt) s.saga = sg = null;
+  }
+  if (!s.saga) {
+    if (tc && tc.dist <= 400 && tc.at > now - 6 * 3600e3 && tc.at - now <= 120 * 3600e3) {
+      s.saga = { type: 'typhoon', tc: tc.tc, name: tc.name, phase: '', since: now };
+      const h = (tc.at - now) / 3600e3;
+      go(s.saga, h <= 36 ? 'eve' : 'approach', { days: Math.max(1, Math.round(h / 24)) });
+    } else if (snowDays.length) {
+      s.saga = { type: 'snow', name: '雪', phase: '', since: now };
+      go(s.saga, snowNow ? 'hit' : 'approach', { detail: snowDays.map((x) => `${x.day.slice(5).replace('-', '/')} 約${Math.round(x.v)}cm`).join('、') });
+    }
+  }
+  return evs;
+}
+
+// ---- 出来事ごとの「必ず」「急ぎ」
+const EV_URGENT = { quake: 1, eew: 1, outage_on: 1, tornado: 1 };
+const EV_QUICK = { outage_off: 0, rain: 0.2, gust: 0.4, wind: 0.15 }; // その場で体験すること（起きていればすぐ。値は寝ていて気づく確率）
+const EV_TL = { quake: 1, eew: 1, outage_on: 1, outage_off: 0.6, rain: 1, gust: 0.8, wind: 0.7, tornado: 1, typhoon: 1, snow: 1, far: 0.4, ash: 1 };
+
+// その子が、いつ・どんな状態で気づいて連絡するか
+function eventReaction(c, rh, state, ev, now) {
+  const a = activityAt(state, now, c.id);
+  const calm = nz(rh.calm, 50);
+  const speed = ['fast', 'normal', 'slow'].includes(c.replySpeed) ? c.replySpeed : rh.speed || 'normal';
+  const sf = { fast: 0.7, normal: 1, slow: 1.4 }[speed];
+  const info = { act: a.act, kind: a.kind };
+  const sleeping = isSleepKind(a.kind);
+  let d;
+  if (EV_URGENT[ev.type] || ev.type in EV_QUICK) {
+    const s = ev.type === 'quake' ? ev.scale : 0;
+    let wakeP = ev.type === 'quake' ? (s >= 55 ? 1 : s >= 50 ? 0.97 : s >= 45 ? 0.9 : s >= 40 ? 0.55 : 0.3) : ev.type === 'eew' ? 0.85 : ev.type === 'outage_on' ? 0.1 : ev.type in EV_QUICK ? EV_QUICK[ev.type] : 0.5;
+    if (a.kind === 'nap') wakeP = Math.min(1, wakeP + 0.25);
+    if (sleeping && Math.random() >= wakeP) { info.slept = true; d = Math.max(5, (a.e - now) / MIN) + rndR(3, 30); }
+    else {
+      if (sleeping) info.woke = true;
+      d = info.woke ? rndR(1, 6) : ({ bath: rndR(5, 15), meal: rndR(2, 8), chores: rndR(2, 8), busy: rndR(5, 25), out: rndR(3, 15), social: rndR(2, 10) }[a.kind] ?? rndR(0.5, 4));
+      if (EV_URGENT[ev.type] && ev.type !== 'outage_on' && calm < 35 && Math.random() < 0.7) { info.panic = true; d += rndR(5, 30); }
+      if (ev.type === 'quake' && s >= 50 && Math.random() < 0.5) { info.evac = true; d += rndR(20, 60); }
+      d *= sf;
+    }
+  } else if (sleeping) { info.slept = true; d = Math.max(5, (a.e - now) / MIN) + rndR(10, 60); }
+  else d = a.avail >= 60 ? rndR(3, 40) * sf : Math.max(3, (a.e - now) / MIN) + rndR(3, 30);
+  if (ev.sim) d = Math.min(d / 10, 8);
+  d = Math.max(0.5, d);
+  const tlGap = rndR(-2, 25) * (ev.sim ? 0.1 : 1);
+  return { talkDue: now + d * MIN, tlDue: now + Math.max(0.5, d + tlGap) * MIN, info };
+}
+async function addEvent(env, st, s, ev, now) {
+  ev.id = ev.id || 'ev' + now.toString(36) + Math.floor(Math.random() * 1e4).toString(36);
+  ev.sent = {};
+  s.events = (s.events || []).concat(ev);
+  // 本物の揺れが来たら、まだ届けていない速報の反応はやめて、地震の反応にまとめる
+  if (ev.type === 'quake' && ev.eew) {
+    const e = s.events.find((x) => x.id === ev.eew);
+    if (e) ev.eewSent = Object.keys(e.sent || {});
+    await env.DB.prepare("DELETE FROM kv WHERE k LIKE ?").bind('disjob:' + ev.eew + ':%').run();
+  }
+  const chars = await loadChars(env);
+  for (const c of chars) {
+    if (ev.type === 'far' && Math.random() < 0.5) continue; // 遠くのニュースは、気にする子だけ
+    const state = await getState(env, c.id);
+    const rh = await getRhythm(env, c, false);
+    const r = eventReaction(c, rh, state, ev, now);
+    const jobs = [['talk', r.talkDue]];
+    if (Math.random() < (EV_TL[ev.type] ?? 0.5)) jobs.push(['tl', r.tlDue]);
+    if (ev.type === 'quake') jobs.push(['follow', r.talkDue + (ev.sim ? 3 : rndR(40, 90)) * MIN]);
+    for (const [kind, due] of jobs) await kvSet(env, `disjob:${ev.id}:${c.id}:${kind}`, { ev: ev.id, cid: c.id, kind, due, info: r.info });
+  }
+}
+// 誤報・小さな揺れだったと分かったとき：もう速報の連絡をした子は、ひとこと続ける
+async function scheduleOutcome(env, s, e, now) {
+  for (const cid of Object.keys(e.sent || {})) {
+    const at = now + (e.sim ? rndR(0.5, 2) : rndR(1, 8)) * MIN;
+    await kvSet(env, `disjob:${e.id}:${cid}:outcome`, { ev: e.id, cid, kind: 'outcome', due: at, info: {} });
+    if (Math.random() < 0.6) await kvSet(env, `disjob:${e.id}:${cid}:tl2`, { ev: e.id, cid, kind: 'tl2', due: at + rndR(1, 15) * MIN, info: {} });
+  }
+}
+async function runDisJobs(env, st, now, limit = 6) {
+  const { results } = await env.DB.prepare("SELECT k,v FROM kv WHERE k LIKE 'disjob:%'").all();
+  const dueJobs = results.map((r) => { try { return { k: r.k, ...JSON.parse(r.v) }; } catch (_) { return null; } })
+    .filter((j) => j && j.due <= now).sort((a, b) => a.due - b.due).slice(0, limit);
+  if (!dueJobs.length) return 0;
+  const chars = await loadChars(env);
+  let n = 0;
+  for (const j of dueJobs) {
+    const claimed = await env.DB.prepare('DELETE FROM kv WHERE k=? RETURNING k').bind(j.k).first();
+    if (!claimed) continue;
+    const s = await disLoad(env);
+    const ev = (s.events || []).find((x) => x.id === j.ev);
+    const c = chars.find((x) => x.id === j.cid);
+    if (!ev || !c) continue;
+    try {
+      if (j.kind === 'tl' || j.kind === 'tl2') {
+        await charPostNow(env, c, 'omote', st, { eventHint: eventTL(ev, j, s, now), eventPhoto: ['snow', 'typhoon'].includes(ev.type) && ['hit', 'after'].includes(ev.phase) && Math.random() < 0.4 });
+      } else {
+        const hist = await recent(env, c.id, 60);
+        if (j.kind === 'follow') { // 地震のあと、あなたから返事がなければ心配してもう一度
+          if (hist.some((m) => m.sender === 'me' && m.at > ev.at)) continue;
+        }
+        const msgs = await generateAndStore(env, c, { mode: 'event', ev, job: j, outage: s.outage }, hist, await getRead(env, c.id), 'omote');
+        if (msgs.length) await pushToAll(env, c, msgs);
+        if (j.kind === 'talk') { const s2 = await disLoad(env); const e2 = (s2.events || []).find((x) => x.id === ev.id); if (e2) { e2.sent = { ...(e2.sent || {}), [c.id]: now }; await disSave(env, s2); } }
+      }
+      n++;
+    } catch (e) { await log(env, `災害の反応（${c.name}）: ${e.message}`); }
+  }
+  return n;
+}
+
+// ---- AIへの説明
+function reactText(info, ev, now) {
+  if (!info) return '';
+  const late = fmtDur(Math.max(60e3, now - ev.at));
+  if (info.slept) return `そのときあなたは眠っていて気づかず、起きてから知った（${late}たっている）。`;
+  const parts = [];
+  if (info.woke) parts.push('眠っていたが、飛び起きた。');
+  else if (info.act) parts.push(`そのときあなたは「${info.act}」の最中だった。`);
+  if (info.panic) parts.push('動揺して、しばらくスマホを触れなかった。');
+  if (info.evac) parts.push('念のため近くの安全な場所に出て、落ち着いてから連絡している。');
+  parts.push(`それから${late}たっている。`);
+  return parts.join('');
+}
+function eventCore(ev, j, s, now) {
+  const info = j && j.info;
+  switch (ev.type) {
+    case 'quake':
+      return `さっき地震があった（${ev.place ? ev.place + 'を震源とする地震で、' : ''}あなたたちの住む地域は震度${ev.level}）。${ev.eew ? 'その直前にスマホの緊急地震速報が鳴った。' : ''}${reactText(info, ev, now)}` +
+        ((ev.eewSent || []).includes(j && j.cid) ? '速報が鳴ったときに、もう一度連絡している。' : '') +
+        (ev.scale >= 55 ? 'かなり強い揺れで、本当に怖かった。ふざけたり、はしゃいだりしない。' : '') +
+        '揺れの様子や、身の回りの小さな出来事（物が落ちた、棚が揺れた、など）をリアルに。大きな被害やけが人は勝手に作らない。';
+    case 'eew': {
+      const o = ev.outcome;
+      return 'さっきスマホの緊急地震速報（強い揺れに警戒）が急に鳴った。' + reactText(info, ev, now) +
+        (!o ? '揺れが来るかもしれない緊張の中で、急いで連絡している。' : o === 'false' ? '…でも結局ほとんど揺れなかった（誤報だった）。気が抜けた、ほっとした、慌てて今していたことを中断してしまって恥ずかしい、など、キャラクターらしく。' : o === 'small' ? '…でも少し揺れただけで済んだ。ほっとした気持ちを。' : '');
+    }
+    case 'outage_on':
+      return `急に停電した${ev.cause ? `（${ev.cause}の影響らしい）` : ''}。` + reactText(info, ev, now) +
+        (info && info.slept ? (s.outage && s.outage.on ? '起きたら電気がつかない。' : '夜中に停電していたらしい（もう復旧している）。') : '真っ暗で、今していたことが中断された。') +
+        'スマホの充電を節約したいので、短めに。';
+    case 'outage_off':
+      return `停電が復旧して、電気がついた（${fmtDur(now - (ev.since || ev.at))}ほど停電していた）。ほっとした気持ちや、停電中どう過ごしていたかを。`;
+    case 'rain':
+      return `外はものすごい雨（${ev.detail}）。窓の外の様子や、今していることへの影響、出かける予定がどうなるかを。ユーザーのことも気づかう。`;
+    case 'gust':
+      return `空が急に荒れてきた（${ev.detail}）。雷の音やひょう、突風など、身の回りの様子を。怖がりなら怖さも。`;
+    case 'tornado':
+      return `この辺りで竜巻や突風が起きたというニュースが流れている（「${ev.detail}」）。驚きや心配、身の回りの様子を。`;
+    case 'wind':
+      return `風がとても強い（${ev.detail}）。洗濯物や傘、窓の音など、身近なことを。`;
+    case 'ash':
+      return `遠くの火山の噴火の影響で、この辺りにも少し灰が降っているらしい（「${ev.detail}」）。`;
+    case 'far':
+      return `ニュースで「${ev.detail}」と流れている。遠くの出来事だが、気にかけたり心配したりする。ふざけない。`;
+    case 'typhoon':
+      return {
+        approach: `${ev.name}が近づいている（最接近まであと${ev.days || 2}日ほど）。日に日に天気や気圧が悪くなっていく様子、頭痛やだるさ、予定がどうなるかの心配や期待を。`,
+        eve: `明日にかけて${ev.name}が最接近する予報。休校や予定の中止が決まったかもしれない（あなたの予定表やキャラクター設定から自然に判断する。嫌な予定がなくなって喜ぶ、楽しみな予定がなくなって落ち込む、など）。買い出しや充電など準備の様子も。`,
+        hit: `いま${ev.name}が直撃していて、外は暴風雨。窓を叩く風の音、停電の心配、家の中での過ごし方を。ユーザーの家の様子も心配する。`,
+        after: `${ev.name}が過ぎ去った。台風一過の清々しい空、片付け、地域で出た被害の話（詳しくはわからないので、身の回りで見た程度に）。いつもの日々に戻っていく感覚を。`,
+        missed: `${ev.name}は予報より逸れて、この辺りにはほとんど影響がなかった。予定通り授業や用事があることに、がっかりしたり喜んだり、キャラクターらしく。`,
+      }[ev.phase] || '';
+    case 'snow':
+      return {
+        approach: `数日のうちに雪が降る予報（${ev.detail || ''}）。関東は雪に弱いので、電車や予定の心配、雪が楽しみな気持ちなどを。`,
+        hit: 'いま雪が降っている。窓の外の景色、寒さ、電車が止まったり予定がなくなったり、雪で遊びたい気持ちなどを。',
+        after: '雪がやんだ。雪かき、凍った道、溶けかけの雪景色などを。',
+        missed: '雪の予報だったのに、結局ほとんど降らなかった。がっかりしたりほっとしたり、キャラクターらしく。',
+      }[ev.phase] || '';
+    default: return '';
+  }
+}
+function eventSituation(d, now) {
+  const { ev, job } = d;
+  const head = job.kind === 'follow'
+    ? `${eventCore(ev, null, {}, now)}\nさっき連絡したのに、ユーザーからまだ返事がない（地震から${fmtDur(now - ev.at)}）。無事かどうか心配で、もう一度連絡する。短く、気持ちが伝わるように。`
+    : job.kind === 'outcome'
+      ? `さっきの緊急地震速報は、結局${ev.outcome === 'false' ? '誤報だった（ほとんど揺れなかった）' : '小さな揺れで済んだ'}。さっき慌てて連絡したことを受けて、気が抜けた・ほっとした・恥ずかしい、などをキャラクターらしく短く。`
+      : eventCore(ev, job, { outage: d.outage }, now);
+  return head + '\n（防災の呼びかけや、公式の情報を確認するよう促すような言い方はしない。あくまでこの地域で暮らしている一人として、自分の気持ちと様子を話す）';
+}
+function eventTL(ev, j, s, now) {
+  if (j.kind === 'tl2') return `さっきの緊急地震速報は${ev.outcome === 'false' ? '誤報だった' : '小さな揺れで済んだ'}。そのことをつぶやく（例「速報が鳴って慌てて外に出たのに…」）。`;
+  return `${eventCore(ev, j, s, now)}\nこのことをSNSにつぶやく。直前にしていたことから自然に書き出す（例「紅茶を淹れていたら急に揺れて…」）。ユーザーの名前は出さない。`;
+}
+
+// ---- ふだんの会話・TL・予定表に渡す「身の回りの様子」
+async function disasterContext(env, st, now) {
+  if (!disOn(st)) return '';
+  const s = await disLoad(env).catch(() => null);
+  if (!s) return '';
+  const lines = [];
+  if (s.outage && s.outage.on) lines.push(`いま停電中（${fmtDur(now - s.outage.since)}前から${s.outage.cause ? '・' + s.outage.cause + 'の影響' : ''}）。スマホの充電を節約したいので、メッセージは短めに。`);
+  if (s.saga) {
+    const sg = s.saga;
+    const ph = { approach: '接近中', eve: '明日にかけて最接近', hit: 'いま直撃中', after: '通過した（片付けや被害の話が出る頃）', missed: '予報より逸れて、ほとんど影響なし' }[sg.phase];
+    if (ph) lines.push(sg.type === 'typhoon' ? `${sg.name}：${ph}` : `雪：${{ approach: '数日のうちに降る予報', hit: 'いま降っている', after: 'やんだあと', missed: '予報が外れた' }[sg.phase]}`);
+  }
+  for (const e of (s.events || []).filter((x) => now - x.at < 2 * 864e5 && !['typhoon', 'snow'].includes(x.type)).slice(-4)) {
+    const what = { quake: `震度${e.level}の地震`, eew: `緊急地震速報${e.outcome === 'false' ? '（誤報だった）' : ''}`, outage_on: '停電', outage_off: '停電からの復旧', rain: '激しい雨', gust: '雷雨', tornado: '竜巻のニュース', wind: '強風', ash: '降灰', far: '遠くの災害のニュース' }[e.type];
+    if (what) lines.push(`${fmtDur(now - e.at)}前：${what}${e.sim ? '' : ''}`);
+  }
+  if ((s.warn || []).length) lines.push('出ている警報・注意報：' + s.warn.map((w) => w.name).join('・'));
+  for (const t of s.ctx || []) lines.push(t);
+  for (const f of (s.far || []).filter((x) => now - x.at < 2 * 864e5)) lines.push(`遠くのニュース：${f.title}`);
+  if (!lines.length) return '';
+  return `\n# 身の回りの天気・災害・季節の様子（実際の情報）\n${lines.map((l) => '- ' + l).join('\n')}\n（毎回触れなくてよい。今の話題や気分、予定に自然ににじませる。防災の呼びかけのような言い方はしない）\n`;
+}
+
 // 話しかけるときにAIへ渡す「くらし」の情報
 async function lifeContext(env, c, st, now) {
   if (!st.lifeEnabled) return '';
@@ -2164,6 +2764,8 @@ ${activityText(state, now, c.id)}
   try { w = weatherText(await getWeather(env, st), st); } catch (_) {}
   out.push(`# 天気・季節・曜日（ユーザーの住んでいる地域）
 ${w ? '天気：' + w + '\n' : ''}${seasonText(now)}／${weekdayText(now)}`);
+  const dc = await disasterContext(env, st, now).catch(() => '');
+  if (dc) out.push(dc.trim());
   const mt = memoryText(await loadMemories(env, c.id, 120), today);
   if (mt) out.push(`# あなたが覚えているユーザーとのこと
 ${mt}
@@ -2283,7 +2885,7 @@ async function chooseFlavor(env, c, d, st, now) {
   const wd = jstParts(now).w;
   const table = [
     ['free', 28],
-    ['weather', w ? (weatherNotable(w) ? 22 : 8) : 0],
+    ['weather', w ? (weatherNotable(w) || (await disasterContext(env, st, now).catch(() => '')) ? 22 : 8) : 0],
     ['story', state.story ? 16 : 0],
     ['question', 12],
     ['weekday', ['月', '金', '土', '日'].includes(wd) ? 9 : 0],

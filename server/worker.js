@@ -14,7 +14,7 @@
 //    ・Cron トリガー  * * * * *  （毎分。実際に動くのは13分おき）
 // =====================================================================
 
-const VERSION = '第23版（2026-10-17 04:10:00 更新・AIの利用料金の表示・話しかけが重ならない）';
+const VERSION = '第24版（2026-10-17 04:20:00 更新・興味のあるニュースは15個まで）';
 const DEFAULT_MODEL = 'gemini-flash-latest';
 const DEFAULT_GROK_MODEL = 'grok-4.7';                 // X（Twitter）の Grok と同じ最新世代
 const FALLBACK_GROK_MODEL = 'grok-4-fast-non-reasoning'; // 上が使えないときの予備
@@ -3166,7 +3166,7 @@ function parseRss(xml) {
 // キャラが興味を持ちそうなキーワード（自分で書いたもの優先。なければキャラ設定からAIが考えて、設定が変わるまで覚えておく）
 async function newsKeywords(env, c) {
   const own = String(c.newsKeywords || '').split(/[、,，\s\n]+/).map((x) => x.trim()).filter(Boolean);
-  if (own.length) return own.slice(0, 6);
+  if (own.length) return own.slice(0, 15); // 自分で書いたキーワードは15個まで
   const key = 'newsKw:' + c.id, h = strHash(c.name + '\n' + (c.prompt || ''));
   const cached = await kvGet(env, key, null);
   if (cached && cached.h === h && Array.isArray(cached.kw) && cached.kw.length) return cached.kw;

@@ -14,7 +14,7 @@
 //    ・Cron トリガー  * * * * *  （毎分。実際に動くのは13分おき）
 // =====================================================================
 
-const VERSION = '第24版（2026-10-17 04:20:00 更新・興味のあるニュースは15個まで）';
+const VERSION = '第25版（2026-10-17 12:30:00 更新・裏の自動を止めるボタン）';
 const DEFAULT_MODEL = 'gemini-flash-latest';
 const DEFAULT_GROK_MODEL = 'grok-4.7';                 // X（Twitter）の Grok と同じ最新世代
 const FALLBACK_GROK_MODEL = 'grok-4-fast-non-reasoning'; // 上が使えないときの予備
@@ -173,7 +173,7 @@ const DEFAULT_SETTINGS = {
   quietEnabled: true, quietStart: 1, quietEnd: 7, omoteProvider: 'gemini', uraProvider: 'grok', grokModel: '',
   meName: '', meNameUra: '', meIconVer: 0, meUraIconVer: 0, // あなたのTLでの名前（表・裏）とアイコンの版
   newsEnabled: true, // 表で話題を切り替えるとき、最近のニュースも話題にする
-  lifeEnabled: true, imagesEnabled: true, delayEnabled: true, disasterEnabled: true, quakeMin: '4', notifyVia: 'web', barkSound: '', yen: 150, cost: {}, birthday: '', // くらし（記憶・毎日の様子など）、写真、あなたの誕生日 MM-DD
+  uraPaused: false, lifeEnabled: true, imagesEnabled: true, delayEnabled: true, disasterEnabled: true, quakeMin: '4', notifyVia: 'web', barkSound: '', yen: 150, cost: {}, birthday: '', // くらし（記憶・毎日の様子など）、写真、あなたの誕生日 MM-DD
   weatherLat: 35.927, weatherLon: 139.604, weatherPlace: '埼玉県さいたま市北区日進町',
 };
 async function getSettings(env) {
@@ -465,6 +465,7 @@ async function route(key, url, body, env, ctx) {
       const hist = await recent(env, key, 60);
       const last = hist[hist.length - 1];
       if (!last || last.sender !== 'me') return json({ messages: [] });
+      if (world === 'ura' && (await getSettings(env)).uraPaused) return json({ messages: [], paused: true }); // 裏は止めている（再開したら返す）
       // 表：その子が今していることによって、すぐ返す／あとで返す（あとで返す分はサーバーが毎分確認して送る）
       const d = { mode: 'reply' };
       if (world === 'omote' && delayOn(await getSettings(env))) {
@@ -484,6 +485,7 @@ async function route(key, url, body, env, ctx) {
     case 'POST /reply/decide': { // 表：すぐ返すかどうかだけ先に決める（アプリが「既読」「入力中…」を出すため）
       const { base, world, key } = splitCid(body.charId);
       const c = await getChar(env, base);
+      if (world === 'ura' && (await getSettings(env)).uraPaused) return json({ now: false, paused: true });
       if (world !== 'omote' || !delayOn(await getSettings(env))) return json({ now: true });
       const hist = await recent(env, key, 60);
       const last = hist[hist.length - 1];
@@ -529,6 +531,7 @@ async function route(key, url, body, env, ctx) {
       if ('lifeEnabled' in s) v.lifeEnabled = !!s.lifeEnabled;
       if ('imagesEnabled' in s) v.imagesEnabled = !!s.imagesEnabled;
       if ('delayEnabled' in s) v.delayEnabled = !!s.delayEnabled;
+      if ('uraPaused' in s) v.uraPaused = !!s.uraPaused; // 裏の自動（TLの投稿・反応、トークの返事）を止める
       if ('notifyVia' in s && ['web', 'bark', 'both'].includes(s.notifyVia)) v.notifyVia = s.notifyVia;
       if ('yen' in s) v.yen = clamp(num(s.yen, 150), 50, 500);
       if (s.cost && typeof s.cost === 'object') { // 単価の上書き（空ならモデルに合わせて自動）
@@ -1429,6 +1432,7 @@ async function planReactions(env, post) {
   if (claim.meta && claim.meta.changes === 0) return []; // ほかの処理がもう決めた
   const st = await getSettings(env);
   const world = post.world;
+  if (world === 'ura' && st.uraPaused) return []; // 裏は止めている（この投稿には反応しない）
   const chars = await loadChars(env);
   const author = post.author === ME ? null : chars.find((c) => c.id === post.author);
   if (post.author !== ME && !author) return [];
@@ -1634,6 +1638,7 @@ ${w ? '天気：' + weatherText(w, st) + '\n' : ''}${seasonText(now)}／${weekda
 async function shouldCharPost(env, c, world, now, st) {
   const perDay = nz(world === 'ura' ? c.uraTlPerDay : c.tlPerDay, world === 'ura' ? 1 : 2);
   if (perDay <= 0) return false;
+  if (world === 'ura' && st.uraPaused) return false; // 裏は止めている
   const boost = world === 'omote' ? await activityBoost(env, c, st, now).catch(() => ({ f: 1 })) : { f: 1 };
   const last = await env.DB.prepare('SELECT at FROM tl_posts WHERE world=? AND author=? ORDER BY id DESC LIMIT 1').bind(world, c.id).first();
   if (last && now - last.at < 60 * MIN) return false; // 続けて投稿しすぎない
@@ -1667,7 +1672,8 @@ async function runTlJobs(env, limit) {
     try { await planReactions(env, p); } catch (e) { await log(env, 'TL判定: ' + e.message); }
   }
   // 2) 時間が来た いいね・コメント・返信
-  const { results: due } = await env.DB.prepare('SELECT * FROM tl_jobs WHERE due<=? ORDER BY due LIMIT ?').bind(Date.now(), limit).all();
+  const paused = (await getSettings(env)).uraPaused;
+  const { results: due } = await env.DB.prepare(`SELECT * FROM tl_jobs WHERE due<=? ${paused ? "AND world<>'ura'" : ''} ORDER BY due LIMIT ?`).bind(Date.now(), limit).all(); // 裏を止めているあいだ、裏の反応は待たせておく
   for (const j of due) {
     const claimed = await env.DB.prepare('DELETE FROM tl_jobs WHERE id=? RETURNING id').bind(j.id).first();
     if (!claimed) continue; // ほかの処理が先に実行した

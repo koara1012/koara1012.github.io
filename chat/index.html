@@ -141,6 +141,11 @@ body.ura .costbar{background:#2e2333;color:#cbb9cf;border-color:#43354a}
 .form{padding:16px;display:flex;flex-direction:column;gap:18px}
 .field label.t{display:block;font-weight:700;font-size:14px;margin-bottom:6px}
 .field .hint{color:var(--sub);font-size:12px;margin-top:5px;line-height:1.5}
+.bkInfo{white-space:pre-line}
+.bkSlot{padding:8px 0;border-bottom:1px solid var(--line)}
+.bkSlot:last-child{border-bottom:0}
+.bkSlot .btn{margin-top:6px;padding:8px;font-size:14px}
+.bkWarn{color:#c0392b !important}
 .field input[type=text],.field input[type=password],.field input[type=url],.field textarea,.field select{
   width:100%;border:1px solid var(--line);border-radius:10px;padding:10px 12px;background:#fff}
 .field textarea{min-height:200px;line-height:1.5}
@@ -622,13 +627,32 @@ body.ura #list.tlMode{background:#efe9f0}
       <button class="btn danger" id="tlClearUra">裏のタイムラインを全部消す</button>
     </div>
 
-    <div class="sec">バックアップ</div>
-    <div class="card">
-      <div class="hint">トーク・思い出・TL・キャラ設定など、サーバーにある全データを1つのファイル（JSON）に書き出します。「ファイル」アプリやiCloud Driveに保存しておくと安心です。合言葉やAPIキーは入りません。</div>
-      <label class="chk" style="margin-top:8px"><input type="checkbox" id="bkPhotos"> 写真も含める（ファイルが大きくなります）</label>
-      <button class="btn sub" id="bkExport" style="margin-top:10px">全データを書き出す</button>
-      <div class="hint" id="bkInfo"></div>
+    <div class="sec">バックアップ（手動）</div>
+    <div class="field">
+      <div class="hint" style="margin-top:0">トーク・思い出・TL・キャラ設定など、サーバーにある全データを1つのファイル（JSON）に書き出します。「ファイル」アプリやiCloud Driveに保存しておくと安心です。合言葉やAPIキーは入りません。書き出したあと、件数と中身に問題がないか確かめます。</div>
+      <label class="chk" style="margin-top:6px"><input type="checkbox" id="bkPhotos"> 写真も含める（ファイルが大きくなります）</label>
+      <button class="btn sub" id="bkExport" style="margin-top:6px">全データを書き出す</button>
+      <div class="hint bkInfo" id="bkInfo"></div>
     </div>
+
+    <div class="sec">自動バックアップ（毎月1日・15日）</div>
+    <div class="field">
+      <div class="hint" style="margin-top:0">毎月1日と15日の朝4時ごろ、写真も含めて自動で保存します（「1日用」と「15日用」の2つを交互に上書き）。保存の前に中身を確かめ、急に減っているなど様子がおかしいときは上書きせず、通知でお知らせします。</div>
+      <div id="bkAutoBody"><div class="hint">読み込み中…</div></div>
+    </div>
+
+      <div class="sec rsBox" hidden>バックアップから戻す</div>
+      <div class="field rsBox" hidden>
+        <div class="hint" style="margin-top:0">選んだバックアップの状態に、全データを戻します。戻す前の今の状態は「戻す前の状態」として自動で保存されるので、間違えても元に戻せます。戻しているあいだ（数分）は、トークが使えません。</div>
+        <label class="t" style="margin-top:8px" for="rsSrc">戻す元</label>
+        <select id="rsSrc"><option value="a">1日用</option><option value="b">15日用</option><option value="pre">戻す前の状態</option><option value="file">手動で保存したファイルを選ぶ…</option></select>
+        <input type="file" id="rsFile" accept=".json,application/json" hidden>
+        <div class="hint bkInfo" id="rsFileInfo"></div>
+        <label class="t" style="margin-top:8px" for="rsConfirm">確認のため「戻す」と入力</label>
+        <input type="text" id="rsConfirm" autocomplete="off" placeholder="戻す">
+        <button class="btn danger" id="rsGo" style="margin-top:8px">戻す</button>
+        <div class="hint bkInfo" id="rsInfo"></div>
+      </div>
 
     <div class="sec">困ったとき</div>
     <div class="hint" style="color:var(--sub);font-size:12px;line-height:1.6">うまく動かないときは「診断情報をコピー」してClaudeに貼り付けてください。合言葉は伏せてあります。</div>
@@ -647,7 +671,7 @@ body.ura #list.tlMode{background:#efe9f0}
 
 <script>
 'use strict';
-const APP_VERSION = '第27版（2026-10-18 19:00:00 更新・索引とバックアップ）';
+const APP_VERSION = '第28版（2026-10-18 20:30:00 更新・自動バックアップと復元）';
 const $ = (id) => document.getElementById(id);
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 const esc = (s) => String(s).replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
@@ -1451,6 +1475,20 @@ function bubHTML(m) {
   if (m.image || m.localImg) return `<div class="bub photo"><img ${src ? `src="${src}"` : `data-img="${esc(m.image)}"`} alt="${esc(m.alt || '写真')}"></div>${m.text ? `<div class="bub">${esc(m.text)}</div>` : ''}`;
   return `<div class="bub">${esc(m.text)}</div>`;
 }
+// キャラの写真（AIが作るとPNGで重い）を、初めて表示したときにJPEG（画質90%）にしてサーバーの分を差し替える。劣化はこの1回だけ
+let jpegChain = Promise.resolve();
+function jpegQueue(id) {
+  if (store.get('jpegDone', []).includes(id)) return;
+  jpegChain = jpegChain.then(() => toJpeg(id)).catch((e) => logDiag('写真の軽量化: ' + e.message));
+}
+async function toJpeg(id) {
+  const img = await new Promise((ok, ng) => { const i = new Image(); i.onload = () => ok(i); i.onerror = () => ng(new Error('読み込めませんでした')); i.src = imgCache[id]; });
+  const cv = document.createElement('canvas'); cv.width = img.naturalWidth; cv.height = img.naturalHeight;
+  const g = cv.getContext('2d'); g.fillStyle = '#fff'; g.fillRect(0, 0, cv.width, cv.height); g.drawImage(img, 0, 0); // 透明な部分は白に
+  const d = await api('POST', '/img/replace', { id, data: cv.toDataURL('image/jpeg', 0.9) });
+  if (d.skip === 'busy') return; // バックアップ中。次に表示したときにもう一度
+  store.set('jpegDone', [...store.get('jpegDone', []), id].slice(-1000));
+}
 async function fillImages() {
   for (const el of document.querySelectorAll('img[data-img]')) {
     const id = el.dataset.img;
@@ -1460,8 +1498,10 @@ async function fillImages() {
     try {
       const r = await fetch(S.cfg.url.replace(/\/+$/, '') + '/img?id=' + encodeURIComponent(id), { headers: { 'X-App-Token': S.cfg.token || '' } });
       if (!r.ok) throw new Error('HTTP ' + r.status);
-      imgCache[id] = URL.createObjectURL(await r.blob());
+      const blob = await r.blob();
+      imgCache[id] = URL.createObjectURL(blob);
       document.querySelectorAll(`img[data-img="${CSS.escape(id)}"]`).forEach((x) => { x.src = imgCache[id]; x.removeAttribute('data-img'); });
+      if (blob.type === 'image/png') jpegQueue(id);
     } catch (e) { logDiag('写真の読み込み失敗: ' + e.message); }
     finally { imgLoading[id] = false; }
   }
@@ -1736,7 +1776,7 @@ function openSettings() {
   drawMeIcons();
   document.body.classList.remove('ura');
   show('set');
-  refreshPushState(); renderDiag();
+  refreshPushState(); renderDiag(); bkRefresh();
 }
 async function saveSettings() {
   S.cfg = { url: $('stUrl').value.trim().replace(/\/+$/, ''), token: $('stToken').value };
@@ -2145,34 +2185,175 @@ $('stAiSave').onclick = async () => {
 };
 $('dgCopy').onclick = copyDiag;
 $('dgImage').onclick = imageDiag;
-// バックアップ：①サーバーから受け取る → ②もう一度押して保存（iPhoneは「押した直後」でないと共有シートを開けないため2段階）
-let bkFile = null;
-$('bkExport').onclick = async () => {
-  const btn = $('bkExport');
-  if (bkFile) { // ② 保存
-    const f = bkFile;
-    try {
-      if (navigator.canShare && navigator.canShare({ files: [f] })) await navigator.share({ files: [f] });
-      else { const a = document.createElement('a'); a.href = URL.createObjectURL(f); a.download = f.name; a.click(); setTimeout(() => URL.revokeObjectURL(a.href), 60e3); }
-      bkFile = null; btn.textContent = '全データを書き出す'; $('bkInfo').textContent = '保存しました：' + f.name;
-    } catch (e) { if (e.name !== 'AbortError') toast('保存できませんでした：' + e.message); }
+// ------------------------------------------------ バックアップ
+// ファイルは「①サーバーから受け取って確かめる → ②もう一度押して保存」の2段階（iPhoneは押した直後でないと共有シートを開けないため）
+let bkView = null, bkPumping = false, bkWasRestoring = false;
+const bkPend = {}; // ボタンごとの、保存待ちのファイル
+const fmtMB = (b) => (b / 1048576).toFixed(1) + 'MB';
+const fmtWhen = (t) => { const d = new Date(t); return `${d.getMonth() + 1}/${d.getDate()} ${d.getHours()}:${String(d.getMinutes()).padStart(2, '0')}`; };
+const bkSummary = (c, photos) => `メッセージ${(c.messages || 0).toLocaleString()}件・TL${(c.tl_posts || 0).toLocaleString()}件・思い出${c.memories || 0}件` + (photos != null ? `・写真${photos}枚` : '');
+async function bkFetchFile(path) { // 1つのファイルとして受け取り、途中で欠けていないか数え合わせる
+  const r = await fetch(S.cfg.url.replace(/\/+$/, '') + path, { headers: { 'X-App-Token': S.cfg.token || '' } });
+  if (!r.ok) throw new Error((await r.json().catch(() => ({}))).error || 'HTTP ' + r.status);
+  const text = await r.text();
+  let d; try { d = JSON.parse(text); } catch (_) { throw new Error('ファイルが途中で切れているか、壊れています'); }
+  const bad = Object.keys(d.counts || {}).filter((t) => (d.tables[t] || []).length !== d.counts[t]);
+  if (!d.counts || bad.length) throw new Error('件数が合いません（' + (bad.join('・') || '件数の記録がありません') + '）');
+  const m = /filename="([^"]+)"/.exec(r.headers.get('Content-Disposition') || '');
+  return { file: new File([text], m ? m[1] : 'talk-backup.json', { type: 'application/json' }), d };
+}
+async function bkSaveFile(f) {
+  if (navigator.canShare && navigator.canShare({ files: [f] })) await navigator.share({ files: [f] });
+  else { const a = document.createElement('a'); a.href = URL.createObjectURL(f); a.download = f.name; a.click(); setTimeout(() => URL.revokeObjectURL(a.href), 60e3); }
+}
+async function bkTwoStep(key, btn, info, idle, fetcher) {
+  if (bkPend[key]) {
+    const f = bkPend[key].file;
+    try { await bkSaveFile(f); delete bkPend[key]; btn.textContent = idle; info.textContent = '保存しました：' + f.name; }
+    catch (e) { if (e.name !== 'AbortError') toast('保存できませんでした：' + e.message); }
     return;
   }
-  if (!S.cfg.url) return toast('設定でサーバーURLを入れてください');
-  btn.disabled = true; btn.textContent = '書き出し中…'; $('bkInfo').textContent = '';
+  btn.disabled = true; btn.textContent = '準備中…'; info.textContent = ''; info.classList.remove('bkWarn');
   try {
-    const r = await fetch(S.cfg.url.replace(/\/+$/, '') + '/export' + ($('bkPhotos').checked ? '?images=1' : ''), { headers: { 'X-App-Token': S.cfg.token || '' } });
-    if (!r.ok) throw new Error((await r.json().catch(() => ({}))).error || 'HTTP ' + r.status);
-    const text = await r.text();
-    const d = JSON.parse(text); // 途中で切れていないか確かめる
-    const m = /filename="([^"]+)"/.exec(r.headers.get('Content-Disposition') || '');
-    bkFile = new File([text], m ? m[1] : 'talk-backup.json', { type: 'application/json' });
-    const n = (k) => (d.tables[k] || []).length;
-    $('bkInfo').textContent = `キャラ${n('chars')}人・メッセージ${n('messages')}件・TL投稿${n('tl_posts')}件・思い出${n('memories')}件${d.images ? '・写真' + new Set((d.tables.images || []).map((x) => x.id)).size + '枚' : ''}（${(bkFile.size / 1048576).toFixed(1)}MB）`;
-    btn.textContent = '保存する（ファイルに保存）';
+    const { file, msg } = await fetcher();
+    bkPend[key] = { file, msg }; info.textContent = msg; btn.textContent = '保存する（ファイルに保存）';
   } catch (e) {
-    logDiag('バックアップ: ' + e.message); toast('書き出せませんでした：' + e.message); btn.textContent = '全データを書き出す';
+    logDiag('バックアップ: ' + e.message); info.textContent = '⚠ ' + e.message; info.classList.add('bkWarn'); btn.textContent = idle;
   } finally { btn.disabled = false; }
+}
+const tableLine = (d) => {
+  const n = (k) => (d.tables[k] || []).length;
+  return `キャラ${n('chars')}人・メッセージ${n('messages').toLocaleString()}件・TL投稿${n('tl_posts')}件・思い出${n('memories')}件${d.images ? '・写真' + new Set((d.tables.images || []).map((x) => x.id)).size + '枚' : ''}`;
+};
+$('bkExport').onclick = () => bkTwoStep('manual', $('bkExport'), $('bkInfo'), '全データを書き出す', async () => {
+  const { file, d } = await bkFetchFile('/export' + ($('bkPhotos').checked ? '?images=1' : ''));
+  let msg = `${tableLine(d)}（${fmtMB(file.size)}）\n✓ ファイルの件数を確認しました`;
+  const ck = await api('GET', '/backup/check').catch(() => null);
+  if (ck) {
+    const bad = [...ck.problems, ...ck.warnings];
+    msg += bad.length ? '\n⚠ ' + bad.join('\n⚠ ') : '\n✓ データの中身にも問題はありません' + (ck.quick === 'ok' ? '（データベースの検査も正常）' : '');
+  }
+  return { file, msg };
+});
+
+async function bkRefresh() {
+  try { bkView = await api('GET', '/backup/status'); renderBk(); if (bkView.job || bkView.restore) bkPump(); }
+  catch (e) { $('bkAutoBody').innerHTML = `<div class="hint bkWarn">${esc(e.message)}</div>`; }
+}
+const RS_PHASE = { verify: '戻す元のバックアップを確かめています', snapshot: '今の状態を「戻す前の状態」に保存しています', wipe: '入れ替えています', insert: '入れ直しています', finish: '仕上げています' };
+function renderBk() {
+  const v = bkView; if (!v) return;
+  const el = $('bkAutoBody');
+  if (!v.r2) { el.innerHTML = '<div class="hint bkWarn">⚠ 置き場所（Cloudflare R2）がまだつながっていません。つながると自動で動き始めます。</div>'; document.querySelectorAll('.rsBox').forEach((x) => { x.hidden = true; }); return; }
+  document.querySelectorAll('.rsBox').forEach((x) => { x.hidden = false; });
+  let h = '';
+  for (const k of ['a', 'b', 'pre']) {
+    const s = v.slots[k];
+    if (!s) { if (k !== 'pre') h += `<div class="bkSlot"><b>${k === 'a' ? '1日用' : '15日用'}</b>　<span class="hint">まだありません</span></div>`; continue; }
+    const p = bkPend['slot' + k];
+    h += `<div class="bkSlot"><div><b>${esc(s.name)}</b>　${fmtWhen(s.at)}</div><div class="hint">${bkSummary(s.counts, s.photos)}・${fmtMB(s.bytes)}${s.quick === 'ok' ? '・検査正常' : ''}</div>`
+      + ((s.warnings || []).length ? `<div class="hint bkWarn">⚠ ${s.warnings.map(esc).join('<br>⚠ ')}</div>` : '')
+      + `<button class="btn sub" data-bkdl="${k}">${p ? '保存する（ファイルに保存）' : 'iPhoneに保存'}</button><div class="hint bkInfo" data-bkdlinfo="${k}">${p ? esc(p.msg) : ''}</div></div>`;
+  }
+  const last = v.last, newest = Math.max(0, ...Object.values(v.slots).map((s) => s.at));
+  if (v.job) h += `<div class="hint">⏳ ${v.job.kind === 'pre' ? '戻す前の状態を保存しています' : 'バックアップを取っています'}…（${v.job.parts}個目・${fmtMB(v.job.bytes)}）</div>`;
+  else if (last && !last.ok && !last.cancelled && last.at > newest) {
+    const why = last.blocked ? [...(last.problems || []), ...(last.drops || [])].join('、') : last.error || '';
+    h += `<div class="hint bkWarn">⚠ ${fmtWhen(last.at)} ${last.blocked ? '様子がおかしいので保存しませんでした（前のバックアップはそのまま）' : '保存に失敗しました'}：${esc(why)}</div>`;
+    if (last.blocked) h += `<div class="hint">ご自身で消したなど、心当たりがあるなら、この状態で保存できます。</div><button class="btn sub" id="bkForce">この状態で保存する（${esc(v.cycle.name)}を上書き）</button>`;
+  }
+  if (v.restoreResult && Date.now() - v.restoreResult.at < 3 * 864e5) h += `<div class="hint ${v.restoreResult.ok ? '' : 'bkWarn'}">${v.restoreResult.ok ? '✓' : '⚠'} ${fmtWhen(v.restoreResult.at)} ${esc(v.restoreResult.msg)}</div>`;
+  if (!v.job && !v.restore) h += `<button class="btn sub" id="bkNow" style="margin-top:8px">今すぐ取る（${esc(v.cycle.name)}を上書き）</button>`;
+  if (v.job && v.job.kind !== 'pre') h += `<button class="btn sub" id="bkCancel" style="margin-top:8px">止める</button>`;
+  el.innerHTML = h;
+  // 戻す
+  const rs = v.restore;
+  $('rsGo').disabled = !!rs || !!v.job && v.job.kind === 'pre';
+  if (rs) $('rsInfo').textContent = `⏳ ${RS_PHASE[rs.phase] || ''}…${rs.phase === 'verify' || rs.phase === 'insert' ? `（${rs.done}/${rs.parts}）` : ''}\nこの画面を開いたままにしておくと早く終わります。`;
+  else if (bkWasRestoring) $('rsInfo').textContent = '';
+  for (const o of $('rsSrc').options) o.disabled = o.value !== 'file' && !v.slots[o.value];
+  const sel = $('rsSrc').selectedOptions[0];
+  if (sel && sel.disabled) $('rsSrc').value = [...$('rsSrc').options].find((o) => !o.disabled).value; // まだ無いものは選べない
+}
+async function bkPump() { // 開いているあいだはサーバーを続けて進める（閉じても、サーバーが毎分少しずつ進める）
+  if (bkPumping) return; bkPumping = true;
+  try {
+    for (let i = 0; i < 3000 && S.view === 'set'; i++) {
+      const v = await api('POST', '/backup/step');
+      bkView = v;
+      if (v.restore) bkWasRestoring = true;
+      renderBk();
+      if (!v.job && !v.restore) {
+        if (bkWasRestoring) {
+          bkWasRestoring = false;
+          const r = v.restoreResult;
+          if (r && r.ok) { $('rsInfo').textContent = '✓ ' + r.msg + '。アプリを読み込み直します…'; setTimeout(() => location.reload(), 1500); }
+          else if (r) { $('rsInfo').textContent = '⚠ ' + r.msg; $('rsInfo').classList.add('bkWarn'); }
+        }
+        break;
+      }
+      await new Promise((ok) => setTimeout(ok, 400));
+    }
+  } catch (e) { toast(e.message); } finally { bkPumping = false; }
+}
+$('bkAutoBody').addEventListener('click', async (e) => {
+  const dl = e.target.closest('[data-bkdl]');
+  if (dl) {
+    const k = dl.dataset.bkdl, info = $('bkAutoBody').querySelector(`[data-bkdlinfo="${k}"]`);
+    return bkTwoStep('slot' + k, dl, info, 'iPhoneに保存', async () => {
+      const { file, d } = await bkFetchFile(`/backup/download?slot=${k}${$('bkPhotos').checked ? '&images=1' : ''}`);
+      return { file, msg: `${tableLine(d)}（${fmtMB(file.size)}）\n✓ 指紋と件数を確認しました${$('bkPhotos').checked ? '' : '\n（写真は「写真も含める」に印を付けると入ります）'}` };
+    });
+  }
+  const id = e.target.id;
+  try {
+    if (id === 'bkNow' || id === 'bkForce') { e.target.disabled = true; bkView = await api('POST', '/backup/now', { force: id === 'bkForce' }); renderBk(); bkPump(); }
+    if (id === 'bkCancel') { bkView = await api('POST', '/backup/cancel'); renderBk(); }
+  } catch (err) { toast(err.message); e.target.disabled = false; }
+});
+// 戻す
+let rsData = null;
+$('rsSrc').onchange = () => { $('rsFileInfo').textContent = ''; rsData = null; if ($('rsSrc').value === 'file') $('rsFile').click(); };
+$('rsFile').onchange = async () => {
+  const f = $('rsFile').files[0]; $('rsFile').value = '';
+  if (!f) return;
+  $('rsFileInfo').classList.remove('bkWarn'); $('rsFileInfo').textContent = '読み込み中…';
+  try {
+    const d = JSON.parse(await f.text());
+    if (d.app !== 'トーク' || !d.tables || !Array.isArray(d.tables.chars)) throw new Error('このアプリのバックアップファイルではありません');
+    const bad = Object.keys(d.counts || {}).filter((t) => (d.tables[t] || []).length !== d.counts[t]);
+    if (bad.length) throw new Error('ファイルが欠けています（' + bad.join('・') + '）');
+    rsData = d;
+    $('rsFileInfo').textContent = `${f.name}\n${fmtWhen(d.exportedAt)}に書き出したもの：${tableLine(d)}${d.images ? '' : '\n（写真は入っていないので、今の写真はそのまま残ります）'}`;
+  } catch (e) { rsData = null; $('rsFileInfo').textContent = '⚠ ' + (e instanceof SyntaxError ? 'ファイルが壊れているか、途中で切れています' : e.message); $('rsFileInfo').classList.add('bkWarn'); }
+};
+async function rsUpload(d) {
+  const { gen } = await api('POST', '/backup/upload/start', { images: !!d.images });
+  let seq = 0;
+  for (const [t, rows] of Object.entries(d.tables)) {
+    for (let i = 0; i < rows.length;) {
+      let j = i, size = 0;
+      while (j < rows.length && (j === i || size + JSON.stringify(rows[j]).length < 9e5)) { size += JSON.stringify(rows[j]).length; j++; }
+      for (let tries = 0; ; tries++) { // 電波が切れても、同じ番号で送り直せば二重にならない
+        try { seq = (await api('POST', '/backup/upload/part', { gen, seq, table: t, rows: rows.slice(i, j) })).seq; break; }
+        catch (e) { if (tries >= 3) throw e; await new Promise((ok) => setTimeout(ok, 1500)); }
+      }
+      i = j;
+      $('rsInfo').textContent = `⏳ ファイルを送っています…（${t} ${j.toLocaleString()}/${rows.length.toLocaleString()}）`;
+    }
+  }
+  await api('POST', '/backup/upload/finish', { gen, counts: d.counts || Object.fromEntries(Object.entries(d.tables).map(([t, r]) => [t, r.length])), version: d.version, exportedAt: d.exportedAt });
+}
+$('rsGo').onclick = async () => {
+  if ($('rsConfirm').value.trim() !== '戻す') return toast('確認のため「戻す」と入力してください');
+  let source = $('rsSrc').value;
+  $('rsInfo').classList.remove('bkWarn');
+  $('rsGo').disabled = true;
+  try {
+    if (source === 'file') { if (!rsData) throw new Error('ファイルを選んでください'); await rsUpload(rsData); source = 'upload'; }
+    bkView = await api('POST', '/backup/restore', { source, confirm: '戻す' });
+    $('rsConfirm').value = ''; bkWasRestoring = true; renderBk(); bkPump();
+  } catch (e) { $('rsInfo').textContent = '⚠ ' + e.message; $('rsInfo').classList.add('bkWarn'); $('rsGo').disabled = false; }
 };
 $('dgClear').onclick = () => { diagLog = []; store.set('chat.log', []); renderDiag(); toast('アプリの記録を消しました'); };
 

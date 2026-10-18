@@ -12,6 +12,11 @@
       "database_id": "7e589630-120d-446f-8859-e1dd2178223d"
     }
   ],
+  // 自動バックアップの置き場所（Cloudflare R2）。バケット「chara-chat-backup」を作ってから、下の3行の // を外す
+  // （バケットが無いまま有効にすると、公開に失敗します）
+  // "r2_buckets": [
+  //   { "binding": "BACKUP", "bucket_name": "chara-chat-backup" }
+  // ],
   "triggers": { "crons": ["* * * * *"] }, // 毎分鳴らし、worker.js 側で13分おきのときだけ動く
   "observability": { "enabled": true }
 }

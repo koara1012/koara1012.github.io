@@ -14,7 +14,7 @@
 //    ・Cron トリガー  * * * * *  （毎分。実際に動くのは13分おき）
 // =====================================================================
 
-const VERSION = '第27版（2026-10-18 19:00:00 更新・索引とバックアップ）';
+const VERSION = '第28版（2026-10-18 20:30:00 更新・自動バックアップと復元）';
 const DEFAULT_MODEL = 'gemini-flash-latest';
 const DEFAULT_GROK_MODEL = 'grok-4.7';                 // X（Twitter）の Grok と同じ最新世代
 const FALLBACK_GROK_MODEL = 'grok-4-fast-non-reasoning'; // 上が使えないときの予備
@@ -51,6 +51,8 @@ export default {
       if (req.headers.get('X-App-Token') !== env.APP_TOKEN) throw new HttpError(401, '合言葉が違います');
       if (ctx && ctx.waitUntil) ctx.waitUntil(rememberOrigin(env, url.origin).catch(() => {}));
       await ensureSchema(env);
+      // バックアップから戻しているあいだは、ほかの操作を止める（途中の状態に書き込まないように）
+      if (!url.pathname.startsWith('/backup/') && await kvGet(env, 'bk:lock', 0)) throw new HttpError(503, 'バックアップから戻している最中です。終わるまでお待ちください');
       const body = req.method === 'POST' ? await req.json().catch(() => ({})) : {};
       return await route(req.method + ' ' + url.pathname, url, body, env, ctx);
     } catch (e) {
@@ -61,6 +63,11 @@ export default {
   async scheduled(event, env, ctx) {
     // Cronの書き方では「13分ごと」をぴったり指定できないので、毎分呼ばれて13分おきのときだけ動く
     const minute = Math.floor(Number(event && event.scheduledTime) / 60000);
+    if (env.BACKUP) {
+      const locked = await kvGet(env, 'bk:lock', 0).catch(() => 0);
+      ctx.waitUntil(backupStep(env, { cron: true }).catch((e) => log(env, 'バックアップ: ' + e.message))); // 月2回の自動バックアップ・戻す作業の続き
+      if (locked) return; // 戻しているあいだは、返事も話しかけも止める
+    }
     ctx.waitUntil(runDueReplies(env).catch((e) => log(env, 'あとで返す返事: ' + e.message))); // 予約した返事は毎分確認（軽い）
     ctx.waitUntil(runDueProactive(env).catch((e) => log(env, '自動送信: ' + e.message))); // 時間をずらした話しかけ
     ctx.waitUntil(runDisasters(env, minute).catch((e) => log(env, '災害の確認: ' + e.message))); // 地震・速報は毎分、ほかは間をあけて確認
@@ -338,6 +345,123 @@ async function route(key, url, body, env, ctx) {
 
     case 'GET /export': return exportAll(env, url.searchParams.get('images') === '1');
 
+    // ---- バックアップ（自動・確認・戻す）
+    case 'GET /backup/status': return json(await bkView(env));
+    case 'GET /backup/check': return json(await bkIntegrity(env)); // 手動の書き出しのあとの確かめ
+    case 'POST /backup/step': { await backupStep(env, {}); return json(await bkView(env)); } // アプリを開いているあいだは早めに進める
+    case 'POST /backup/now': { // 今の期間（1日用／15日用）の分を今すぐ取る。force=true なら減っていても保存
+      needR2(env);
+      if ((await kvGet(env, 'bk:job', null)) || (await kvGet(env, 'bk:restore', null))) throw new HttpError(409, 'バックアップか復元の途中です');
+      const c = bkCycle(Date.now());
+      if (!(await bkLease(env))) throw new HttpError(409, 'バックアップの準備中です。少し待ってからもう一度');
+      try {
+        if (body.force) { const st = await bkStatus(env); if (st.cycles && st.cycles[c.cycle]) delete st.cycles[c.cycle].blocked; await kvSet(env, 'bk:status', st); }
+        await bkStartJob(env, { kind: 'auto', slot: c.slot, cycle: c.cycle, force: !!body.force });
+      } finally { await bkRelease(env); }
+      return json(await bkView(env));
+    }
+    case 'POST /backup/cancel': { // 自動バックアップ中・戻す前の保存中だけ止められる（データを消し始めたら止めない）
+      const rs = await kvGet(env, 'bk:restore', null);
+      if (rs && rs.phase !== 'snapshot' && rs.phase !== 'verify') throw new HttpError(409, '戻している途中なので止められません。終わるまでお待ちください');
+      if (!(await bkLease(env))) throw new HttpError(409, '処理中です。少し待ってからもう一度');
+      try {
+        const job = await kvGet(env, 'bk:job', null);
+        if (job) { await bkDeleteGen(env, job.gen).catch(() => {}); await bkFinishJob(env, job, false, { error: '止めました', cancelled: true }); }
+        if (rs) { await env.DB.prepare("DELETE FROM kv WHERE k IN ('bk:restore','bk:lock')").run(); await bkRestoreResult(env, false, '戻すのを止めました（データはそのままです）'); }
+      } finally { await bkRelease(env); }
+      return json(await bkView(env));
+    }
+    case 'POST /backup/restore': { // 戻す：まず今の状態を「戻す前の状態」に保存 → 消す → 入れ直す
+      needR2(env);
+      if (String(body.confirm || '').trim() !== '戻す') throw new HttpError(400, '確認のため「戻す」と入力してください');
+      if (await kvGet(env, 'bk:restore', null)) throw new HttpError(409, 'すでに戻している途中です');
+      let gen, label;
+      if (BK_SLOT_NAME[body.source]) {
+        const sl = (await bkSlots(env))[body.source];
+        if (!sl) throw new HttpError(404, BK_SLOT_NAME[body.source] + 'のバックアップはまだありません');
+        gen = sl.gen; label = BK_SLOT_NAME[body.source] + `（${jstDate(sl.at)}）`;
+      } else if (body.source === 'upload') {
+        const up = await kvGet(env, 'bk:upload', null);
+        if (!up || !up.done) throw new HttpError(400, 'ファイルの読み込みが済んでいません');
+        gen = up.gen; label = '選んだファイル';
+      } else throw new HttpError(400, '戻す元を選んでください');
+      const m = await bkManifest(env, gen);
+      if (!(await bkLease(env))) throw new HttpError(409, '処理中です。少し待ってからもう一度');
+      try {
+        const job = await kvGet(env, 'bk:job', null);
+        if (job) { await bkDeleteGen(env, job.gen).catch(() => {}); await bkFinishJob(env, job, false, { error: '戻す操作のため中断しました', cancelled: true }); } // 自動バックアップは次の機会に
+        await kvSet(env, 'bk:lock', 1);
+        // ①戻す元をすべて読んで確かめる → ②今の状態を保存 → ③消す → ④入れ直す
+        await kvSet(env, 'bk:restore', { phase: 'verify', vi: 0, srcGen: gen, label, images: !!m.images, parts: m.parts, started: Date.now() });
+      } finally { await bkRelease(env); }
+      return json(await bkView(env));
+    }
+    case 'POST /backup/upload/start': { // ファイルから戻す：中身をいったんR2に置く
+      needR2(env);
+      const old = await kvGet(env, 'bk:upload', null);
+      const rs = await kvGet(env, 'bk:restore', null);
+      if (old && !(rs && rs.srcGen === old.gen)) await bkDeleteGen(env, old.gen).catch(() => {});
+      const gen = 'up-' + new Date(Date.now() + 9 * 3600e3).toISOString().replace(/\D/g, '').slice(0, 14) + '-' + randomAlnum(6);
+      await kvSet(env, 'bk:upload', { gen, parts: [], counts: {}, images: !!body.images, done: false });
+      return json({ gen });
+    }
+    case 'POST /backup/upload/part': {
+      needR2(env);
+      const up = await kvGet(env, 'bk:upload', null);
+      if (!up || up.gen !== body.gen || up.done) throw new HttpError(400, '読み込みをやり直してください');
+      if (num(body.seq, -1) !== up.parts.length) return json({ ok: true, seq: up.parts.length }); // 送り直し（もう受け取った分）
+      const t = String(body.table || '');
+      if (!BK_TABLES.includes(t) || !Array.isArray(body.rows) || !body.rows.length) throw new HttpError(400, 'ファイルの中身が正しくありません');
+      const key = `${BK_PREFIX}gens/${up.gen}/p${String(up.parts.length).padStart(5, '0')}.json`;
+      const { sha, bytes } = await bkPutVerified(env, key, JSON.stringify({ table: t, rows: body.rows }));
+      up.parts.push({ key, sha, bytes, table: t, rows: body.rows.length });
+      up.counts[t] = (up.counts[t] || 0) + body.rows.length;
+      await kvSet(env, 'bk:upload', up);
+      return json({ ok: true, seq: up.parts.length });
+    }
+    case 'POST /backup/upload/finish': {
+      needR2(env);
+      const up = await kvGet(env, 'bk:upload', null);
+      if (!up || up.gen !== body.gen) throw new HttpError(400, '読み込みをやり直してください');
+      const want = body.counts || {};
+      const bad = Object.keys(want).filter((t) => (up.counts[t] || 0) !== num(want[t], 0));
+      if (bad.length) throw new HttpError(400, '受け取った件数が合いません（' + bad.join('・') + '）。もう一度お試しください');
+      if (!up.counts.chars) throw new HttpError(400, 'キャラが1人も入っていないファイルです');
+      await bkPutVerified(env, `${BK_PREFIX}gens/${up.gen}/manifest.json`, JSON.stringify({ app: 'トーク', version: String(body.version || ''), at: num(body.exportedAt, Date.now()), kind: 'upload', images: up.images, counts: up.counts, parts: up.parts }));
+      up.done = true;
+      await kvSet(env, 'bk:upload', up);
+      return json({ ok: true, counts: up.counts });
+    }
+    case 'GET /backup/download': { // 自動バックアップをiPhoneに保存
+      needR2(env);
+      const slot = url.searchParams.get('slot') || '';
+      const sl = BK_SLOT_NAME[slot] && (await bkSlots(env))[slot];
+      if (!sl) throw new HttpError(404, 'そのバックアップはまだありません');
+      return bkDownload(env, sl.gen, url.searchParams.get('images') === '1', { a: '1st', b: '15th', pre: 'before-restore' }[slot]);
+    }
+
+    case 'POST /img/replace': { // キャラの写真（PNG）を、アプリで作ったJPEGに差し替えて軽くする
+      if (await kvGet(env, 'bk:job', null)) return json({ skip: 'busy' }); // バックアップ中は後回し
+      const id = String(body.id || '');
+      const { results } = await env.DB.prepare('SELECT part,mime,length(data) AS n FROM images WHERE id=? ORDER BY part').bind(id).all();
+      if (!results.length) throw new HttpError(404, '写真が見つかりません');
+      if (results[0].mime !== 'image/png') return json({ skip: 'not-png' });
+      const m = String(body.data || '').match(/^data:image\/jpeg;base64,(\/9j\/[A-Za-z0-9+/=]+)$/); // JPEGの頭（FF D8 FF）で始まること
+      if (!m) throw new HttpError(400, 'JPEGの形式が正しくありません');
+      const oldLen = results.reduce((a, r) => a + r.n, 0);
+      if (m[1].length >= oldLen * 0.9) return json({ skip: 'not-smaller' });
+      const stmts = [];
+      for (let i = 0, n = 0; i < m[1].length; i += IMG_CHUNK, n++) {
+        const part = m[1].slice(i, i + IMG_CHUNK);
+        stmts.push(n < results.length
+          ? env.DB.prepare("UPDATE images SET mime='image/jpeg', data=? WHERE id=? AND part=?").bind(part, id, n)
+          : env.DB.prepare("INSERT INTO images (id,part,mime,data) VALUES (?,?,'image/jpeg',?)").bind(id, n, part));
+      }
+      stmts.push(env.DB.prepare('DELETE FROM images WHERE id=? AND part>=?').bind(id, Math.ceil(m[1].length / IMG_CHUNK)));
+      await env.DB.batch(stmts);
+      return json({ ok: true, before: oldLen, after: m[1].length });
+    }
+
     case 'GET /icons': {
       const ids = (url.searchParams.get('ids') || '').split(',').filter(Boolean).slice(0, 50);
       if (!ids.length) return json({ icons: {} });
@@ -386,6 +510,7 @@ async function route(key, url, body, env, ctx) {
 
     case 'DELETE /char': {
       const id = url.searchParams.get('id') || '';
+      await noteUserDelete(env);
       await env.DB.batch([
         env.DB.prepare('DELETE FROM chars WHERE id=?').bind(id),
         env.DB.prepare('DELETE FROM kv WHERE k IN (?,?,?,?)').bind('reply:' + id, 'rhythm:' + id, 'jealous:' + id, 'proj:' + id),
@@ -405,6 +530,7 @@ async function route(key, url, body, env, ctx) {
 
     case 'POST /clear': { // 表・裏それぞれ別に消す（charId に #ura が付いていれば裏）
       const { base, key } = splitCid(body.charId);
+      await noteUserDelete(env);
       await getChar(env, base);
       await env.DB.batch([
         env.DB.prepare('DELETE FROM messages WHERE char_id=?').bind(key),
@@ -469,6 +595,7 @@ async function route(key, url, body, env, ctx) {
 
     case 'POST /messages/delete': { // 選んだメッセージだけ消す（表・裏それぞれ）
       const { base, key } = splitCid(body.charId);
+      await noteUserDelete(env);
       await getChar(env, base);
       const ids = [...new Set((Array.isArray(body.ids) ? body.ids : []).map((x) => num(x, 0)).filter((x) => x > 0))].slice(0, 2000);
       if (!ids.length) throw new HttpError(400, '消すメッセージが選ばれていません');
@@ -680,6 +807,7 @@ async function route(key, url, body, env, ctx) {
     }
 
     case 'POST /tl/delete': { // 自分の投稿・コメントだけ消せる
+      await noteUserDelete(env);
       if (body.commentId != null) {
         const c = await env.DB.prepare('SELECT * FROM tl_comments WHERE id=?').bind(num(body.commentId, 0)).first();
         if (!c || c.author !== ME) throw new HttpError(403, '自分のコメントだけ消せます');
@@ -696,6 +824,7 @@ async function route(key, url, body, env, ctx) {
     }
 
     case 'POST /tl/clear': { // その世界のTLを全部消す
+      await noteUserDelete(env);
       const world = body.world === 'ura' ? 'ura' : 'omote';
       await deletePosts(env, 'world=?', [world]);
       return json({ ok: true });
@@ -730,6 +859,7 @@ async function route(key, url, body, env, ctx) {
     }
 
     case 'POST /memory/delete': {
+      await noteUserDelete(env);
       await env.DB.prepare('DELETE FROM memories WHERE id=?').bind(num(body.id, 0)).run();
       return json({ ok: true });
     }
@@ -1360,34 +1490,393 @@ async function applyRetracts(env) {
   await env.DB.prepare('UPDATE messages SET retracted=1 WHERE retract_at IS NOT NULL AND retract_at<=? AND retracted=0').bind(Date.now()).run();
 }
 
-// ================================================================ バックアップ（全データの書き出し）
-// 通知の宛先（subs）だけは端末ごとのものなので含めない。合言葉やAPIキーはDBに無いので、ファイルにも入らない。
+// ================================================================ バックアップ（全データの書き出し・自動バックアップ・確認・復元）
+// 通知の宛先（subs）と、この端末・このサーバー専用の値（通知の鍵 vapid、アドレス origin、バックアップ自身の記録 bk:*）は含めない。
+// 合言葉やAPIキーはDBに無いので、ファイルにも入らない。
 const EXPORT_TABLES = ['chars', 'messages', 'reads', 'kv', 'char_state', 'memories', 'ura_icons', 'me_icons', 'tl_posts', 'tl_comments', 'tl_likes', 'tl_jobs', 'ai_cost'];
+const BK_TABLES = [...EXPORT_TABLES, 'images'];
+const KV_LOCAL_SQL = "(k < 'bk:' OR k >= 'bk;') AND k NOT IN ('vapid','origin')"; // 書き出し・消去・復元の対象にする kv
+const kvRowOk = (r) => !(String(r.k).startsWith('bk:') || r.k === 'vapid' || r.k === 'origin');
+const tblWhere = (t) => (t === 'kv' ? ' AND ' + KV_LOCAL_SQL : '');
 function exportAll(env, withImages) {
-  const tables = withImages ? [...EXPORT_TABLES, 'images'] : EXPORT_TABLES;
+  const tables = withImages ? BK_TABLES : EXPORT_TABLES;
   const { readable, writable } = new TransformStream();
   const w = writable.getWriter(), enc = new TextEncoder();
   const put = (t) => w.write(enc.encode(t));
   (async () => {
     try {
+      const counts = {};
       await put(`{"app":"トーク","version":${JSON.stringify(VERSION)},"exportedAt":${Date.now()},"images":${withImages},"tables":{`);
       for (let ti = 0; ti < tables.length; ti++) {
-        await put(`${ti ? ',' : ''}${JSON.stringify(tables[ti])}:[`);
-        let last = -1, first = true;
+        const t = tables[ti];
+        await put(`${ti ? ',' : ''}${JSON.stringify(t)}:[`);
+        let last = -1, n = 0;
         for (;;) { // rowid順に少しずつ読む（写真があっても一度に抱えない）
-          const { results } = await env.DB.prepare(`SELECT rowid AS _r, * FROM ${tables[ti]} WHERE rowid>? ORDER BY rowid LIMIT ${tables[ti] === 'images' ? 20 : 500}`).bind(last).all();
+          const { results } = await env.DB.prepare(`SELECT rowid AS _r, * FROM ${t} WHERE rowid>?${tblWhere(t)} ORDER BY rowid LIMIT ${t === 'images' ? 20 : 500}`).bind(last).all();
           if (!results.length) break;
-          for (const { _r, ...row } of results) { await put((first ? '' : ',') + JSON.stringify(row)); first = false; last = _r; }
+          for (const { _r, ...row } of results) { await put((n ? ',' : '') + JSON.stringify(row)); n++; last = _r; }
         }
+        counts[t] = n;
         await put(']');
       }
-      await put('}}');
+      await put(`},"counts":${JSON.stringify(counts)}}`); // 受け取った側で、途中で欠けていないか数え合わせる
       await w.close();
     } catch (e) { await w.abort(e).catch(() => {}); }
   })();
-  const name = `talk-backup-${new Date(Date.now() + 9 * 3600e3).toISOString().slice(0, 10)}${withImages ? '-photos' : ''}.json`;
-  return new Response(readable, { headers: { ...CORS, 'Content-Type': 'application/json; charset=utf-8', 'Content-Disposition': `attachment; filename="${name}"`, 'Access-Control-Expose-Headers': 'Content-Disposition' } });
+  return fileResponse(readable, `talk-backup-${jstDate(Date.now())}${withImages ? '-photos' : ''}.json`);
 }
+const jstDate = (t) => new Date(t + 9 * 3600e3).toISOString().slice(0, 10);
+const fileResponse = (body, name) => new Response(body, { headers: { ...CORS, 'Content-Type': 'application/json; charset=utf-8', 'Content-Disposition': `attachment; filename="${name}"`, 'Access-Control-Expose-Headers': 'Content-Disposition' } });
+
+// ---- 自動バックアップ（R2）
+// 置き方：talk/slots.json（1日用 a・15日用 b・戻す前 pre がそれぞれどれを指すか）と talk/gens/<世代>/p00000.json …（中身を小分けにしたもの）・manifest.json
+// 新しい世代を全部書いて確かめ終わってから slots.json を書き換え、古い世代を消す（途中で失敗しても、前のバックアップは残る）
+const BK_PREFIX = 'talk/';
+const BK_SLOT_NAME = { a: '1日用', b: '15日用', pre: '戻す前の状態' };
+const BK_ROWS = (t) => (t === 'images' ? 2 : 500); // 1回の処理を軽く（無料プランの計算時間の上限に余裕を持たせる）
+const hexOf = (buf) => [...new Uint8Array(buf)].map((b) => b.toString(16).padStart(2, '0')).join('');
+const sha256Hex = async (bytes) => hexOf(await crypto.subtle.digest('SHA-256', bytes));
+function bkCycle(now) { // 今が「1日用」「15日用」のどちらの期間か
+  const d = new Date(now + 9 * 3600e3), day = d.getUTCDate(), slot = day >= 15 ? 'b' : 'a';
+  return { cycle: d.toISOString().slice(0, 7) + '-' + slot, slot, day, hour: d.getUTCHours() };
+}
+async function bkSlots(env) {
+  const o = await env.BACKUP.get(BK_PREFIX + 'slots.json');
+  if (!o) return {};
+  try { return JSON.parse(await o.text()) || {}; } catch (_) { return {}; }
+}
+async function bkPutVerified(env, key, text) { // 指紋つきで書き、読み戻して同じか確かめる
+  const bytes = new TextEncoder().encode(text);
+  const sha = await sha256Hex(bytes);
+  await env.BACKUP.put(key, bytes, { sha256: sha, httpMetadata: { contentType: 'application/json' } });
+  const o = await env.BACKUP.get(key);
+  if (!o) throw new Error('書き込んだファイルが見つかりません');
+  if (await sha256Hex(await o.arrayBuffer()) !== sha) throw new Error('読み戻した中身が書いたものと一致しません');
+  return { sha, bytes: bytes.length };
+}
+async function bkReadPart(env, p) { // 1つ読んで指紋を確かめる
+  const o = await env.BACKUP.get(p.key);
+  if (!o) throw new Error('バックアップの一部が見つかりません（' + p.key.split('/').pop() + '）');
+  const buf = await o.arrayBuffer();
+  if (await sha256Hex(buf) !== p.sha) throw new Error('バックアップの一部が壊れています（' + p.key.split('/').pop() + '）');
+  return new TextDecoder().decode(buf);
+}
+async function bkDeleteGen(env, gen) {
+  if (!gen) return;
+  let cursor;
+  do {
+    const l = await env.BACKUP.list({ prefix: `${BK_PREFIX}gens/${gen}/`, cursor, limit: 1000 });
+    const keys = l.objects.map((o) => o.key);
+    if (keys.length) await env.BACKUP.delete(keys);
+    cursor = l.truncated ? l.cursor : null;
+  } while (cursor);
+}
+async function bkLease(env, ms = 55e3) { // cronとアプリが同時に進めないように
+  const now = Date.now();
+  const r = await env.DB.prepare("INSERT INTO kv (k,v) VALUES ('bk:lease',?) ON CONFLICT(k) DO UPDATE SET v=excluded.v WHERE CAST(kv.v AS INTEGER) < ? RETURNING k").bind(String(now + ms), now).first();
+  return !!r;
+}
+const bkRelease = (env) => env.DB.prepare("DELETE FROM kv WHERE k='bk:lease'").run();
+
+async function bkStartJob(env, { kind, slot, force = false, cycle = '', keepGen = '' }) {
+  // 始めた時点の各表の最後の行までを書き出す（書き出し中に増えた分は次回）
+  const mx = await env.DB.prepare(`SELECT ${BK_TABLES.map((t) => `(SELECT COALESCE(MAX(rowid),0) FROM ${t}) AS ${t}`).join(',')}`).first();
+  const ct = await env.DB.prepare(`SELECT ${BK_TABLES.map((t) => `(SELECT COUNT(*) FROM ${t} WHERE rowid<=?${tblWhere(t)}) AS ${t}`).join(',')}`).bind(...BK_TABLES.map((t) => mx[t])).first();
+  const job = {
+    gen: new Date(Date.now() + 9 * 3600e3).toISOString().replace(/\D/g, '').slice(0, 14) + '-' + randomAlnum(6),
+    kind, slot, force: !!force, cycle, keepGen, started: Date.now(), phase: 'export', ti: 0, last: -1, seq: 0,
+    max: { ...mx }, expect: { ...ct }, counts: {}, parts: [], bytes: 0,
+  };
+  await kvSet(env, 'bk:job', job);
+  return job;
+}
+async function bkExportPart(env, job) {
+  const t = BK_TABLES[job.ti];
+  const { results } = await env.DB.prepare(`SELECT rowid AS _r, * FROM ${t} WHERE rowid>? AND rowid<=?${tblWhere(t)} ORDER BY rowid LIMIT ${BK_ROWS(t)}`).bind(job.last, job.max[t]).all();
+  if (!results.length) { job.ti++; job.last = -1; return; }
+  job.last = results[results.length - 1]._r;
+  const rows = results.map(({ _r, ...r }) => r);
+  const key = `${BK_PREFIX}gens/${job.gen}/p${String(job.seq++).padStart(5, '0')}.json`;
+  const { sha, bytes } = await bkPutVerified(env, key, JSON.stringify({ table: t, rows }));
+  job.parts.push({ key, sha, bytes, table: t, rows: rows.length });
+  job.counts[t] = (job.counts[t] || 0) + rows.length;
+  job.bytes += bytes;
+}
+
+// 中身の確かめ（自動バックアップのたび・手動の書き出しのあと）
+async function bkIntegrity(env) {
+  const problems = [], warnings = [];
+  let quick = 'skip';
+  try {
+    const { results } = await env.DB.prepare('PRAGMA quick_check').all();
+    const v = results.map((r) => String(Object.values(r)[0]));
+    quick = v.length === 1 && v[0] === 'ok' ? 'ok' : 'ng';
+    if (quick === 'ng') problems.push('データベースの検査で異常が見つかりました：' + v.slice(0, 3).join(' / '));
+  } catch (_) { quick = 'skip'; } // 使えない環境では飛ばす
+  const { results: cs } = await env.DB.prepare('SELECT id,data FROM chars').all();
+  const bad = cs.filter((c) => { try { JSON.parse(c.data); return false; } catch (_) { return true; } });
+  if (bad.length) problems.push(`キャラ設定が読めません（${bad.length}人）`);
+  const one = async (sql) => ((await env.DB.prepare(sql).first()) || {}).n || 0;
+  const orphan = await one(`SELECT COUNT(*) AS n FROM messages WHERE char_id NOT IN (SELECT id FROM chars) AND char_id NOT IN (SELECT id || '${URA}' FROM chars)`);
+  if (orphan) warnings.push(`持ち主のいないメッセージが${orphan}件あります`);
+  const brokenImg = await one('SELECT COUNT(*) AS n FROM (SELECT id FROM images GROUP BY id HAVING COUNT(*)<>MAX(part)+1 OR COUNT(DISTINCT mime)>1)');
+  if (brokenImg) warnings.push(`欠けている写真が${brokenImg}枚あります`);
+  const lost = await one("SELECT (SELECT COUNT(*) FROM messages WHERE image IS NOT NULL AND image<>'' AND retracted=0 AND image NOT IN (SELECT id FROM images)) + (SELECT COUNT(*) FROM tl_posts WHERE image IS NOT NULL AND image<>'' AND image NOT IN (SELECT id FROM images)) AS n");
+  if (lost) warnings.push(`見つからない写真が${lost}枚あります`);
+  const { results: kvs } = await env.DB.prepare('SELECT k,v FROM kv').all();
+  const badKv = kvs.filter((r) => { try { JSON.parse(r.v); return false; } catch (_) { return true; } });
+  if (badKv.length) warnings.push(`読めない内部データが${badKv.length}件あります`);
+  const photos = await one('SELECT COUNT(DISTINCT id) AS n FROM images');
+  return { problems, warnings, quick, photos };
+}
+const BK_DROP = [['messages', 'メッセージ'], ['tl_posts', 'TLの投稿'], ['tl_comments', 'TLのコメント'], ['photos', '写真'], ['chars', 'キャラ']];
+function bkDrops(prev, cur) { // 前のバックアップより急に減っていないか
+  const out = [];
+  if (!prev || !prev.counts) return out;
+  for (const [t, label] of BK_DROP) {
+    const p = t === 'photos' ? prev.photos || 0 : prev.counts[t] || 0, c = t === 'photos' ? cur.photos || 0 : cur.counts[t] || 0;
+    if (t === 'chars' ? c < p : p >= 50 && c < p * 0.8 && p - c >= 20) out.push(`${label}が${p}→${c}に減っています`);
+  }
+  return out;
+}
+
+async function bkStatus(env) { return kvGet(env, 'bk:status', { cycles: {} }); }
+async function bkFinishJob(env, job, ok, info) {
+  const st = await bkStatus(env);
+  st.cycles = st.cycles || {};
+  st.last = { at: Date.now(), ok, kind: job.kind, slot: job.slot, ...info };
+  if (job.kind === 'auto' && job.cycle) {
+    const c = st.cycles[job.cycle] || {};
+    if (ok) st.cycles[job.cycle] = { ok: true, at: Date.now() };
+    else st.cycles[job.cycle] = { ...c, attempts: (c.attempts || 0) + 1, lastTry: Date.now(), blocked: !!info.blocked };
+    const keys = Object.keys(st.cycles).sort();
+    for (const k of keys.slice(0, -6)) delete st.cycles[k];
+  }
+  await kvSet(env, 'bk:status', st);
+  await env.DB.prepare("DELETE FROM kv WHERE k='bk:job'").run();
+  if (!ok && job.kind === 'auto' && !info.cancelled) await bkNotify(env, info.blocked ? 'バックアップを保存しませんでした（' + (info.problems || []).concat(info.drops || []).slice(0, 2).join('、') + '）。前のバックアップはそのまま残しています。' : 'バックアップに失敗しました：' + (info.error || '')).catch(() => {});
+}
+async function bkNotify(env, body) { // 問題があったときだけ知らせる
+  const st = await getSettings(env);
+  if (st.notifyVia !== 'bark') await pushPayload(env, { title: 'トーク（バックアップ）', body });
+  if (st.notifyVia !== 'web' && env.BARK_DEVICE_KEY) await sendBark(env, st, { title: 'トーク（バックアップ）', body, group: 'バックアップ' }).catch(() => {});
+}
+async function bkCheckAndCommit(env, job) {
+  // ① 件数：始めた時点の件数（以下）と今の件数（以上）のあいだに収まっているか（書き出し中に消された分だけずれてよい）
+  const ct = await env.DB.prepare(`SELECT ${BK_TABLES.map((t) => `(SELECT COUNT(*) FROM ${t} WHERE rowid<=?${tblWhere(t)}) AS ${t}`).join(',')}`).bind(...BK_TABLES.map((t) => job.max[t])).first();
+  const miss = BK_TABLES.filter((t) => { const n = job.counts[t] || 0; return n > job.expect[t] || n < ct[t]; });
+  if (miss.length) throw new Error('書き出した件数が合いません（' + miss.join('・') + '）');
+  // ② 中身の確かめ
+  const integ = await bkIntegrity(env);
+  const cur = { counts: job.counts, photos: integ.photos };
+  // ③ 急に減っていないか（自動のときだけ。前の自動バックアップと比べる）
+  const slots = await bkSlots(env);
+  let drops = [];
+  if (job.kind === 'auto') {
+    const prev = ['a', 'b'].map((s) => slots[s]).filter(Boolean).sort((x, y) => y.at - x.at)[0];
+    drops = bkDrops(prev, cur);
+    if (drops.length && prev && (await kvGet(env, 'bk:userdel', 0)) > prev.at) { // ご自身で消した分なら、知らせるだけにする
+      integ.warnings.push(...drops.map((d) => d + '（消した分）')); drops = [];
+    }
+  }
+  if (!job.force && job.kind === 'auto' && (integ.problems.length || drops.length)) {
+    await bkDeleteGen(env, job.gen);
+    await bkFinishJob(env, job, false, { blocked: true, problems: integ.problems, drops, warnings: integ.warnings });
+    return false;
+  }
+  const at = Date.now();
+  const info = { gen: job.gen, at, kind: job.kind, counts: job.counts, photos: integ.photos, bytes: job.bytes, parts: job.parts.length, warnings: [...integ.problems, ...drops, ...integ.warnings], quick: integ.quick, images: true };
+  await bkPutVerified(env, `${BK_PREFIX}gens/${job.gen}/manifest.json`, JSON.stringify({ app: 'トーク', version: VERSION, ...info, parts: job.parts }));
+  const old = slots[job.slot];
+  slots[job.slot] = info;
+  await env.BACKUP.put(BK_PREFIX + 'slots.json', JSON.stringify(slots));
+  if (old && old.gen !== job.gen && old.gen !== job.keepGen && !Object.values(slots).some((s) => s && s.gen === old.gen)) await bkDeleteGen(env, old.gen);
+  await bkFinishJob(env, job, true, { counts: job.counts, photos: integ.photos, bytes: job.bytes, warnings: info.warnings, forced: job.force });
+  return true;
+}
+
+// 1回分だけ進める（cronは毎分・アプリは開いているあいだ続けて呼ぶ）
+async function backupStep(env, { cron = false, budgetMs = 20e3, maxParts = cron ? 4 : 6 } = {}) {
+  if (!env.BACKUP) return { noR2: true };
+  let job = await kvGet(env, 'bk:job', null);
+  let rs = await kvGet(env, 'bk:restore', null);
+  if (!job && !rs) {
+    if (!cron) return { idle: true };
+    const c = bkCycle(Date.now()), st = await bkStatus(env), cy = (st.cycles || {})[c.cycle] || {};
+    const due = !cy.ok && !cy.blocked && (cy.attempts || 0) < 3 && (cy.attempts ? Date.now() - cy.lastTry >= 6 * 3600e3 : !(c.day === 1 || c.day === 15) || c.hour >= 4);
+    if (!due) return { idle: true };
+    if (!(await bkLease(env))) return { busy: true };
+    try { job = await bkStartJob(env, { kind: 'auto', slot: c.slot, cycle: c.cycle }); } finally { await bkRelease(env); }
+    return { started: true };
+  }
+  if (!(await bkLease(env))) return { busy: true };
+  const t0 = Date.now();
+  try {
+    if (job) {
+      try {
+        for (let n = 0; job.phase === 'export' && n < maxParts && Date.now() - t0 < budgetMs; n++) {
+          if (job.ti >= BK_TABLES.length) { job.phase = 'check'; break; }
+          await bkExportPart(env, job);
+          if (job.ti >= BK_TABLES.length) job.phase = 'check';
+        }
+        await kvSet(env, 'bk:job', job);
+        if (job.phase === 'check' && Date.now() - t0 < budgetMs) {
+          const ok = await bkCheckAndCommit(env, job);
+          if (rs && job.kind === 'pre') { // 戻す前の保存が済んだら、消して入れ直す段階へ
+            rs = ok ? { ...rs, phase: 'wipe' } : null;
+            if (rs) await kvSet(env, 'bk:restore', rs);
+          }
+        }
+      } catch (e) {
+        await bkDeleteGen(env, job.gen).catch(() => {});
+        await bkFinishJob(env, job, false, { error: e.message });
+        await log(env, 'バックアップ: ' + e.message);
+        if (rs && job.kind === 'pre') { // 戻す前の保存ができなければ、何も変えずにやめる
+          await env.DB.prepare("DELETE FROM kv WHERE k IN ('bk:restore','bk:lock')").run();
+          await bkRestoreResult(env, false, '戻す前の状態を保存できなかったため、中止しました（データはそのままです）：' + e.message);
+        }
+      }
+      return { job: true };
+    }
+    await bkRestoreStep(env, rs, t0, budgetMs, maxParts);
+    return { restore: true };
+  } finally { await bkRelease(env); }
+}
+
+// ---- 復元（戻す）
+async function bkRestoreResult(env, ok, msg) {
+  const st = await bkStatus(env);
+  st.restore = { at: Date.now(), ok, msg };
+  await kvSet(env, 'bk:status', st);
+}
+const colsMemo = {};
+async function tableCols(env, t) {
+  if (!colsMemo[t]) colsMemo[t] = (await env.DB.prepare(`PRAGMA table_info(${t})`).all()).results.map((r) => r.name);
+  return colsMemo[t];
+}
+async function bkInsertRows(env, t, rows) {
+  if (t === 'kv') rows = rows.filter(kvRowOk);
+  if (!rows.length) return;
+  const have = new Set(await tableCols(env, t));
+  const cols = Object.keys(rows[0]).filter((c) => have.has(c));
+  const sql = `INSERT OR REPLACE INTO ${t} (${cols.join(',')}) SELECT ${cols.map((c) => `json_extract(value,'$.${c}')`).join(',')} FROM json_each(?)`;
+  const stmts = [];
+  let chunk = [], size = 0;
+  for (const r of rows) { // 1回に渡す量を1.2MBほどまでに分ける（D1の上限より小さく）
+    const s = JSON.stringify(Object.fromEntries(cols.map((c) => [c, r[c] ?? null])));
+    if (chunk.length && size + s.length > 1.2e6) { stmts.push(env.DB.prepare(sql).bind('[' + chunk.join(',') + ']')); chunk = []; size = 0; }
+    chunk.push(s); size += s.length;
+  }
+  if (chunk.length) stmts.push(env.DB.prepare(sql).bind('[' + chunk.join(',') + ']'));
+  for (let i = 0; i < stmts.length; i += 20) await env.DB.batch(stmts.slice(i, i + 20));
+}
+async function bkRestoreStep(env, rs, t0, budgetMs, maxParts) {
+  if (rs.phase === 'verify') { // 消す前に、戻す元が全部そろっていて壊れていないか確かめる
+    try {
+      for (let n = 0; rs.vi < rs.parts.length && n < maxParts * 2 && Date.now() - t0 < budgetMs; n++) {
+        const p = rs.parts[rs.vi];
+        const d = JSON.parse(await bkReadPart(env, p));
+        if (d.table !== p.table || !Array.isArray(d.rows) || d.rows.length !== p.rows) throw new Error('バックアップの一部の中身が合いません');
+        rs.vi++;
+      }
+    } catch (e) {
+      await env.DB.prepare("DELETE FROM kv WHERE k IN ('bk:restore','bk:lock')").run();
+      await bkRestoreResult(env, false, '戻す元のバックアップに問題があったため、中止しました（データはそのままです）：' + e.message);
+      return;
+    }
+    if (rs.vi < rs.parts.length) { await kvSet(env, 'bk:restore', rs); return; }
+    rs.phase = 'snapshot';
+    await kvSet(env, 'bk:restore', rs);
+    await bkStartJob(env, { kind: 'pre', slot: 'pre', keepGen: rs.srcGen });
+    return;
+  }
+  if (rs.phase === 'snapshot') { await bkStartJob(env, { kind: 'pre', slot: 'pre', keepGen: rs.srcGen }); return; } // 保存の途中で記録が消えていたら、やり直す
+  if (rs.phase === 'wipe') {
+    const stmts = EXPORT_TABLES.filter((t) => t !== 'kv').map((t) => env.DB.prepare(`DELETE FROM ${t}`));
+    stmts.push(env.DB.prepare(`DELETE FROM kv WHERE ${KV_LOCAL_SQL}`));
+    if (rs.images) stmts.push(env.DB.prepare('DELETE FROM images')); // 写真の入っていないバックアップなら、今の写真は残す
+    await env.DB.batch(stmts);
+    rs.phase = 'insert'; rs.pi = 0;
+    await kvSet(env, 'bk:restore', rs);
+    return;
+  }
+  if (rs.phase === 'insert') {
+    for (let n = 0; rs.pi < rs.parts.length && n < maxParts && Date.now() - t0 < budgetMs; n++) {
+      const p = rs.parts[rs.pi];
+      if (p.table !== 'tl_jobs' && (p.table !== 'images' || rs.images) && BK_TABLES.includes(p.table)) {
+        const d = JSON.parse(await bkReadPart(env, p));
+        await bkInsertRows(env, p.table, d.rows || []);
+      }
+      rs.pi++;
+      await kvSet(env, 'bk:restore', rs);
+    }
+    if (rs.pi < rs.parts.length) return;
+    rs.phase = 'finish';
+  }
+  if (rs.phase === 'finish') {
+    // 古い予約（返事・話しかけ・災害の反応・TLの反応）は持ち込まない
+    await env.DB.batch([
+      env.DB.prepare("DELETE FROM kv WHERE (k >= 'reply:' AND k < 'reply;') OR (k >= 'replygo:' AND k < 'replygo;') OR (k >= 'proj:' AND k < 'proj;') OR (k >= 'disjob:' AND k < 'disjob;')"),
+      env.DB.prepare('DELETE FROM tl_jobs'),
+      env.DB.prepare('UPDATE tl_posts SET planned=1'),
+      env.DB.prepare("DELETE FROM kv WHERE k IN ('bk:restore','bk:lock')"),
+    ]);
+    worldMemo = null;
+    const slots = await bkSlots(env);
+    if (rs.srcGen && !Object.values(slots).some((s) => s && s.gen === rs.srcGen)) await bkDeleteGen(env, rs.srcGen).catch(() => {});
+    await env.DB.prepare("DELETE FROM kv WHERE k='bk:upload'").run();
+    await bkRestoreResult(env, true, `${rs.label}から戻しました`);
+  }
+}
+async function bkManifest(env, gen) {
+  const o = await env.BACKUP.get(`${BK_PREFIX}gens/${gen}/manifest.json`);
+  if (!o) throw new HttpError(404, 'バックアップが見つかりません');
+  return JSON.parse(await o.text());
+}
+// バックアップを1つのファイル（手動の書き出しと同じ形）にしてiPhoneへ
+async function bkDownload(env, gen, withImages, label) {
+  const m = await bkManifest(env, gen);
+  const parts = m.parts.filter((p) => withImages || p.table !== 'images');
+  const { readable, writable } = new TransformStream();
+  const w = writable.getWriter(), enc = new TextEncoder();
+  const put = (t) => w.write(enc.encode(t));
+  (async () => {
+    try {
+      const counts = {};
+      await put(`{"app":"トーク","version":${JSON.stringify(m.version)},"exportedAt":${m.at},"images":${withImages},"tables":{`);
+      let cur = null, first = true;
+      for (const p of parts) {
+        const text = await bkReadPart(env, p);
+        const head = `{"table":${JSON.stringify(p.table)},"rows":[`;
+        if (!text.startsWith(head) || !text.endsWith(']}')) throw new Error('形式が違います');
+        if (p.table !== cur) { await put(`${cur ? ']' : ''}${first ? '' : ','}${JSON.stringify(p.table)}:[`); cur = p.table; first = false; counts[cur] = 0; }
+        else await put(',');
+        await put(text.slice(head.length, -2));
+        counts[cur] += p.rows;
+      }
+      if (cur) await put(']');
+      await put(`},"counts":${JSON.stringify(counts)}}`);
+      await w.close();
+    } catch (e) { await w.abort(e).catch(() => {}); }
+  })();
+  return fileResponse(readable, `talk-backup-${label}-${jstDate(m.at)}${withImages ? '-photos' : ''}.json`);
+}
+async function bkView(env) { // 設定画面用
+  const st = await bkStatus(env);
+  const out = { r2: !!env.BACKUP, last: st.last || null, restoreResult: st.restore || null, slots: {}, job: null, restore: null, lock: !!(await kvGet(env, 'bk:lock', 0)), cycle: null };
+  if (!env.BACKUP) return out;
+  const slots = await bkSlots(env);
+  for (const k of Object.keys(BK_SLOT_NAME)) if (slots[k]) { const { gen, ...rest } = slots[k]; out.slots[k] = { ...rest, name: BK_SLOT_NAME[k] }; }
+  const job = await kvGet(env, 'bk:job', null);
+  if (job) out.job = { kind: job.kind, slot: job.slot, phase: job.phase, table: job.ti, tables: BK_TABLES.length, parts: job.parts.length, bytes: job.bytes, started: job.started };
+  const rs = await kvGet(env, 'bk:restore', null);
+  if (rs) out.restore = { phase: rs.phase, label: rs.label, done: rs.phase === 'verify' ? rs.vi || 0 : rs.pi || 0, parts: rs.parts.length, started: rs.started };
+  const c = bkCycle(Date.now()), cy = (st.cycles || {})[c.cycle] || {};
+  out.cycle = { slot: c.slot, name: BK_SLOT_NAME[c.slot], ok: !!cy.ok, blocked: !!cy.blocked, attempts: cy.attempts || 0 };
+  return out;
+}
+function needR2(env) { if (!env.BACKUP) throw new HttpError(400, '自動バックアップの置き場所（R2）がまだつながっていません'); }
+const noteUserDelete = (env) => kvSet(env, 'bk:userdel', Date.now()).catch(() => {}); // ご自身で消した（急に減っても異常としない）
 
 // ================================================================ タイムライン（表／裏）
 // 表と裏は投稿・いいね・コメント・予定・記憶がすべて別。AIはその世界の設定（表のAI／裏のAI）を使う。

@@ -14,7 +14,7 @@
 //    ・Cron トリガー  * * * * *  （毎分。実際に動くのは13分おき）
 // =====================================================================
 
-const VERSION = '第25版（2026-10-17 12:30:00 更新・裏の自動を止めるボタン）';
+const VERSION = '第26版（2026-10-18 12:00:00 更新・スタンプ（リアクション））';
 const DEFAULT_MODEL = 'gemini-flash-latest';
 const DEFAULT_GROK_MODEL = 'grok-4.7';                 // X（Twitter）の Grok と同じ最新世代
 const FALLBACK_GROK_MODEL = 'grok-4-fast-non-reasoning'; // 上が使えないときの予備
@@ -98,7 +98,7 @@ async function ensureSchema(env) {
     env.DB.prepare('CREATE TABLE IF NOT EXISTS ai_cost (world TEXT NOT NULL, month TEXT NOT NULL, usd REAL NOT NULL DEFAULT 0, calls INTEGER NOT NULL DEFAULT 0, tin INTEGER NOT NULL DEFAULT 0, tout INTEGER NOT NULL DEFAULT 0, images INTEGER NOT NULL DEFAULT 0, PRIMARY KEY (world, month))'), // AIの利用料金（目安）
   ]);
   // 既存の messages に写真・送信取り消し用の列を足す（2回目以降は「もうある」で失敗するので無視）
-  for (const col of ['image TEXT', 'alt TEXT', 'retracted INTEGER NOT NULL DEFAULT 0', 'retract_at INTEGER']) {
+  for (const col of ['image TEXT', 'alt TEXT', 'retracted INTEGER NOT NULL DEFAULT 0', 'retract_at INTEGER', 'reaction TEXT', 'reacted_at INTEGER']) {
     try { await env.DB.prepare('ALTER TABLE messages ADD COLUMN ' + col).run(); } catch (_) {}
   }
   // TLの投稿に写真を付けられるようにする
@@ -233,8 +233,34 @@ async function getChar(env, id) {
   return rowToChar(r);
 }
 const rowToMsg = (r) => ({ id: r.id, charId: r.char_id, sender: r.sender, text: r.retracted ? '' : r.text, at: r.at,
-  ...(r.image && !r.retracted ? { image: r.image } : {}), ...(r.alt ? { alt: r.alt } : {}), ...(r.retracted ? { retracted: 1, origText: r.text } : {}) });
-const MSG_COLS = 'id,char_id,sender,text,at,image,alt,retracted';
+  ...(r.image && !r.retracted ? { image: r.image } : {}), ...(r.alt ? { alt: r.alt } : {}), ...(r.retracted ? { retracted: 1, origText: r.text } : {}),
+  ...(r.reaction ? { reaction: r.reaction, reactedAt: r.reacted_at || 0 } : {}) });
+const MSG_COLS = 'id,char_id,sender,text,at,image,alt,retracted,reaction,reacted_at';
+
+// ---------------------------------------------------------------- スタンプ（表のトークだけ）
+// キャラの吹き出しにはユーザーが、ユーザーの吹き出しにはキャラが付ける（1つのメッセージに1つ）
+const STAMPS = {
+  '👍': { close: 1, user: '了解。この話題はここで一区切り', char: 'ユーザーの話に納得したとき、話が自然に終わったとき（了解・一区切り）' },
+  '❤️': { close: 1, user: 'この話題はここで一区切り。そこに好意（楽しみにしてる・ありがとう・好きだよ、など。どれかは前後の会話から読み取る）が込められている', char: '一区切りに、楽しみ・感謝・好き などの好意的な気持ちを込めたいときだけ' },
+  '😴': { close: 1, user: '眠い・もう寝る（この話はここで一区切り。朝まで話しかけを控えてほしい）', char: '眠くなった・もう寝るとき' },
+  '🏃': { later: 1, user: '今は忙しい。あとで返事する（しばらく待っていてほしい）', char: '手が離せないときにメッセージを読んだ。あとで返す' },
+  '👀': { cont: 1, user: 'その話、気になる。続きや詳しいことを聞かせてほしい', char: 'ユーザーの話に興味を持って、続きを聞きたいとき' },
+  '❓': { cont: 1, user: 'よくわからない。言い方を変えてもう一度説明してほしい', char: 'ユーザーの言ったことがわからなかったとき' },
+  '😂': { cont: 1, user: '笑った・面白かった', char: 'ユーザーの話が面白かったとき' },
+  '🥺': { cont: 1, user: 'さみしい・かまってほしい・寄り添ってほしい', char: 'さみしいとき、かまってほしいとき（返事がしばらく来ないときの、控えめな「かまって」）' },
+  '🙏': { cont: 1, user: 'ごめんね・お願い', char: '謝るとき、お願いがあるとき' },
+};
+const stampLine = (r, who) => `${r}（${STAMPS[r] ? STAMPS[r][who] : ''}）`;
+async function setReaction(env, id, r) {
+  await env.DB.prepare('UPDATE messages SET reaction=?, reacted_at=? WHERE id=?').bind(r || null, Date.now(), id).run();
+}
+// ユーザーが最後のキャラのメッセージに付けたスタンプ（付けて30分以内）
+function lastUserStamp(hist, now, within = 30 * MIN) {
+  const last = hist[hist.length - 1];
+  if (!last || last.sender !== 'char' || !last.reaction) return null;
+  if (within && now - (last.reactedAt || 0) > within) return null;
+  return last.reaction;
+}
 
 async function recent(env, charId, n) {
   const { results } = await env.DB.prepare(`SELECT ${MSG_COLS} FROM messages WHERE char_id=? ORDER BY id DESC LIMIT ?`).bind(charId, n).all();
@@ -287,6 +313,9 @@ async function route(key, url, body, env, ctx) {
       const { results: rr } = await env.DB.prepare('SELECT char_id,at FROM reads').all();
       const reads = Object.fromEntries(rr.map((r) => [r.char_id, r.at]));
       const { results: rt } = await env.DB.prepare('SELECT id FROM messages WHERE retracted=1 AND at>?').bind(Date.now() - 7 * 864e5).all();
+      // スタンプ（付けた・外した）を7日分
+      const { results: rx } = await env.DB.prepare('SELECT id,reaction FROM messages WHERE reacted_at>?').bind(Date.now() - 7 * 864e5).all();
+      const reactions = Object.fromEntries(rx.map((r) => [r.id, r.reaction || '']));
       // 表：返事はまだだけど、もう読んだ（既読だけ付いている）
       const charRead = {};
       const { results: pr } = await env.DB.prepare("SELECT v FROM kv WHERE k LIKE 'reply:%'").all();
@@ -294,7 +323,7 @@ async function route(key, url, body, env, ctx) {
       // アプリの表示用に、記憶ではない原文は返さない
       messages = messages.map((m) => { const { origText, ...rest } = m; return rest; });
       const dis = await kvGet(env, 'dis:state', null);
-      return json({ chars, messages, more, reads, charRead, cost: await costSummary(env).catch(() => null), outage: dis && dis.outage ? dis.outage : null, retracted: rt.map((r) => r.id), settings: await getSettings(env), now: Date.now(), version: VERSION });
+      return json({ chars, messages, more, reads, charRead, reactions, cost: await costSummary(env).catch(() => null), outage: dis && dis.outage ? dis.outage : null, retracted: rt.map((r) => r.id), settings: await getSettings(env), now: Date.now(), version: VERSION });
     }
 
     case 'GET /icons': {
@@ -464,11 +493,13 @@ async function route(key, url, body, env, ctx) {
       const c = await getChar(env, base);
       const hist = await recent(env, key, 60);
       const last = hist[hist.length - 1];
-      if (!last || last.sender !== 'me') return json({ messages: [] });
+      const stamp = world === 'omote' ? lastUserStamp(hist, Date.now()) : null; // スタンプへの返事
+      if (!last || (last.sender !== 'me' && !(stamp && (STAMPS[stamp].cont || stamp === '😴')))) return json({ messages: [] });
       if (world === 'ura' && (await getSettings(env)).uraPaused) return json({ messages: [], paused: true }); // 裏は止めている（再開したら返す）
       // 表：その子が今していることによって、すぐ返す／あとで返す（あとで返す分はサーバーが毎分確認して送る）
       const d = { mode: 'reply' };
-      if (world === 'omote' && delayOn(await getSettings(env))) {
+      if (last.sender !== 'me' && stamp) d.stamp = stamp;
+      if (world === 'omote' && delayOn(await getSettings(env)) && !d.stamp) {
         const t = await decideReply(env, c, hist, Date.now());
         await env.DB.prepare('DELETE FROM kv WHERE k=?').bind('replygo:' + c.id).run();
         if (!t.now) return json({ messages: [], delayed: true });
@@ -482,6 +513,29 @@ async function route(key, url, body, env, ctx) {
       return json({ messages: msgs });
     }
 
+    case 'POST /react': { // スタンプを付ける・外す（表のトークだけ。キャラのメッセージに）
+      const { base, world, key } = splitCid(body.charId);
+      if (world !== 'omote') throw new HttpError(400, 'スタンプは表のトークだけで使えます');
+      await getChar(env, base);
+      const r = body.reaction ? String(body.reaction) : null;
+      if (r && !STAMPS[r]) throw new HttpError(400, 'そのスタンプは使えません');
+      const m = await env.DB.prepare("SELECT id,sender FROM messages WHERE id=? AND char_id=?").bind(num(body.id, 0), key).first();
+      if (!m || m.sender !== 'char') throw new HttpError(404, 'キャラのメッセージが見つかりません');
+      await setReaction(env, m.id, r);
+      const now = Date.now();
+      if (r === '😴') { // 寝る：朝まで話しかけを控える
+        const st = await getSettings(env);
+        const wakeH = st.quietEnabled ? st.quietEnd : 7;
+        let t = jstDayStart(jstDay(now)) + wakeH * 3600e3;
+        if (t <= now + 2 * 3600e3) t += 864e5;
+        await kvSet(env, 'usleep:' + base, t);
+      }
+      if (r === '🏃') await kvSet(env, 'ulater:' + base, now + 3 * 3600e3); // あとで返す：3時間は催促しない
+      // 続ける系は返事をする。寝るときは半分くらい「おやすみ」と短く返す
+      const reply = !!(r && (STAMPS[r].cont || (r === '😴' && Math.random() < 0.5)));
+      return json({ ok: true, reply });
+    }
+
     case 'POST /reply/decide': { // 表：すぐ返すかどうかだけ先に決める（アプリが「既読」「入力中…」を出すため）
       const { base, world, key } = splitCid(body.charId);
       const c = await getChar(env, base);
@@ -489,6 +543,7 @@ async function route(key, url, body, env, ctx) {
       if (world !== 'omote' || !delayOn(await getSettings(env))) return json({ now: true });
       const hist = await recent(env, key, 60);
       const last = hist[hist.length - 1];
+      if (last && last.sender === 'char' && lastUserStamp(hist, Date.now())) return json({ now: true }); // スタンプへの返事は、その場で
       if (!last || last.sender !== 'me') return json({ now: false });
       const t = await decideReply(env, c, hist, Date.now());
       return json({ now: !!t.now });
@@ -796,8 +851,17 @@ async function tick(env) {
           else if (t.pend) { await env.DB.prepare('DELETE FROM kv WHERE k=?').bind('reply:' + c.id).run(); d.late = t.pend; }
         }
       }
+      // スタンプ：ユーザーが寝た（😴）・あとで返す（🏃）・一区切り（👍❤️）
+      if (d && d.mode !== 'reply') d = await stampGate(env, c, d, hist, now);
+      // キャラが寝る時刻になったら、返事をしていないユーザーのメッセージに 😴 を付けて眠る
+      await sleepStamp(env, c, hist, now, settings).catch(() => {});
       if (!d) continue;
       if (d.mode !== 'reply' && (await kvGet(env, 'proj:' + c.id, null))) continue; // もう話しかける予定が入っている
+      // 既読スルーの催促は、ときどき文字ではなく 🥺 だけにする
+      if (d.mode === 'nudge' && settings.lifeEnabled) {
+        const lastMe = [...hist].reverse().find((m) => m.sender === 'me');
+        if (lastMe && !lastMe.reaction && Math.random() < 0.3) { await setReaction(env, lastMe.id, '🥺'); done.push(c.name + ':🥺'); continue; }
+      }
       if (d.mode !== 'reply' && boost.justDone) d.justDone = boost.justDone;
       if (d.mode !== 'reply' && isQuiet(now, settings)) d.night = true; // 深夜・早朝らしい内容に
       if (d.mode === 'topic') await attachNews(env, c, d, settings); // ときどき最近のニュースも話題の候補に
@@ -853,6 +917,11 @@ function situation(d, hist, now) {
   const lastMe = [...hist].reverse().find((m) => m.sender === 'me');
   switch (d.mode) {
     case 'reply': {
+      if (d.stamp) {
+        return d.stamp === '😴'
+          ? 'ユーザーがあなたのメッセージにスタンプ 😴（眠い・もう寝る）を付けた。「おやすみなさい」の気持ちを、キャラクターらしく短い一言（吹き出し1つ）だけで返す。話を広げない。'
+          : `ユーザーがあなたの最後のメッセージにスタンプ ${stampLine(d.stamp, 'user')} を付けた。その意味を受け止めて、キャラクターらしく返事をする。`;
+      }
       const firstNew = (() => { let i = hist.length - 1; while (i > 0 && hist[i - 1].sender === 'me') i--; return hist[i]; })();
       let s = 'ユーザーからメッセージが届きました。キャラクターとして返信してください。';
       if (lastChar && firstNew && firstNew.at - lastChar.at > 3 * 3600e3) {
@@ -867,6 +936,7 @@ function situation(d, hist, now) {
         'キャラクターらしく、返信の催促・寂しさ・不満・拗ね・怒りなどを表現してください。未読の件数と経過時間が多いほど感情を強めてください。' +
         '前回までと同じ言い回しの繰り返しは避けてください。';
     case 'nudge':
+      if (d.afterLater) return `ユーザーは「🏃（今は忙しい。あとで返す）」と言っていたが、${fmtDur(now - d.since)}たっても返事がない。責めたり催促したりせず、「落ち着いたらで大丈夫です」のように、そっと声をかける。`;
       return `ユーザーはあなたの最後のメッセージを読みましたが、返信がありません（既読スルー、${fmtDur(now - d.since)}経過）。` +
         'キャラクターらしく返信を催促してください。ただし直前の会話が自然に終わっていた場合（おやすみ・またね等）は、催促ではなく新しい話題で話しかけてください。';
     case 'special': case 'absent': case 'followup': case 'jealous':
@@ -875,7 +945,8 @@ function situation(d, hist, now) {
       return eventSituation(d, now);
     case 'topic':
     default:
-      return (d.flavor && flavorText(d) ? flavorText(d) + '\n' : '') + `最後のやり取りから${fmtDur(now - (hist.length ? hist[hist.length - 1].at : now))}たっています。` +
+      return (d.afterStamp ? `前の話題は、ユーザーがスタンプ ${stampLine(d.afterStamp, 'user')} で一区切りにした。その話題は蒸し返さない${d.afterStamp === '❤️' ? '（もらったハートのうれしさは、態度や言葉の端ににじませてよい）' : ''}。\n` : '') +
+        (d.flavor && flavorText(d) ? flavorText(d) + '\n' : '') + `最後のやり取りから${fmtDur(now - (hist.length ? hist[hist.length - 1].at : now))}たっています。` +
         '直前の話題の催促はせず、キャラクターらしい別の新しい話題で話しかけてください（今していること、ふと思ったこと、時間帯や季節に合った話、ユーザーへの質問など）。' +
         (d.news && d.news.length ? newsBlock(d.news, now) : '') +
         (lastMe ? '' : '');
@@ -922,6 +993,16 @@ function buildContents(hist, world = 'omote', images = {}) {
       if (parts.length === 1 && lastText.text != null) lastText.text += '\n' + line;
       else t.parts.push(...parts);
     } else turns.push({ role, parts });
+    // スタンプ：キャラのメッセージにはユーザーが、ユーザーのメッセージにはキャラが付けたもの
+    if (world !== 'ura' && m.reaction && STAMPS[m.reaction]) {
+      const r2 = m.sender === 'me' ? 'model' : 'user';
+      const note = m.sender === 'me'
+        ? `（あなたはユーザーのこのメッセージに スタンプ ${stampLine(m.reaction, 'char')} を付けた）`
+        : `（ユーザーがあなたのこのメッセージに スタンプ ${stampLine(m.reaction, 'user')} を付けた）`;
+      const t2 = turns[turns.length - 1];
+      if (t2 && t2.role === r2 && t2.parts[t2.parts.length - 1].text != null) t2.parts[t2.parts.length - 1].text += '\n' + note;
+      else turns.push({ role: r2, parts: [{ text: note }] });
+    }
   }
   if (turns.length && turns[0].role === 'model') turns.unshift({ role: 'user', parts: [{ text: '（会話の始まり）' }] });
   if (!turns.length || turns[turns.length - 1].role === 'model') {
@@ -1203,7 +1284,10 @@ async function generateAndStore(env, c, d, hist, lastRead, world = 'omote') {
     const images = {};
     for (const m of newPhotos) { const im = await loadImage(env, m.image); if (im) images[m.image] = im; }
     const special = d.mode === 'special';
+    const lastMeMsg = [...hist].reverse().find((m) => m.sender === 'me');
+    const canStamp = st.lifeEnabled && !special && (d.mode === 'reply' || d.mode === 'event') && lastMeMsg && !lastMeMsg.reaction && hist[hist.length - 1].sender === 'me';
     const opt = {
+      react: canStamp,
       news: !!(d.news && d.news.length),
       photo: st.imagesEnabled && d.flavor === 'photo',
       edit: st.imagesEnabled && newPhotos.length > 0 && Object.keys(images).length > 0,
@@ -1213,7 +1297,7 @@ async function generateAndStore(env, c, d, hist, lastRead, world = 'omote') {
     const wb = await worldBlock(env, c.prompt + '\n' + hist.slice(-20).map((m) => m.text).join('\n'));
     const system = wb + buildSystem(c, special ? { ...d } : d, hist, now, tlInfo, lifeInfo);
     const contents = buildContents(hist, 'omote', images);
-    if (opt.news || opt.photo || opt.edit || opt.typo || opt.retract || special) {
+    if (opt.news || opt.photo || opt.edit || opt.typo || opt.retract || opt.react || special) {
       rich = await callOmoteRich(env, { ...c, maxSplit: special ? 2 : c.maxSplit }, d, system, contents, opt);
       texts = rich.texts;
       rich.srcImage = newPhotos.length ? images[newPhotos[newPhotos.length - 1].image] : null;
@@ -1232,6 +1316,12 @@ async function generateAndStore(env, c, d, hist, lastRead, world = 'omote') {
     const m = ura && t.match(/^\s*[＊*]+\s*([\s\S]*)$/);
     return m ? { sender: 'narr', text: m[1].trim() } : { sender: 'char', text: ura ? t.replace(/^「([\s\S]*)」$/, '$1') : t };
   }).filter((x) => x.text);
+  // スタンプ（表）：ユーザーの最後のメッセージに付ける
+  if (rich && rich.stamp) {
+    const lastMe = [...hist].reverse().find((m) => m.sender === 'me');
+    if (lastMe) await setReaction(env, lastMe.id, rich.stamp);
+    if (!items.length) return [];
+  }
   if (!items.length) throw new Error('返答が空でした');
   // 写真（表）：料理や景色の写真、送られた写真の加工。人物は写さない
   if (rich && (rich.photo || (rich.edit && rich.srcImage))) {
@@ -2200,9 +2290,37 @@ async function decideReply(env, c, hist, now) {
   if (t.now) { await kvSet(env, 'replygo:' + c.id, now); return t; } // 「すぐ返す」と決めたことを覚えておく（続く /reply で使う）
   const lastMe = [...hist].reverse().find((m) => m.sender === 'me');
   const pend2 = { key: c.id, readAt: t.readAt, replyAt: t.replyAt, act: t.act, kind: t.kind, glanced: !!t.glanced, twice: !!t.twice, awake: !!t.awake, from: lastMe ? lastMe.at : now };
+  // 作業の合間に読んだときは「🏃（あとで返します）」、二度寝するときは「😴」を、既読と一緒に付けることがある
+  if (t.glanced && lastMe && !lastMe.reaction && Math.random() < 0.5) pend2.stamp = { id: lastMe.id, r: t.twice ? '😴' : '🏃' };
   await kvSet(env, 'reply:' + c.id, pend2);
   return { now: false, pend: pend2 };
 }
+// ---- スタンプによる話しかけの調整
+async function stampGate(env, c, d, hist, now) {
+  if (now < (await kvGet(env, 'usleep:' + c.id, 0))) return null; // 😴：朝までは話しかけない
+  const lastChar = [...hist].reverse().find((m) => m.sender === 'char');
+  const lastIsChar = hist.length && hist[hist.length - 1].sender === 'char';
+  const r = lastIsChar && lastChar && lastChar.reaction;
+  if (r === '🏃' || (now < (await kvGet(env, 'ulater:' + c.id, 0)))) { // 🏃：3時間は催促しない。過ぎたら、そっと声をかける
+    if (now < (await kvGet(env, 'ulater:' + c.id, 0))) return null;
+    if (d.mode === 'nudge' || d.mode === 'unread') d.afterLater = true;
+    return d;
+  }
+  if (r && STAMPS[r] && STAMPS[r].close && (d.mode === 'nudge' || d.mode === 'unread')) { // 👍❤️😴：一区切りなので、催促ではなく新しい話題で
+    return { ...d, mode: 'topic', since: d.since || (hist.length ? hist[hist.length - 1].at : now), afterStamp: r };
+  }
+  return d;
+}
+async function sleepStamp(env, c, hist, now, st) {
+  if (!st.lifeEnabled) return;
+  const state = await getState(env, c.id);
+  const a = activityAt(state, now, c.id);
+  if (a.kind !== 'sleep' || now - a.s > TICK_MIN * MIN + 60e3) return; // 眠りに入ったところだけ
+  const last = hist[hist.length - 1];
+  if (!last || last.sender !== 'me' || last.reaction || now - last.at > 4 * 3600e3) return;
+  if (Math.random() < 0.6) await setReaction(env, last.id, '😴');
+}
+
 // ---- 自分から話しかける時刻を、ほかの子とずらす
 // 13分ごとの判定で当たった子は、その13分の中のばらばらの時刻に送る。直前に別の子が送るなら数分あける
 async function nextProactiveSlot(env, now) {
@@ -2227,7 +2345,7 @@ async function runDueProactive(env) {
     try {
       const hist = await recent(env, c.id, 60);
       // 予約したあとに、ユーザーやこの子が話していたら、この話しかけはやめる（状況が変わったため）
-      if (hist.some((m) => m.at > p.at)) continue;
+      if (hist.some((m) => m.at > p.at || (m.reactedAt || 0) > p.at)) continue; // スタンプが付いた・外れた場合も、状況が変わったのでやめる
       const msgs = await generateAndStore(env, c, p.d, hist, await getRead(env, c.id));
       if (msgs.length) await pushToAll(env, c, msgs);
       await lifeAfterSend(env, c, p.d, now);
@@ -2245,6 +2363,11 @@ async function runDueReplies(env) {
   let n = 0;
   for (const row of results) {
     let p; try { p = JSON.parse(row.v); } catch (_) { p = null; }
+    if (p && p.stamp && !p.stamped && p.readAt <= now) { // 読んだ瞬間にスタンプだけ付ける
+      await setReaction(env, p.stamp.id, p.stamp.r);
+      p.stamped = 1;
+      if (p.replyAt > now) { await kvSet(env, row.k, p); continue; }
+    }
     if (p && p.replyAt > now) continue;
     const claimed = await env.DB.prepare('DELETE FROM kv WHERE k=? RETURNING k').bind(row.k).first();
     if (!claimed || !p) continue;
@@ -3127,15 +3250,24 @@ async function callOmoteRich(env, c, d, system, contents, opt) {
   if (opt.edit) { props.photo_edit = { type: 'string' }; extra += '\n- photo_edit：ユーザーが送ってくれた写真を、遊び心で加工して送り返したくなったら、加工の内容を1文（例「花の冠を描き足す」「レトロなフィルムカメラ風にする」）。人物やキャラクターは描き足さない。ほとんどの場合は加工しない（""）。'; }
   if (opt.retract) { props.retract = { type: 'integer' }; extra += '\n- retract：書いた吹き出しのうち、照れくさかったり言い過ぎたりして「やっぱり送信取り消し」したくなるものがあれば、その番号（0から）。なければ -1。'; }
   if (opt.typo) extra += '\n- 今回は、吹き出しのどれか1か所で、スマホらしい自然な打ち間違い（変換ミスなど）をして、次の吹き出しで「＊正しい言葉」と短く訂正する。キャラクターに合わなければしなくてよい。';
+  if (opt.react) {
+    props.stamp = { type: 'string' };
+    extra += `\n- stamp：ユーザーの最後のメッセージに付けるスタンプ（LINEのリアクションのようなもの）。付けるなら次のどれか1つ、付けないなら ""。
+${Object.keys(STAMPS).filter((k) => k !== '🏃').map((k) => `  ${k}：${STAMPS[k].char}`).join('\n')}
+  ふだんは付けない（目安は5回に1回以下）。どのスタンプをどれくらい使うかは、キャラクターの性格に合わせる（照れ屋は👍で済ませがち、さみしがりは🥺や❤️が多め、など）。
+  👍・❤️・😴 は「この話はここで一区切り」の意味。ユーザーのメッセージが話の締めくくり（「おやすみ」「了解」「ありがとう」など）で、スタンプだけで返すのが自然なときは、messages を空 [] にしてスタンプだけにしてよい。それ以外は、スタンプと一緒に短い言葉を添える。`;
+  }
   const keys = Object.keys(props);
   const sys = system.replace(/出力は \{"messages"[\s\S]*$/, '') + (extra ? `\n# 追加の出力${extra}\n` : '') +
     `\n出力は ${JSON.stringify(Object.fromEntries(keys.map((k) => [k, k === 'messages' ? ['吹き出し1'] : props[k].type === 'integer' ? -1 : ''])))} の形のJSONのみ。`;
   const schema = { type: 'object', properties: props, required: keys, additionalProperties: false };
   const r = await callAIObj(env, 'omote', sys, contents, schema, 'chat_reply_rich');
   const maxSplit = c.maxSplit + (opt.typo ? 1 : 0);
-  const texts = parseMessages(JSON.stringify({ messages: (r && r.messages) || [] }), maxSplit, 'AI');
+  const stamp = opt.react && r && STAMPS[String(r.stamp || '').trim()] && String(r.stamp).trim() !== '🏃' ? String(r.stamp).trim() : '';
+  const raw = ((r && r.messages) || []).map((x) => String(x).trim()).filter(Boolean);
+  const texts = stamp && !raw.length ? [] : parseMessages(JSON.stringify({ messages: raw }), maxSplit, 'AI'); // スタンプだけで返すこともある
   return {
-    texts,
+    texts, stamp,
     usedNews: opt.news ? Number(r && r.used_news) : -1,
     photo: opt.photo ? String((r && r.photo) || '').trim() : '',
     edit: opt.edit ? String((r && r.photo_edit) || '').trim() : '',

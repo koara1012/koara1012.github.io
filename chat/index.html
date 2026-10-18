@@ -61,6 +61,17 @@ header.bar .ib:active{background:rgba(255,255,255,.15)}
 .msg.me{justify-content:flex-end}
 .msg .who{width:36px;flex:none;align-self:flex-start}
 .msg .col{display:flex;flex-direction:column;max-width:72%}
+.msg .mecol{display:flex;flex-direction:column;align-items:flex-end;max-width:72%}
+.msg .mecol > .bub{max-width:100%}
+.rx{align-self:flex-start;margin:-9px 0 2px 6px;min-width:26px;height:24px;padding:0 5px;border-radius:12px;background:#fff;box-shadow:0 1px 3px rgba(0,0,0,.25);display:grid;place-items:center;font-size:14px;line-height:1;position:relative;z-index:1}
+.msg.me .rx{margin-left:-6px}
+#msgs{touch-action:manipulation}
+#stampPick{position:fixed;z-index:70;display:none;flex-wrap:wrap;gap:2px;max-width:300px;padding:6px;border-radius:22px;background:#fff;box-shadow:0 6px 24px rgba(0,0,0,.25)}
+#stampPick.on{display:flex}
+#stampPick button{width:40px;height:40px;border-radius:50%;font-size:22px;display:grid;place-items:center}
+#stampPick button.on{background:#dfe7f7}
+#stampPick button:active{transform:scale(1.15)}
+#stampPick .tip{width:100%;font-size:11px;color:var(--sub);text-align:center;padding:2px 0 0}
 .msg .name{font-size:11px;color:#fff;margin:2px 0 3px 4px;text-shadow:0 1px 1px rgba(0,0,0,.2)}
 .bub{padding:8px 12px;border-radius:18px;font-size:15px;line-height:1.5;white-space:pre-wrap;word-break:break-word;position:relative}
 .them .bub{background:var(--them);color:var(--them-fg);border-top-left-radius:6px}
@@ -623,11 +634,12 @@ body.ura #list.tlMode{background:#efe9f0}
 </section>
 
 <div id="toast"></div>
+<div id="stampPick"></div>
 <div id="imgView"><img id="imgViewImg" alt=""></div>
 
 <script>
 'use strict';
-const APP_VERSION = '第25版（2026-10-17 12:30:00 更新・裏の自動を止めるボタン）';
+const APP_VERSION = '第26版（2026-10-18 12:00:00 更新・スタンプ（リアクション））';
 const $ = (id) => document.getElementById(id);
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 const esc = (s) => String(s).replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
@@ -715,6 +727,7 @@ async function sync() {
       const fresh = [];
       for (const m of d.messages) if (addMsg(m)) fresh.push(m);
       applyRetracted(d.retracted || []);
+      applyReactions(d.reactions || {});
       if (!first) revealIncoming(fresh);
       more = !!d.more;
     }
@@ -732,6 +745,10 @@ async function sync() {
   }
 }
 
+function applyReactions(map) {
+  const ids = Object.keys(map); if (!ids.length) return;
+  for (const arr of Object.values(S.msgs)) for (const m of arr) if (String(m.id) in map) { if (map[m.id]) m.reaction = map[m.id]; else delete m.reaction; }
+}
 function applyRetracted(ids) {
   if (!ids.length) return;
   const set = new Set(ids);
@@ -860,6 +877,7 @@ async function requestReply(charId) {
     await sleep(500 + Math.random() * 900);
     if (S.view === 'chat' && curKey() === charId && !revealing) setTyping(charId);
     const d = await api('POST', '/reply', { charId });
+    if (!isUraKey(charId)) setTimeout(() => sync(), 400); // キャラが付けたスタンプも早めに反映
     if (d.delayed) { setTyping(null); return; } // 相手が忙しくて、まだ読んでいない（あとで返事が届く）
     const fresh = d.messages.filter((m) => addMsg(m) || S.hidden.has(m.id));
     for (const m of fresh) S.hidden.add(m.id);
@@ -992,11 +1010,11 @@ function renderChat(keepPos, forceBottom) {
       const idx = all.indexOf(m);
       const read = !m.pending && !m.failed && (idx < readUpTo || m.at <= readAt);
       const meta = m.failed ? '<span>送信失敗</span>' : m.pending ? '<span>送信中</span>' : `${read ? '<span>既読</span>' : ''}<span>${hm(m.at)}</span>`;
-      html += `<div class="msg me ${m.failed ? 'fail' : ''}" data-id="${esc(m.id)}"><div class="meta">${meta}</div>${bubHTML(m)}</div>`;
+      html += `<div class="msg me ${m.failed ? 'fail' : ''}" data-id="${esc(m.id)}"><div class="meta">${meta}</div><div class="mecol">${bubHTML(m)}${rxHTML(m)}</div></div>`;
     } else {
       html += `<div class="msg them ${cont ? 'cont' : ''}" data-id="${esc(m.id)}">
         <div class="who">${cont ? '' : avatarHTML(c, 'sm')}</div>
-        <div class="col">${cont ? '' : `<div class="name">${esc(nm)}</div>`}${bubHTML(m)}</div>
+        <div class="col">${cont ? '' : `<div class="name">${esc(nm)}</div>`}${bubHTML(m)}${rxHTML(m)}</div>
         <div class="meta"><span>${hm(m.at)}</span></div></div>`;
     }
     prev = m;
@@ -1389,6 +1407,32 @@ function cAutosize() {
 
 // 確認（confirm が使えない環境でも動くように）
 function ask(msg) { try { return window.confirm(msg); } catch (_) { return true; } }
+
+// ------------------------------------------------ スタンプ（表のトーク）：キャラの吹き出しをダブルタップ
+const STAMP_LIST = [['👍', '了解・一区切り'], ['❤️', '一区切り＋好き・ありがとう・楽しみ'], ['😴', 'もう寝る'], ['🏃', 'あとで返す'], ['👀', 'もっと聞かせて'], ['❓', 'よくわからない'], ['😂', '笑った'], ['🥺', 'かまって'], ['🙏', 'ごめん・お願い']];
+const rxHTML = (m) => (m.reaction && !m.retracted ? `<span class="rx" title="スタンプ">${esc(m.reaction)}</span>` : '');
+let lastTap = { id: null, t: 0 }, pickFor = null;
+function openStampPick(msgEl, m) {
+  pickFor = m;
+  const box = $('stampPick');
+  box.innerHTML = STAMP_LIST.map(([e, t]) => `<button data-stamp="${e}" class="${m.reaction === e ? 'on' : ''}" aria-label="${esc(t)}" title="${esc(t)}">${e}</button>`).join('') + '<div class="tip" id="stampTip">押すと付けます（付いているものをもう一度押すと外します）</div>';
+  box.classList.add('on');
+  const r = msgEl.getBoundingClientRect(), bw = Math.min(300, window.innerWidth - 24), bh = box.offsetHeight;
+  box.style.left = Math.max(12, Math.min(r.left, window.innerWidth - bw - 12)) + 'px';
+  box.style.top = (r.top - bh - 8 > 60 ? r.top - bh - 8 : Math.min(r.bottom + 8, window.innerHeight - bh - 12)) + 'px';
+}
+function closeStampPick() { $('stampPick').classList.remove('on'); pickFor = null; }
+async function sendStamp(m, e) {
+  const k = curKey();
+  const r = m.reaction === e ? null : e;
+  const prev = m.reaction;
+  if (r) m.reaction = r; else delete m.reaction;
+  renderAll(true);
+  try {
+    const d = await api('POST', '/react', { charId: k, id: m.id, reaction: r });
+    if (d.reply) scheduleReply(k); // 続ける系のスタンプには返事が来る
+  } catch (err) { if (prev) m.reaction = prev; else delete m.reaction; renderAll(true); toast(err.message); }
+}
 
 // ------------------------------------------------ 写真
 var imgCache = {}; // 写真ID → 表示用URL
@@ -1979,6 +2023,22 @@ $('msgs').addEventListener('click', (e) => {
   $('imgViewImg').src = im.src; $('imgView').classList.add('on');
 });
 $('imgView').onclick = () => $('imgView').classList.remove('on');
+$('msgs').addEventListener('click', (e) => {
+  if (sel.on || isUraKey(curKey())) return;
+  const bub = e.target.closest('.msg.them .bub'); if (!bub || bub.closest('.typing')) return;
+  const msgEl = bub.closest('.msg'); const id = msgEl.dataset.id;
+  const m = (S.msgs[curKey()] || []).find((x) => String(x.id) === id);
+  if (!m || typeof m.id !== 'number' || m.retracted) return;
+  const now = Date.now();
+  if (lastTap.id === id && now - lastTap.t < 380) { lastTap = { id: null, t: 0 }; e.preventDefault(); try { getSelection().removeAllRanges(); } catch (_) {} openStampPick(bub, m); return; }
+  lastTap = { id, t: now };
+});
+$('stampPick').addEventListener('click', (e) => {
+  const b = e.target.closest('[data-stamp]'); if (!b || !pickFor) return;
+  const m = pickFor; closeStampPick(); sendStamp(m, b.dataset.stamp);
+});
+document.addEventListener('pointerdown', (e) => { if (pickFor && !e.target.closest('#stampPick')) closeStampPick(); }, true);
+$('msgs').addEventListener('scroll', closeStampPick, { passive: true });
 // TLの写真：投稿を開いているときはタップで拡大
 document.addEventListener('click', (e) => {
   const im = e.target.closest('.post.big .pimg img'); if (!im || !im.src) return;

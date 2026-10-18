@@ -622,6 +622,14 @@ body.ura #list.tlMode{background:#efe9f0}
       <button class="btn danger" id="tlClearUra">裏のタイムラインを全部消す</button>
     </div>
 
+    <div class="sec">バックアップ</div>
+    <div class="card">
+      <div class="hint">トーク・思い出・TL・キャラ設定など、サーバーにある全データを1つのファイル（JSON）に書き出します。「ファイル」アプリやiCloud Driveに保存しておくと安心です。合言葉やAPIキーは入りません。</div>
+      <label class="chk" style="margin-top:8px"><input type="checkbox" id="bkPhotos"> 写真も含める（ファイルが大きくなります）</label>
+      <button class="btn sub" id="bkExport" style="margin-top:10px">全データを書き出す</button>
+      <div class="hint" id="bkInfo"></div>
+    </div>
+
     <div class="sec">困ったとき</div>
     <div class="hint" style="color:var(--sub);font-size:12px;line-height:1.6">うまく動かないときは「診断情報をコピー」してClaudeに貼り付けてください。合言葉は伏せてあります。</div>
     <div class="btns">
@@ -639,7 +647,7 @@ body.ura #list.tlMode{background:#efe9f0}
 
 <script>
 'use strict';
-const APP_VERSION = '第26版（2026-10-18 12:00:00 更新・スタンプ（リアクション））';
+const APP_VERSION = '第27版（2026-10-18 19:00:00 更新・索引とバックアップ）';
 const $ = (id) => document.getElementById(id);
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 const esc = (s) => String(s).replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
@@ -2137,6 +2145,35 @@ $('stAiSave').onclick = async () => {
 };
 $('dgCopy').onclick = copyDiag;
 $('dgImage').onclick = imageDiag;
+// バックアップ：①サーバーから受け取る → ②もう一度押して保存（iPhoneは「押した直後」でないと共有シートを開けないため2段階）
+let bkFile = null;
+$('bkExport').onclick = async () => {
+  const btn = $('bkExport');
+  if (bkFile) { // ② 保存
+    const f = bkFile;
+    try {
+      if (navigator.canShare && navigator.canShare({ files: [f] })) await navigator.share({ files: [f] });
+      else { const a = document.createElement('a'); a.href = URL.createObjectURL(f); a.download = f.name; a.click(); setTimeout(() => URL.revokeObjectURL(a.href), 60e3); }
+      bkFile = null; btn.textContent = '全データを書き出す'; $('bkInfo').textContent = '保存しました：' + f.name;
+    } catch (e) { if (e.name !== 'AbortError') toast('保存できませんでした：' + e.message); }
+    return;
+  }
+  if (!S.cfg.url) return toast('設定でサーバーURLを入れてください');
+  btn.disabled = true; btn.textContent = '書き出し中…'; $('bkInfo').textContent = '';
+  try {
+    const r = await fetch(S.cfg.url.replace(/\/+$/, '') + '/export' + ($('bkPhotos').checked ? '?images=1' : ''), { headers: { 'X-App-Token': S.cfg.token || '' } });
+    if (!r.ok) throw new Error((await r.json().catch(() => ({}))).error || 'HTTP ' + r.status);
+    const text = await r.text();
+    const d = JSON.parse(text); // 途中で切れていないか確かめる
+    const m = /filename="([^"]+)"/.exec(r.headers.get('Content-Disposition') || '');
+    bkFile = new File([text], m ? m[1] : 'talk-backup.json', { type: 'application/json' });
+    const n = (k) => (d.tables[k] || []).length;
+    $('bkInfo').textContent = `キャラ${n('chars')}人・メッセージ${n('messages')}件・TL投稿${n('tl_posts')}件・思い出${n('memories')}件${d.images ? '・写真' + new Set((d.tables.images || []).map((x) => x.id)).size + '枚' : ''}（${(bkFile.size / 1048576).toFixed(1)}MB）`;
+    btn.textContent = '保存する（ファイルに保存）';
+  } catch (e) {
+    logDiag('バックアップ: ' + e.message); toast('書き出せませんでした：' + e.message); btn.textContent = '全データを書き出す';
+  } finally { btn.disabled = false; }
+};
 $('dgClear').onclick = () => { diagLog = []; store.set('chat.log', []); renderDiag(); toast('アプリの記録を消しました'); };
 
 function pollTL() {

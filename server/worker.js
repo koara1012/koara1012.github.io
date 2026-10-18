@@ -14,7 +14,7 @@
 //    ・Cron トリガー  * * * * *  （毎分。実際に動くのは13分おき）
 // =====================================================================
 
-const VERSION = '第26版（2026-10-18 12:00:00 更新・スタンプ（リアクション））';
+const VERSION = '第27版（2026-10-18 19:00:00 更新・索引とバックアップ）';
 const DEFAULT_MODEL = 'gemini-flash-latest';
 const DEFAULT_GROK_MODEL = 'grok-4.7';                 // X（Twitter）の Grok と同じ最新世代
 const FALLBACK_GROK_MODEL = 'grok-4-fast-non-reasoning'; // 上が使えないときの予備
@@ -105,6 +105,15 @@ async function ensureSchema(env) {
   for (const col of ['image TEXT', 'alt TEXT']) {
     try { await env.DB.prepare('ALTER TABLE tl_posts ADD COLUMN ' + col).run(); } catch (_) {}
   }
+  // 件数が増えても全件を読み直さないための索引（D1は「読んだ行数」で数えるので、ここが効く）
+  await env.DB.batch([
+    env.DB.prepare('CREATE INDEX IF NOT EXISTS idx_msg_rx ON messages(reacted_at) WHERE reacted_at IS NOT NULL'), // 同期：スタンプ
+    env.DB.prepare('CREATE INDEX IF NOT EXISTS idx_msg_rt ON messages(at) WHERE retracted=1'), // 同期：取り消し
+    env.DB.prepare('CREATE INDEX IF NOT EXISTS idx_msg_rtq ON messages(retract_at) WHERE retracted=0 AND retract_at IS NOT NULL'), // 取り消し待ち
+    env.DB.prepare("CREATE INDEX IF NOT EXISTS idx_msg_char_from ON messages(char_id, at) WHERE sender='char'"), // 未読の数
+    env.DB.prepare("CREATE INDEX IF NOT EXISTS idx_msg_me_at ON messages(char_id, at) WHERE sender='me'"), // 最後に話しかけた時刻
+    env.DB.prepare('CREATE INDEX IF NOT EXISTS idx_tl_unplanned ON tl_posts(id) WHERE planned=0'), // 反応をまだ決めていない投稿
+  ]);
   schemaReady = true;
 }
 
@@ -274,7 +283,8 @@ async function setRead(env, charId, at) {
   await env.DB.prepare('INSERT INTO reads (char_id,at) VALUES (?,?) ON CONFLICT(char_id) DO UPDATE SET at=MAX(reads.at, excluded.at)').bind(charId, at).run();
 }
 async function totalUnread(env) {
-  const r = await env.DB.prepare("SELECT COUNT(*) AS n FROM messages m LEFT JOIN reads r ON r.char_id=m.char_id WHERE m.sender='char' AND m.char_id NOT LIKE '%#ura' AND m.at > COALESCE(r.at,0)").first();
+  // 表の未読（キャラごとに、既読の時刻より新しいキャラの発言だけを索引で数える）
+  const r = await env.DB.prepare("SELECT SUM((SELECT COUNT(*) FROM messages m WHERE m.char_id=c.id AND m.sender='char' AND m.at > COALESCE((SELECT at FROM reads WHERE char_id=c.id),0))) AS n FROM chars c").first();
   return r ? r.n : 0;
 }
 
@@ -318,13 +328,15 @@ async function route(key, url, body, env, ctx) {
       const reactions = Object.fromEntries(rx.map((r) => [r.id, r.reaction || '']));
       // 表：返事はまだだけど、もう読んだ（既読だけ付いている）
       const charRead = {};
-      const { results: pr } = await env.DB.prepare("SELECT v FROM kv WHERE k LIKE 'reply:%'").all();
+      const { results: pr } = await env.DB.prepare("SELECT v FROM kv WHERE k >= 'reply:' AND k < 'reply;'").all();
       for (const r of pr) { try { const p = JSON.parse(r.v); if (p.readAt <= Date.now()) charRead[p.key] = p.readAt; } catch (_) {} }
       // アプリの表示用に、記憶ではない原文は返さない
       messages = messages.map((m) => { const { origText, ...rest } = m; return rest; });
       const dis = await kvGet(env, 'dis:state', null);
       return json({ chars, messages, more, reads, charRead, reactions, cost: await costSummary(env).catch(() => null), outage: dis && dis.outage ? dis.outage : null, retracted: rt.map((r) => r.id), settings: await getSettings(env), now: Date.now(), version: VERSION });
     }
+
+    case 'GET /export': return exportAll(env, url.searchParams.get('images') === '1');
 
     case 'GET /icons': {
       const ids = (url.searchParams.get('ids') || '').split(',').filter(Boolean).slice(0, 50);
@@ -827,7 +839,7 @@ async function tick(env) {
   // くらし：毎日の様子と記憶の整理（話しかける前に）
   const ctxAll = { chars, lastUserActive: 0 };
   if (settings.lifeEnabled) {
-    const a = await env.DB.prepare("SELECT MAX(at) AS t FROM messages WHERE sender='me' AND char_id NOT LIKE '%#ura'").first();
+    const a = await env.DB.prepare("SELECT MAX((SELECT MAX(at) FROM messages WHERE char_id=c.id AND sender='me')) AS t FROM chars c").first();
     const b = await env.DB.prepare("SELECT MAX(at) AS t FROM reads WHERE char_id NOT LIKE '%#ura'").first();
     ctxAll.lastUserActive = Math.max((a && a.t) || 0, (b && b.t) || 0);
     for (const c of chars) {
@@ -1346,6 +1358,35 @@ async function generateAndStore(env, c, d, hist, lastRead, world = 'omote') {
 
 async function applyRetracts(env) {
   await env.DB.prepare('UPDATE messages SET retracted=1 WHERE retract_at IS NOT NULL AND retract_at<=? AND retracted=0').bind(Date.now()).run();
+}
+
+// ================================================================ バックアップ（全データの書き出し）
+// 通知の宛先（subs）だけは端末ごとのものなので含めない。合言葉やAPIキーはDBに無いので、ファイルにも入らない。
+const EXPORT_TABLES = ['chars', 'messages', 'reads', 'kv', 'char_state', 'memories', 'ura_icons', 'me_icons', 'tl_posts', 'tl_comments', 'tl_likes', 'tl_jobs', 'ai_cost'];
+function exportAll(env, withImages) {
+  const tables = withImages ? [...EXPORT_TABLES, 'images'] : EXPORT_TABLES;
+  const { readable, writable } = new TransformStream();
+  const w = writable.getWriter(), enc = new TextEncoder();
+  const put = (t) => w.write(enc.encode(t));
+  (async () => {
+    try {
+      await put(`{"app":"トーク","version":${JSON.stringify(VERSION)},"exportedAt":${Date.now()},"images":${withImages},"tables":{`);
+      for (let ti = 0; ti < tables.length; ti++) {
+        await put(`${ti ? ',' : ''}${JSON.stringify(tables[ti])}:[`);
+        let last = -1, first = true;
+        for (;;) { // rowid順に少しずつ読む（写真があっても一度に抱えない）
+          const { results } = await env.DB.prepare(`SELECT rowid AS _r, * FROM ${tables[ti]} WHERE rowid>? ORDER BY rowid LIMIT ${tables[ti] === 'images' ? 20 : 500}`).bind(last).all();
+          if (!results.length) break;
+          for (const { _r, ...row } of results) { await put((first ? '' : ',') + JSON.stringify(row)); first = false; last = _r; }
+        }
+        await put(']');
+      }
+      await put('}}');
+      await w.close();
+    } catch (e) { await w.abort(e).catch(() => {}); }
+  })();
+  const name = `talk-backup-${new Date(Date.now() + 9 * 3600e3).toISOString().slice(0, 10)}${withImages ? '-photos' : ''}.json`;
+  return new Response(readable, { headers: { ...CORS, 'Content-Type': 'application/json; charset=utf-8', 'Content-Disposition': `attachment; filename="${name}"`, 'Access-Control-Expose-Headers': 'Content-Disposition' } });
 }
 
 // ================================================================ タイムライン（表／裏）
@@ -2332,7 +2373,7 @@ async function nextProactiveSlot(env, now) {
 async function runDueProactive(env) {
   await ensureSchema(env);
   const now = Date.now();
-  const { results } = await env.DB.prepare("SELECT k,v FROM kv WHERE k LIKE 'proj:%'").all();
+  const { results } = await env.DB.prepare("SELECT k,v FROM kv WHERE k >= 'proj:' AND k < 'proj;'").all();
   const due = results.map((r) => { try { return { k: r.k, ...JSON.parse(r.v) }; } catch (_) { return null; } }).filter((p) => p && p.due <= now).sort((a, b) => a.due - b.due);
   if (!due.length) return 0;
   const chars = await loadChars(env);
@@ -2359,7 +2400,7 @@ async function runDueProactive(env) {
 async function runDueReplies(env) {
   await ensureSchema(env);
   const now = Date.now();
-  const { results } = await env.DB.prepare("SELECT k,v FROM kv WHERE k LIKE 'reply:%'").all();
+  const { results } = await env.DB.prepare("SELECT k,v FROM kv WHERE k >= 'reply:' AND k < 'reply;'").all();
   let n = 0;
   for (const row of results) {
     let p; try { p = JSON.parse(row.v); } catch (_) { p = null; }
@@ -2863,7 +2904,7 @@ async function scheduleOutcome(env, s, e, now) {
   }
 }
 async function runDisJobs(env, st, now, limit = 6) {
-  const { results } = await env.DB.prepare("SELECT k,v FROM kv WHERE k LIKE 'disjob:%'").all();
+  const { results } = await env.DB.prepare("SELECT k,v FROM kv WHERE k >= 'disjob:' AND k < 'disjob;'").all();
   const dueJobs = results.map((r) => { try { return { k: r.k, ...JSON.parse(r.v) }; } catch (_) { return null; } })
     .filter((j) => j && j.due <= now).sort((a, b) => a.due - b.due).slice(0, limit);
   if (!dueJobs.length) return 0;

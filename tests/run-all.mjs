@@ -8,7 +8,7 @@ import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
 const dir = dirname(fileURLToPath(import.meta.url));
 // テストから中の関数を直接呼べるように、export を足した写しを作る（.gitignore 済み）
-const EXPORTS = 'planReactions, runTlJobs, deferQuiet, reactDelay, threadRoot, tlContextForTalk, toGeminiSchema, extractMemories, dailyUpdate, lifeDecide, occasionsToday, lifeContext, applyRetracts, decide, shouldCharPost, nightNote, QUIET_RATE, parsePlan, activityAt, replyTiming, runDueReplies, actNorm, actFactor, lateNote, withChanges, schedDue, decideReply, runDisasters, disasterContext, sagaStep, barkEncrypt, sendBark, runDueProactive, nextProactiveSlot, recordCost, costSummary, priceFor';
+const EXPORTS = 'planReactions, runTlJobs, deferQuiet, reactDelay, threadRoot, tlContextForTalk, toGeminiSchema, extractMemories, dailyUpdate, lifeDecide, occasionsToday, lifeContext, applyRetracts, decide, shouldCharPost, nightNote, QUIET_RATE, parsePlan, activityAt, replyTiming, runDueReplies, actNorm, actFactor, lateNote, withChanges, schedDue, decideReply, runDisasters, disasterContext, sagaStep, barkEncrypt, sendBark, runDueProactive, nextProactiveSlot, recordCost, costSummary, priceFor, runDuePostscripts, generateAndStore, buildContents';
 writeFileSync(join(dir, 'worker.mjs'), readFileSync(join(dir, '../server/worker.js'), 'utf8') + `\nexport { ${EXPORTS} };\n`);
 const only = process.argv[2] || '';
 const files = readdirSync(dir).filter((f) => /^t_.*\.mjs$/.test(f) && f.includes(only)).sort();

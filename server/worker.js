@@ -14,7 +14,7 @@
 //    ・Cron トリガー  * * * * *  （毎分。実際に動くのは13分おき）
 // =====================================================================
 
-const VERSION = '第28版（2026-10-18 20:30:00 更新・自動バックアップと復元）';
+const VERSION = '第29版（2026-10-19 02:00:00 更新・日常感の強化）';
 const DEFAULT_MODEL = 'gemini-flash-latest';
 const DEFAULT_GROK_MODEL = 'grok-4.7';                 // X（Twitter）の Grok と同じ最新世代
 const FALLBACK_GROK_MODEL = 'grok-4-fast-non-reasoning'; // 上が使えないときの予備
@@ -70,6 +70,7 @@ export default {
     }
     ctx.waitUntil(runDueReplies(env).catch((e) => log(env, 'あとで返す返事: ' + e.message))); // 予約した返事は毎分確認（軽い）
     ctx.waitUntil(runDueProactive(env).catch((e) => log(env, '自動送信: ' + e.message))); // 時間をずらした話しかけ
+    ctx.waitUntil(runDuePostscripts(env).catch((e) => log(env, '追伸: ' + e.message))); // 追伸・不在着信のあとの言葉
     ctx.waitUntil(runDisasters(env, minute).catch((e) => log(env, '災害の確認: ' + e.message))); // 地震・速報は毎分、ほかは間をあけて確認
     if (Number.isFinite(minute) && minute % TICK_MIN !== 0) return;
     ctx.waitUntil(tick(env).catch((e) => log(env, 'tick全体: ' + e.message)));
@@ -105,7 +106,7 @@ async function ensureSchema(env) {
     env.DB.prepare('CREATE TABLE IF NOT EXISTS ai_cost (world TEXT NOT NULL, month TEXT NOT NULL, usd REAL NOT NULL DEFAULT 0, calls INTEGER NOT NULL DEFAULT 0, tin INTEGER NOT NULL DEFAULT 0, tout INTEGER NOT NULL DEFAULT 0, images INTEGER NOT NULL DEFAULT 0, PRIMARY KEY (world, month))'), // AIの利用料金（目安）
   ]);
   // 既存の messages に写真・送信取り消し用の列を足す（2回目以降は「もうある」で失敗するので無視）
-  for (const col of ['image TEXT', 'alt TEXT', 'retracted INTEGER NOT NULL DEFAULT 0', 'retract_at INTEGER', 'reaction TEXT', 'reacted_at INTEGER']) {
+  for (const col of ['image TEXT', 'alt TEXT', 'retracted INTEGER NOT NULL DEFAULT 0', 'retract_at INTEGER', 'reaction TEXT', 'reacted_at INTEGER', 'reply_to INTEGER', 'kind TEXT']) {
     try { await env.DB.prepare('ALTER TABLE messages ADD COLUMN ' + col).run(); } catch (_) {}
   }
   // TLの投稿に写真を付けられるようにする
@@ -250,8 +251,9 @@ async function getChar(env, id) {
 }
 const rowToMsg = (r) => ({ id: r.id, charId: r.char_id, sender: r.sender, text: r.retracted ? '' : r.text, at: r.at,
   ...(r.image && !r.retracted ? { image: r.image } : {}), ...(r.alt ? { alt: r.alt } : {}), ...(r.retracted ? { retracted: 1, origText: r.text } : {}),
-  ...(r.reaction ? { reaction: r.reaction, reactedAt: r.reacted_at || 0 } : {}) });
-const MSG_COLS = 'id,char_id,sender,text,at,image,alt,retracted,reaction,reacted_at';
+  ...(r.reaction ? { reaction: r.reaction, reactedAt: r.reacted_at || 0 } : {}),
+  ...(r.reply_to ? { replyTo: r.reply_to } : {}), ...(r.kind ? { kind: r.kind } : {}) });
+const MSG_COLS = 'id,char_id,sender,text,at,image,alt,retracted,reaction,reacted_at,reply_to,kind';
 
 // ---------------------------------------------------------------- スタンプ（表のトークだけ）
 // キャラの吹き出しにはユーザーが、ユーザーの吹き出しにはキャラが付ける（1つのメッセージに1つ）
@@ -340,7 +342,13 @@ async function route(key, url, body, env, ctx) {
       // アプリの表示用に、記憶ではない原文は返さない
       messages = messages.map((m) => { const { origText, ...rest } = m; return rest; });
       const dis = await kvGet(env, 'dis:state', null);
-      return json({ chars, messages, more, reads, charRead, reactions, cost: await costSummary(env).catch(() => null), outage: dis && dis.outage ? dis.outage : null, retracted: rt.map((r) => r.id), settings: await getSettings(env), now: Date.now(), version: VERSION });
+      // プロフィールのひとこと・アイコンの絵文字（表）
+      const status = {};
+      if ((await getSettings(env)).lifeEnabled) {
+        const { results: ss } = await env.DB.prepare("SELECT char_id, json_extract(data,'$.statusMsg') AS m, json_extract(data,'$.statusEmoji') AS e FROM char_state").all();
+        for (const r of ss) if (r.m || r.e) status[r.char_id] = { msg: r.m || '', emoji: r.e || '' };
+      }
+      return json({ chars, messages, more, reads, charRead, reactions, status, cost: await costSummary(env).catch(() => null), outage: dis && dis.outage ? dis.outage : null, retracted: rt.map((r) => r.id), settings: await getSettings(env), now: Date.now(), version: VERSION });
     }
 
     case 'GET /export': return exportAll(env, url.searchParams.get('images') === '1');
@@ -513,7 +521,7 @@ async function route(key, url, body, env, ctx) {
       await noteUserDelete(env);
       await env.DB.batch([
         env.DB.prepare('DELETE FROM chars WHERE id=?').bind(id),
-        env.DB.prepare('DELETE FROM kv WHERE k IN (?,?,?,?)').bind('reply:' + id, 'rhythm:' + id, 'jealous:' + id, 'proj:' + id),
+        env.DB.prepare('DELETE FROM kv WHERE k IN (?,?,?,?,?)').bind('reply:' + id, 'rhythm:' + id, 'jealous:' + id, 'proj:' + id, 'ps:' + id),
         env.DB.prepare('DELETE FROM messages WHERE char_id=? OR char_id=?').bind(id, id + URA),
         env.DB.prepare('DELETE FROM reads WHERE char_id=? OR char_id=?').bind(id, id + URA),
         env.DB.prepare('DELETE FROM ura_icons WHERE char_id=?').bind(id),
@@ -535,7 +543,7 @@ async function route(key, url, body, env, ctx) {
       await env.DB.batch([
         env.DB.prepare('DELETE FROM messages WHERE char_id=?').bind(key),
         env.DB.prepare('DELETE FROM reads WHERE char_id=?').bind(key),
-        env.DB.prepare('DELETE FROM kv WHERE k IN (?,?)').bind('reply:' + key, 'proj:' + key),
+        env.DB.prepare('DELETE FROM kv WHERE k IN (?,?,?)').bind('reply:' + key, 'proj:' + key, 'ps:' + key),
       ]);
       return json({ ok: true });
     }
@@ -853,7 +861,7 @@ async function route(key, url, body, env, ctx) {
       const state = await getState(env, c.id);
       return json({
         memories: mems.map((m) => ({ id: m.id, kind: m.kind, label: MEM_LABEL[m.kind] || m.kind, text: m.text, due: m.due, status: m.status, at: m.created })),
-        today: state.day ? { day: state.day, mood: state.mood, moodReason: state.moodReason, today: state.today, story: state.story || null, diary: (state.diary || []).slice(-5) } : null,
+        today: state.day ? { day: state.day, mood: state.mood, moodReason: state.moodReason, today: state.today, story: state.story || null, diary: (state.diary || []).slice(-5), project: state.project || null, condition: state.condition || null, statusMsg: state.statusMsg || '' } : null,
         affinity: nz(c.affinity, 60),
       });
     }
@@ -1083,6 +1091,9 @@ function situation(d, hist, now) {
         'キャラクターらしく返信を催促してください。ただし直前の会話が自然に終わっていた場合（おやすみ・またね等）は、催促ではなく新しい話題で話しかけてください。';
     case 'special': case 'absent': case 'followup': case 'jealous':
       return lifeSituation(d, now);
+    case 'call':
+      return `あなたはたった今、ユーザーに電話をかけた（声が聞きたくなった・直接話したいことがあった、など。理由はキャラクターらしく、今の様子や続いている出来事に合わせる）が、ユーザーは出なかった。最後のやり取りから${fmtDur(now - (d.since || now))}たっている。` +
+        '電話に出てもらえなかったことに触れつつ、キャラクターらしく短く送る（吹き出し1〜2つ）。性格によって、さみしさ・拗ね・気づかい・独占欲などをにじませる。責めすぎない。「電話」という言葉を使ってよい。';
     case 'event':
       return eventSituation(d, now);
     case 'topic':
@@ -1122,7 +1133,7 @@ function buildContents(hist, world = 'omote', images = {}) {
   const turns = [];
   for (const m of hist) {
     const role = m.sender === 'me' ? 'user' : 'model';
-    let body = m.retracted ? `（送信を取り消したメッセージ：${m.origText || ''}）` : m.text;
+    let body = m.retracted ? `（送信を取り消したメッセージ：${m.origText || ''}）` : m.kind === 'call' ? '（電話をかけたが、ユーザーは出なかった）' : m.text;
     if (m.image || (m.alt && !m.retracted)) body = (m.sender === 'me' ? '（写真を送りました）' : `（写真を送った：${m.alt || ''}）`) + (body ? ' ' + body : '');
     // 裏は現実の時刻とは別の時間軸なので時刻は付けない。ナレーションは「＊」付きで渡す
     const line = world === 'ura' ? (m.sender === 'narr' ? '＊' + body : body) : `[${fmtTime(m.at)}] ${body}`;
@@ -1426,6 +1437,12 @@ async function generateAndStore(env, c, d, hist, lastRead, world = 'omote') {
     const images = {};
     for (const m of newPhotos) { const im = await loadImage(env, m.image); if (im) images[m.image] = im; }
     const special = d.mode === 'special';
+    if (d.mode === 'call') { // 不在着信：先に「着信」を置いて、少しあとに言葉を送る
+      const at = Date.now();
+      const rc = await env.DB.prepare("INSERT INTO messages (char_id,sender,text,at,kind) VALUES (?, 'char', '', ?, 'call')").bind(key, at).run();
+      d.callMsg = { id: rc.meta.last_row_id, charId: key, sender: 'char', text: '', at, kind: 'call' };
+      hist = [...hist, d.callMsg];
+    }
     const lastMeMsg = [...hist].reverse().find((m) => m.sender === 'me');
     const canStamp = st.lifeEnabled && !special && (d.mode === 'reply' || d.mode === 'event') && lastMeMsg && !lastMeMsg.reaction && hist[hist.length - 1].sender === 'me';
     const opt = {
@@ -1435,11 +1452,13 @@ async function generateAndStore(env, c, d, hist, lastRead, world = 'omote') {
       edit: st.imagesEnabled && newPhotos.length > 0 && Object.keys(images).length > 0,
       typo: st.lifeEnabled && !special && Math.random() < 0.05,
       retract: st.lifeEnabled && !special && Math.random() < 0.05,
+      quote: st.lifeEnabled && !special && d.mode === 'reply' ? quoteCandidates(hist) : null,
+      ps: st.lifeEnabled && !special && d.mode !== 'call' && Math.random() < 0.12,
     };
     const wb = await worldBlock(env, c.prompt + '\n' + hist.slice(-20).map((m) => m.text).join('\n'));
     const system = wb + buildSystem(c, special ? { ...d } : d, hist, now, tlInfo, lifeInfo);
     const contents = buildContents(hist, 'omote', images);
-    if (opt.news || opt.photo || opt.edit || opt.typo || opt.retract || opt.react || special) {
+    if (opt.news || opt.photo || opt.edit || opt.typo || opt.retract || opt.react || opt.quote || opt.ps || special) {
       rich = await callOmoteRich(env, { ...c, maxSplit: special ? 2 : c.maxSplit }, d, system, contents, opt);
       texts = rich.texts;
       rich.srcImage = newPhotos.length ? images[newPhotos[newPhotos.length - 1].image] : null;
@@ -1474,16 +1493,60 @@ async function generateAndStore(env, c, d, hist, lastRead, world = 'omote') {
       items.splice(pos, 0, { sender: 'char', text: '', image: imgId, alt: rich.photo || '加工した写真：' + rich.edit });
     } catch (e) { await log(env, '写真: ' + e.message); }
   }
+  // 引用返信：最初の言葉の吹き出しに、どのメッセージへの返事かを付ける
+  if (rich && rich.quoteId) { const q = items.find((x) => !x.image); if (q) q.replyTo = rich.quoteId; }
+  // 不在着信のあとの言葉は、1〜2分あけて届ける
+  if (d.mode === 'call' && d.callMsg) {
+    await kvSet(env, 'ps:' + key, { texts: items.filter((x) => !x.image).map((x) => x.text), due: Date.now() + (60 + Math.random() * 90) * 1000, after: d.callMsg.id });
+    return [d.callMsg];
+  }
   const t0 = Date.now();
   const res = await env.DB.batch(items.map((x, i) =>
-    env.DB.prepare('INSERT INTO messages (char_id,sender,text,at,image,alt) VALUES (?,?,?,?,?,?)').bind(key, x.sender, x.text, t0 + i, x.image || null, x.alt || null)));
-  const out = items.map((x, i) => ({ id: res[i].meta.last_row_id, charId: key, sender: x.sender, text: x.text, at: t0 + i, ...(x.image ? { image: x.image, alt: x.alt } : {}) }));
+    env.DB.prepare('INSERT INTO messages (char_id,sender,text,at,image,alt,reply_to) VALUES (?,?,?,?,?,?,?)').bind(key, x.sender, x.text, t0 + i, x.image || null, x.alt || null, x.replyTo || null)));
+  const out = items.map((x, i) => ({ id: res[i].meta.last_row_id, charId: key, sender: x.sender, text: x.text, at: t0 + i, ...(x.image ? { image: x.image, alt: x.alt } : {}), ...(x.replyTo ? { replyTo: x.replyTo } : {}) }));
+  // 追伸：数分後に、思い出したように一言
+  if (rich && rich.postscript && !ura) await kvSet(env, 'ps:' + key, { texts: [rich.postscript], due: Date.now() + (2 + Math.random() * 5) * MIN, after: out[out.length - 1].id });
   // 送信取り消し（数分後に取り消す）
   if (rich && Number.isInteger(rich.retract) && rich.retract >= 0) {
     const target = out.filter((m) => !m.image)[rich.retract];
     if (target) await env.DB.prepare('UPDATE messages SET retract_at=? WHERE id=?').bind(Date.now() + (1 + Math.random() * 5) * MIN, target.id).run();
   }
   return out;
+}
+
+// 引用返信の候補：最近のユーザーのメッセージ（続けて2つ以上送られたときや、少し前の話があるとき）
+function quoteCandidates(hist) {
+  const mine = hist.slice(-20).filter((m) => m.sender === 'me' && m.text && !m.retracted);
+  if (mine.length < 2) return null;
+  let burst = 0;
+  for (let i = hist.length - 1; i >= 0 && hist[i].sender === 'me'; i--) burst++;
+  if (burst < 2 && Math.random() > 0.15) return null; // 1つだけのときは、ときどき（前の話に戻るとき用）
+  return mine.slice(-6);
+}
+// 追伸・不在着信のあとの言葉（毎分確認）。その間にやり取りが進んでいたら送らない
+async function runDuePostscripts(env) {
+  const now = Date.now();
+  const { results } = await env.DB.prepare("SELECT k,v FROM kv WHERE k >= 'ps:' AND k < 'ps;'").all();
+  if (!results.length) return 0;
+  const chars = await loadChars(env);
+  let n = 0;
+  for (const row of results) {
+    let p; try { p = JSON.parse(row.v); } catch (_) { p = null; }
+    if (p && p.due > now) continue;
+    const claimed = await env.DB.prepare('DELETE FROM kv WHERE k=? RETURNING k').bind(row.k).first();
+    if (!claimed || !p) continue;
+    const key = row.k.slice(3), c = chars.find((x) => x.id === key);
+    if (!c) continue;
+    const later = await env.DB.prepare('SELECT 1 FROM messages WHERE char_id=? AND id>? LIMIT 1').bind(key, p.after).first();
+    if (later) continue;
+    const texts = (p.texts || []).map((t) => String(t).trim()).filter(Boolean);
+    if (!texts.length) continue;
+    const t0 = Date.now();
+    const res = await env.DB.batch(texts.map((t, i) => env.DB.prepare("INSERT INTO messages (char_id,sender,text,at) VALUES (?, 'char', ?, ?)").bind(key, t, t0 + i)));
+    await pushToAll(env, c, texts.map((t, i) => ({ id: res[i].meta.last_row_id, text: t })));
+    n++;
+  }
+  return n;
 }
 
 async function applyRetracts(env) {
@@ -1816,7 +1879,7 @@ async function bkRestoreStep(env, rs, t0, budgetMs, maxParts) {
   if (rs.phase === 'finish') {
     // 古い予約（返事・話しかけ・災害の反応・TLの反応）は持ち込まない
     await env.DB.batch([
-      env.DB.prepare("DELETE FROM kv WHERE (k >= 'reply:' AND k < 'reply;') OR (k >= 'replygo:' AND k < 'replygo;') OR (k >= 'proj:' AND k < 'proj;') OR (k >= 'disjob:' AND k < 'disjob;')"),
+      env.DB.prepare("DELETE FROM kv WHERE (k >= 'reply:' AND k < 'reply;') OR (k >= 'replygo:' AND k < 'replygo;') OR (k >= 'proj:' AND k < 'proj;') OR (k >= 'disjob:' AND k < 'disjob;') OR (k >= 'ps:' AND k < 'ps;')"),
       env.DB.prepare('DELETE FROM tl_jobs'),
       env.DB.prepare('UPDATE tl_posts SET planned=1'),
       env.DB.prepare("DELETE FROM kv WHERE k IN ('bk:restore','bk:lock')"),
@@ -2218,6 +2281,7 @@ async function tlLifeTheme(env, c, st, now) {
     ['free', 25],
     ['mood', state.day === today ? 22 : 0],
     ['story', state.story ? 15 : 0],
+    ['project', state.project && !state.project.finished ? 10 : 0],
     ['weather', w ? (weatherNotable(w) ? 18 : 5) : 0],
     ['occasion', occ.length ? 45 : ev ? 18 : 0],
     ['photo', st.imagesEnabled ? 18 : 0],
@@ -2242,6 +2306,7 @@ ${w ? '天気：' + weatherText(w, st) + '\n' : ''}${seasonText(now)}／${weekda
     free: '自由に。今日の気分や天気をさりげなくにじませてもよい。',
     mood: '今日の気分や、今日していること・最近の出来事（日記）をつぶやく。',
     story: `続いている出来事「${state.story ? state.story.title : ''}」の今日の進み具合をつぶやく。`,
+    project: `何週間も続けていること「${state.project ? state.project.title : ''}」の最近の進み具合をつぶやく（最近の様子：${state.project ? state.project.log.slice(-2).map((x) => x.t).join(' → ') : ''}）。`,
     weather: '今日の天気や気温にちなんだつぶやき（雨、暑さ、寒さ、空の様子など）。',
     occasion: occ.length
       ? `今日は「${occ.map((o) => o.label).join('・')}」。それにちなんだ投稿をする（ユーザーの誕生日なら、名前はぼかしつつお祝いの気持ちがにじむように。記念日なら嬉しさを）。`
@@ -2428,21 +2493,24 @@ function weekdayText(now) {
 }
 
 // ---- 記憶
-const MEM_KINDS = ['fact', 'plan', 'promise', 'consult', 'recommend', 'event'];
-const MEM_LABEL = { fact: 'ユーザーのこと', plan: 'ユーザーの予定', promise: '約束', consult: 'あなたがユーザーにした相談', recommend: 'あなたが勧めたもの', event: 'ユーザーに起きたこと', user_state: 'ユーザーの様子' };
+const MEM_KINDS = ['fact', 'plan', 'promise', 'consult', 'recommend', 'event', 'joke'];
+const MEM_LABEL = { fact: 'ユーザーのこと', plan: 'ユーザーの予定', promise: '約束', consult: 'あなたがユーザーにした相談', recommend: 'あなたが勧めたもの', event: 'ユーザーに起きたこと', user_state: 'ユーザーの様子', joke: '二人の内輪ネタ' };
 async function loadMemories(env, cid, limit = 200) {
   const { results } = await env.DB.prepare('SELECT * FROM memories WHERE char_id=? ORDER BY id DESC LIMIT ?').bind(cid, limit).all();
   return results;
 }
-function memoryText(mems, today) {
-  const open = mems.filter((m) => m.status === 'open' && m.kind !== 'fact' && m.kind !== 'user_state').slice(0, 15);
+function memoryText(mems, today, withJokes = false) {
+  const open = mems.filter((m) => m.status === 'open' && m.kind !== 'fact' && m.kind !== 'user_state' && m.kind !== 'joke').slice(0, 15);
   const facts = mems.filter((m) => m.kind === 'fact').slice(0, 30);
   const states = mems.filter((m) => m.kind === 'user_state' && dayDiff(jstDay(m.created), today) <= 4).slice(0, 4);
-  if (!open.length && !facts.length && !states.length) return '';
+  // 内輪ネタは毎回は見せない（ときどき、ふいに思い出す）
+  const jokes = withJokes ? mems.filter((m) => m.kind === 'joke' && dayDiff(jstDay(m.created), today) >= 1).sort(() => Math.random() - 0.5).slice(0, 2) : [];
+  if (!open.length && !facts.length && !states.length && !jokes.length) return '';
   const lines = [];
   if (facts.length) lines.push('## ユーザーについて覚えていること', ...facts.map((m) => '- ' + m.text));
   if (open.length) lines.push('## 予定・約束・まだ結果を聞いていないこと', ...open.map((m) => `- [${MEM_LABEL[m.kind] || m.kind}] ${m.text}${m.due ? `（${fmtDay(m.due)}）` : ''}`));
   if (states.length) lines.push('## 最近のユーザーの様子', ...states.map((m) => `- ${m.text}（${fmtDay(jstDay(m.created))}）`));
+  if (jokes.length) lines.push('## 二人のあいだの内輪ネタ（話の流れにぴったり合うときだけ、ふいに持ち出してよい。説明はしない。無理に使わない）', ...jokes.map((m) => '- ' + m.text));
   return lines.join('\n');
 }
 
@@ -2454,8 +2522,9 @@ const EXTRACT_SCHEMA = {
     user_state: { type: 'string' },
     affinity_delta: { type: 'integer' },
     birthday: { type: 'string' },
+    jokes: { type: 'array', items: { type: 'string' } },
   },
-  required: ['new', 'done', 'user_state', 'affinity_delta', 'birthday'], additionalProperties: false,
+  required: ['new', 'done', 'user_state', 'affinity_delta', 'birthday', 'jokes'], additionalProperties: false,
 };
 
 // やり取りがひと段落したら、覚えておくことを取り出す
@@ -2470,8 +2539,9 @@ async function extractMemories(env, c, st, now, force = false) {
   if (!hasMe && !state.pendingMemo) { state.lastExtractId = last.id; await setState(env, c.id, state); return false; }
   const today = jstDay(now);
   const mems = await loadMemories(env, c.id, 80);
-  const open = mems.filter((m) => m.status === 'open' && m.kind !== 'fact' && m.kind !== 'user_state');
+  const open = mems.filter((m) => m.status === 'open' && m.kind !== 'fact' && m.kind !== 'user_state' && m.kind !== 'joke');
   const facts = mems.filter((m) => m.kind === 'fact').slice(0, 40);
+  const jokes = mems.filter((m) => m.kind === 'joke').slice(0, 20);
   const system = 'あなたは、キャラクターとユーザーのメッセージのやり取りを読んで、キャラクターがあとで話題にするために覚えておくべきことを整理する係です。事実だけを、短く具体的に書きます。';
   const user = `# 今日の日付
 ${today}（${jstParts(now).w}曜日）
@@ -2499,7 +2569,8 @@ new：新しく覚えること。kind は次のどれか。
 done：上の「まだ結果を聞いていない」もののうち、今回のやり取りで結果がわかった・話し終えた id。
 user_state：今回のやり取りから見えるユーザーの様子（疲れている・元気がない・忙しそう・機嫌がいい・夜更かし など）を1文。特になければ ""。
 affinity_delta：今回のやり取りで、キャラクターから見たユーザーとの距離がどう変わったか。-3〜+3（ふつうは 0 か +1。冷たくされたら −）。
-birthday：ユーザーが自分の誕生日を言っていれば "MM-DD"、なければ ""。`;
+birthday：ユーザーが自分の誕生日を言っていれば "MM-DD"、なければ ""。
+jokes：二人のあいだだけで通じる「内輪ネタ」になりそうなこと（一緒に笑った言い間違い・あだ名・二人だけの呼び方・繰り返し出てくる冗談・ちょっとした事件など）。あとでふいに持ち出したら二人で笑えるものだけ。どんな出来事だったかがわかるように短く（例「ユーザーがボルシチを"ボルチシ"と言い間違えた」）。すでにある内輪ネタ（${jokes.map((m) => m.text).join('／') || 'なし'}）と重ねない。なければ []（ほとんどの回は []）。`;
   const r = await aiJson(env, 'omote', (await worldBlock(env, user)) + system, user, EXTRACT_SCHEMA, 'memory_extract');
   const stmts = [];
   for (const m of (r && r.new) || []) {
@@ -2511,6 +2582,10 @@ birthday：ユーザーが自分の誕生日を言っていれば "MM-DD"、な�
   }
   for (const id of (r && r.done) || []) {
     if (open.some((m) => m.id === Number(id))) stmts.push(env.DB.prepare("UPDATE memories SET status='done' WHERE id=? AND char_id=?").bind(Number(id), c.id));
+  }
+  for (const j of ((r && r.jokes) || []).slice(0, 2)) {
+    const t = String(j || '').trim().slice(0, 120);
+    if (t) stmts.push(env.DB.prepare("INSERT INTO memories (char_id,kind,text,due,status,created,followed) VALUES (?, 'joke', ?, '', 'open', ?, 0)").bind(c.id, t, now));
   }
   const us = String((r && r.user_state) || '').trim();
   if (us) stmts.push(env.DB.prepare("INSERT INTO memories (char_id,kind,text,due,status,created,followed) VALUES (?, 'user_state', ?, '', 'done', ?, 0)").bind(c.id, us.slice(0, 120), now));
@@ -2548,8 +2623,13 @@ const DAILY_SCHEMA = {
     mood: { type: 'string' }, mood_reason: { type: 'string' }, today: { type: 'string' }, diary: { type: 'string' },
     story_title: { type: 'string' }, story_update: { type: 'string' }, story_finished: { type: 'boolean' }, busy: { type: 'integer' },
     fatigue: { type: 'integer' }, plan: { type: 'array', items: PLAN_SCHEMA_ITEM },
+    project_title: { type: 'string' }, project_update: { type: 'string' }, project_finished: { type: 'boolean' },
+    condition: { type: 'string' }, condition_days: { type: 'integer' }, condition_over: { type: 'boolean' },
+    status_msg: { type: 'string' }, status_emoji: { type: 'string' },
+    meet_with: { type: 'string' }, meet_act: { type: 'string' }, meet_time: { type: 'string' },
   },
-  required: ['mood', 'mood_reason', 'today', 'diary', 'story_title', 'story_update', 'story_finished', 'busy', 'fatigue', 'plan'], additionalProperties: false,
+  required: ['mood', 'mood_reason', 'today', 'diary', 'story_title', 'story_update', 'story_finished', 'busy', 'fatigue', 'plan',
+    'project_title', 'project_update', 'project_finished', 'condition', 'condition_days', 'condition_over', 'status_msg', 'status_emoji', 'meet_with', 'meet_act', 'meet_time'], additionalProperties: false,
 };
 async function dailyUpdate(env, c, st, now, force = false) {
   const today = jstDay(now);
@@ -2564,7 +2644,17 @@ async function dailyUpdate(env, c, st, now, force = false) {
   const wd = jstParts(now).w, holiday = wd === '土' || wd === '日';
   const yPlan = state.plan && state.plan.blocks ? state.plan.blocks : [];
   const ySleep = yPlan.filter((b) => b.kind === 'sleep' && b.s > jstDayStart(state.plan.day) + 12 * 3600e3)[0];
-  const dueToday = mems.filter((m) => m.status === 'open' && m.due === today && m.kind !== 'user_state');
+  const dueToday = mems.filter((m) => m.status === 'open' && m.due === today && m.kind !== 'user_state' && m.kind !== 'joke');
+  const project = state.project && !state.project.finished ? state.project : null;
+  const mayProject = !project && Math.random() < 0.15;
+  const cond = state.condition || null;
+  const mayCond = !cond && Math.random() < 0.07;
+  // ほかの子たち（同じユーザーと話している仲間）と、今日・昨日の約束
+  const others = (await loadChars(env)).filter((x) => x.id !== c.id);
+  const meetsToday = (await kvGet(env, 'meet:' + today, [])).filter((m) => m.a === c.id || m.b === c.id);
+  const meetsYday = (await kvGet(env, 'meet:' + addDays(today, -1), [])).filter((m) => m.a === c.id || m.b === c.id);
+  const otherOf = (m) => (m.a === c.id ? m.bName : m.aName);
+  const mayMeet = others.length && !meetsToday.length && Math.random() < 0.22;
   const system = 'あなたは、キャラクターの日々の暮らしを考える係です。キャラクター設定と作品の世界観に合った、自然で小さな日常を考えます。大事件は起こしません。';
   const user = `# キャラクター: ${c.name}
 ${trunc(c.prompt || '（設定なし）', 2500)}
@@ -2588,6 +2678,17 @@ ${(state.diary || []).slice(-5).map((x) => `- ${fmtDay(x.d)} ${x.t}`).join('\n')
 ${yPlan.length ? yPlan.filter((b) => !['sleep', 'free'].includes(b.kind)).map((b) => `${hmJ(b.s)} ${b.act}`).join('／').slice(0, 600) : '（記録なし）'}
 ${ySleep ? `昨夜寝た時刻：${hmJ(ySleep.s)}` : ''}
 昨日の疲れ：${nz(state.fatigue, 30)}/100
+${cond ? `数日続いている体調・状況：「${cond.label}」（${dayDiff(cond.start, today) + 1}日目／${cond.days}日ほどの見込み）` : ''}
+
+# 毎週の習慣・季節の好み
+${rh.habits || '（特になし）'}
+${rh.seasonal ? '季節：' + rh.seasonal.replace(/\n/g, '／') : ''}
+（今日の曜日や季節に当てはまる習慣があれば、予定表や今日の過ごし方に入れる）
+
+# ほかの子たち（同じユーザーと話している仲間。あなたとも知り合い）
+${others.map((o) => `- ${o.name}：${trunc(o.prompt || '', 120).replace(/\n/g, ' ')}`).join('\n') || '（いない）'}
+${meetsToday.length ? '今日の約束（必ず予定表に入れる）：' + meetsToday.map((m) => `${m.time}ごろ ${otherOf(m)}さんと「${m.act}」`).join('／') : ''}
+${meetsYday.length ? '昨日ほかの子と過ごしたこと：' + meetsYday.map((m) => `${otherOf(m)}さんと「${m.act}」`).join('／') + '（diary に書いてもよい）' : ''}
 
 ${await disasterContext(env, st, now).catch(() => '')}
 # 今日のユーザーとの予定・約束（あれば）
@@ -2609,6 +2710,23 @@ ${mems.filter((m) => m.kind === 'fact').slice(0, 10).map((m) => '- ' + m.text).j
     : mayStart
       ? 'キャラクターの身の回りで、何日かかけて進む小さな出来事を新しく始める（例「猫を拾った」「料理の練習を始めた」「友達の誕生日プレゼントを選んでいる」）。story_title に題名、story_update に最初の様子。story_finished は false。'
       : '今日は新しい出来事を始めない。story_title と story_update は ""、story_finished は false。'}
+- project_title / project_update / project_finished：${project
+    ? `何週間もかけて続けていること「${project.title}」（${fmtDay(project.start)}から）。最近の進み具合：${project.log.slice(-3).map((x) => `${fmtDay(x.d)} ${x.t}`).join(' → ')}。今日少しでも進んだことがあれば project_update に1文（毎日でなくてよい。2〜3日に1回くらい。進んでいなければ ""）。project_title は同じ題名。始めて3〜6週間たって区切りがよければ project_finished を true に。`
+    : mayProject
+      ? '何週間もかけて少しずつ続ける、小さな趣味や取り組みを新しく始める（例「分厚い小説を1冊読み進める」「ベランダでハーブを育てる」「マフラーを編む」「お菓子作りの腕を上げる」。キャラクターらしいもの）。project_title に題名、project_update に始めたきっかけや最初の様子。project_finished は false。'
+      : '今日は始めない。project_title と project_update は ""、project_finished は false。'}
+- condition / condition_days / condition_over：${cond
+    ? `数日続いている「${cond.label}」の今日の様子を condition に短く（例「熱は下がったが、まだ喉が痛い」）。condition_days は ${cond.days}。治った・終わったなら condition_over を true に。mood・busy・plan にも反映する（体調が悪ければ早く寝る・予定を減らす、など）。`
+    : mayCond
+      ? '数日続く体調や状況を新しく始めてよい（例「風邪をひいた」「試験週間」「家族が泊まりに来ている」「筋肉痛」「新しい靴で靴ずれ」。深刻すぎないもの）。始めるなら condition に短く、condition_days に続く見込みの日数（2〜5）、condition_over は false。mood・busy・plan にも反映する。始めないなら condition は ""、condition_days は 0。'
+      : 'condition は ""、condition_days は 0、condition_over は false。'}
+- status_msg：LINEのプロフィールの「ひとこと」（20文字以内）。今の気分・ハマっていること・季節のことなど、キャラクターらしく。昨日のひとこと「${state.statusMsg || ''}」のままがよければ同じ文でよい（毎日変えなくてよい。3日に1回くらい変える）。
+- status_emoji：アイコンの横に付ける絵文字1つ（今日の気分や体調。例 🤒 😪 🎵 📚 🍰 ☔）。特になければ ""。
+- meet_with / meet_act / meet_time：${meetsToday.length
+    ? 'すでに今日の約束があるので、新しく決めない（すべて ""）。'
+    : mayMeet
+      ? `今日、ほかの子のうち誰かと一緒に過ごす予定を1つ入れてよい（お茶・買い物・勉強・料理など。キャラクター同士の関係に合うもの）。meet_with にその子の名前（上の一覧の名前どおり）、meet_act に内容を短く、meet_time に "HH:MM"。予定表（plan）にもその時間を social で入れる。合う相手がいなければすべて ""。`
+      : 'すべて ""（今日はほかの子と会う予定を新しく作らない）。'}
 - busy：今日の忙しさ 0〜100。
 - fatigue：今日一日を終えたときの疲れ具合 0〜100（明日に引き継ぐ）。
 - plan：今日の予定表。今朝起きる時刻から、明日の朝起きるまでを、時刻の順に隙間なく並べる。
@@ -2638,7 +2756,34 @@ ${mems.filter((m) => m.kind === 'fact').slice(0, 10).map((m) => '- ' + m.text).j
   } else if (state.story && state.story.finished) {
     state.story = null;
   }
+  // 長く続けていること（何週間も）
+  const pTitle = String(r.project_title || '').trim(), pUp = String(r.project_update || '').trim();
+  if (project && (r.project_finished || dayDiff(project.start, today) > 60)) { state.project = { ...project, finished: true }; if (pUp) state.project.log = project.log.concat({ d: today, t: pUp.slice(0, 160) }).slice(-20); }
+  else if (pTitle && pUp) {
+    if (!project || project.title !== pTitle) state.project = { title: pTitle.slice(0, 60), start: today, log: [] };
+    state.project.log = state.project.log.concat({ d: today, t: pUp.slice(0, 160) }).slice(-20);
+  } else if (state.project && state.project.finished && dayDiff(state.project.log.length ? state.project.log[state.project.log.length - 1].d : today, today) > 3) state.project = null;
+  // 数日続く体調・状況
+  const cLabel = String(r.condition || '').trim();
+  if (cond) {
+    if (r.condition_over || dayDiff(cond.start, today) > cond.days + 2) state.condition = null;
+    else state.condition = { ...cond, now: cLabel.slice(0, 80) || cond.now || '' };
+  } else if (cLabel && nz(r.condition_days, 0) > 0) state.condition = { label: cLabel.slice(0, 60), start: today, days: clamp(Math.round(r.condition_days), 2, 6), now: '' };
+  // ひとこと・アイコンの絵文字
+  const sm = String(r.status_msg || '').trim().slice(0, 30);
+  if (sm && sm !== state.statusMsg) { state.statusMsg = sm; state.statusAt = now; }
+  state.statusEmoji = [...String(r.status_emoji || '').trim()].slice(0, 2).join('');
   await setState(env, c.id, state);
+  // ほかの子との約束（相手の子にも伝わるように、日付ごとにまとめて覚える）
+  const mw = String(r.meet_with || '').trim(), partner = mw && others.find((o) => o.name === mw || mw.includes(o.name) || o.name.includes(mw));
+  if (partner && !meetsToday.length && String(r.meet_act || '').trim()) {
+    const list = await kvGet(env, 'meet:' + today, []);
+    if (!list.some((m) => [m.a, m.b].includes(partner.id))) { // 相手がすでに別の約束をしていたら作らない
+      list.push({ a: c.id, aName: c.name, b: partner.id, bName: partner.name, act: String(r.meet_act).trim().slice(0, 60), time: /^\d{1,2}:\d{2}$/.test(String(r.meet_time || '').trim()) ? String(r.meet_time).trim() : '' });
+      await kvSet(env, 'meet:' + today, list);
+    }
+  }
+  await env.DB.prepare('DELETE FROM kv WHERE k=?').bind('meet:' + addDays(today, -3)).run();
   return true;
 }
 
@@ -2734,15 +2879,15 @@ const isSleepKind = (k) => k === 'sleep' || k === 'nap';
 // 生活リズム（キャラ設定と世界観から1回だけ作る。設定を変えたら作り直す）
 const RHYTHM_SCHEMA = {
   type: 'object',
-  properties: { weekday: { type: 'string' }, holiday: { type: 'string' }, reply_speed: { type: 'string' }, night_owl: { type: 'integer' }, napper: { type: 'integer' }, calm: { type: 'integer' } },
-  required: ['weekday', 'holiday', 'reply_speed', 'night_owl', 'napper', 'calm'], additionalProperties: false,
+  properties: { weekday: { type: 'string' }, holiday: { type: 'string' }, reply_speed: { type: 'string' }, night_owl: { type: 'integer' }, napper: { type: 'integer' }, calm: { type: 'integer' }, habits: { type: 'string' }, seasonal: { type: 'string' } },
+  required: ['weekday', 'holiday', 'reply_speed', 'night_owl', 'napper', 'calm', 'habits', 'seasonal'], additionalProperties: false,
 };
-const DEFAULT_RHYTHM = { weekday: '', holiday: '', speed: 'normal', nightOwl: 30, napper: 30, calm: 50 };
+const DEFAULT_RHYTHM = { weekday: '', holiday: '', speed: 'normal', nightOwl: 30, napper: 30, calm: 50, habits: '', seasonal: '' };
 async function getRhythm(env, c, allowAI = true) {
   const w = await loadWorld(env).catch(() => ({}));
   const h = strHash(c.name + '\n' + (c.prompt || '') + '\n' + (w.stage || ''));
   const cached = await kvGet(env, 'rhythm:' + c.id, null);
-  if (cached && ((cached.h === h && cached.r.calm != null) || !allowAI)) return cached.r;
+  if (cached && ((cached.h === h && cached.r.habits != null) || !allowAI)) return cached.r; // 習慣（第29版）が無い古いものは1回だけ作り直す
   if (!allowAI) return DEFAULT_RHYTHM;
   const user = `# キャラクター: ${c.name}
 ${trunc(c.prompt || '（設定なし）', 3000)}
@@ -2753,13 +2898,16 @@ ${trunc(c.prompt || '（設定なし）', 3000)}
 - reply_speed：メッセージへの返事の早さ。"fast"（すぐ返す）／"normal"／"slow"（マイペース・気づくのが遅い）のどれか。
 - night_owl：夜ふかしの度合い 0〜100。
 - napper：昼寝や二度寝をしやすい度合い 0〜100。
-- calm：地震などとっさのときの落ち着き 0〜100（低いほど慌てて、しばらくスマホも触れない）。`;
+- calm：地震などとっさのときの落ち着き 0〜100（低いほど慌てて、しばらくスマホも触れない）。
+- habits：毎週の決まりごと・小さな習慣を3〜5個、1行に1つ「曜日や時間：内容」の形で（例「日曜の朝：ブリヌイを焼く」「月曜：少し気だるい」「毎晩寝る前：紅茶と日記」）。キャラクターらしく具体的に。
+- seasonal：季節ごとの好みや習慣を、春・夏・秋・冬それぞれ短く（例「冬：ホットココアが手放せない、厚手のマフラー」）。`;
   try {
     const r = await aiJson(env, 'omote', (await worldBlock(env, user)) + 'あなたは、キャラクターの暮らしぶりを考える係です。キャラクター設定と作品の世界観に合った、自然な生活リズムを考えます。', user, RHYTHM_SCHEMA, 'rhythm');
     const v = {
       weekday: String(r.weekday || '').slice(0, 400), holiday: String(r.holiday || '').slice(0, 400),
       speed: ['fast', 'normal', 'slow'].includes(r.reply_speed) ? r.reply_speed : 'normal',
       nightOwl: clamp(Math.round(nz(r.night_owl, 30)), 0, 100), napper: clamp(Math.round(nz(r.napper, 30)), 0, 100), calm: clamp(Math.round(nz(r.calm, 50)), 0, 100),
+      habits: String(r.habits || '').slice(0, 400), seasonal: String(r.seasonal || '').slice(0, 400),
     };
     await kvSet(env, 'rhythm:' + c.id, { h, r: v });
     return v;
@@ -3535,9 +3683,22 @@ async function lifeContext(env, c, st, now) {
 気分：${state.mood}${state.moodReason ? `（${state.moodReason}）` : ''}
 今日：${state.today}
 ${(state.diary || []).slice(-2).map((x) => `${fmtDay(x.d)}の出来事：${x.t}`).join('\n')}${state.story ? `
-続いている出来事「${state.story.title}」：${state.story.log.map((x) => `${fmtDay(x.d)} ${x.t}`).join(' → ')}${state.story.finished ? '（区切りがついた）' : ''}` : ''}
+続いている出来事「${state.story.title}」：${state.story.log.map((x) => `${fmtDay(x.d)} ${x.t}`).join(' → ')}${state.story.finished ? '（区切りがついた）' : ''}` : ''}${state.project ? `
+何週間も続けていること「${state.project.title}」（${fmtDay(state.project.start)}から）：${state.project.log.slice(-4).map((x) => `${fmtDay(x.d)} ${x.t}`).join(' → ')}${state.project.finished ? '（最近、区切りがついた）' : ''}` : ''}${state.condition ? `
+数日続いている体調・状況：「${state.condition.label}」（${dayDiff(state.condition.start, today) + 1}日目${state.condition.now ? '・今日は' + state.condition.now : ''}）` : ''}${state.statusMsg ? `
+プロフィールのひとこと：「${state.statusMsg}」` : ''}
 （気分や体調は話し方に自然ににじませる。毎回説明しなくてよい）`);
   }
+  const meets = (await kvGet(env, 'meet:' + today, [])).filter((m) => m.a === c.id || m.b === c.id);
+  const meetsY = (await kvGet(env, 'meet:' + addDays(today, -1), [])).filter((m) => m.a === c.id || m.b === c.id);
+  if (meets.length || meetsY.length) {
+    const who = (m) => (m.a === c.id ? m.bName : m.aName);
+    out.push(`# ほかの子との予定（ユーザーもその子を知っている。同じアプリで話している仲間）
+${meets.map((m) => `- 今日${m.time ? ' ' + m.time + 'ごろ' : ''}：${who(m)}さんと「${m.act}」${m.time && jstParts(now).h * 60 + jstParts(now).mi >= m.time.split(':')[0] * 60 + +m.time.split(':')[1] ? '（もう過ごした／過ごしている）' : '（これから）'}`).join('\n')}${meetsY.map((m) => `\n- 昨日：${who(m)}さんと「${m.act}」`).join('')}
+（聞かれたり話の流れが合えば話してよい。相手の子の言っていることと食い違わないように。相手の子の秘密は話さない）`);
+  }
+  const rh = await getRhythm(env, c, false).catch(() => null);
+  if (rh && rh.habits) out.push(`# あなたの毎週の習慣\n${rh.habits}\n（今日の曜日に当てはまるものがあれば、自然ににじませてよい）`);
   out.push(`# あなたが今していること（だいたいの予定）
 ${activityText(state, now, c.id)}
 （今していることと矛盾しない内容にする。毎回説明しなくてよい）`);
@@ -3547,7 +3708,7 @@ ${activityText(state, now, c.id)}
 ${w ? '天気：' + w + '\n' : ''}${seasonText(now)}／${weekdayText(now)}`);
   const dc = await disasterContext(env, st, now).catch(() => '');
   if (dc) out.push(dc.trim());
-  const mt = memoryText(await loadMemories(env, c.id, 120), today);
+  const mt = memoryText(await loadMemories(env, c.id, 120), today, Math.random() < 0.3);
   if (mt) out.push(`# あなたが覚えているユーザーとのこと
 ${mt}
 （会話に自然に活かす。予定や約束の日付を意識する。毎回すべてに触れなくてよい）`);
@@ -3622,13 +3783,20 @@ async function lifeDecide(env, c, hist, lastRead, now, st, ctxAll) {
   if (unread >= 3) return null;
   // 予定・約束・相談・おすすめのフォロー（1日2回まで）
   if ((state.followDay === today ? state.followCount || 0 : 0) < 2) {
-    const mems = (await loadMemories(env, c.id, 120)).filter((m) => m.status === 'open' && m.kind !== 'fact' && m.kind !== 'user_state' && m.due);
+    const mems = (await loadMemories(env, c.id, 120)).filter((m) => m.status === 'open' && m.kind !== 'fact' && m.kind !== 'user_state' && m.kind !== 'joke' && m.due);
     for (const m of mems) {
       const tomorrow = addDays(today, 1);
       if (m.kind === 'promise' && m.due === tomorrow && m.followed < 1 && Math.random() < 0.25) return { mode: 'followup', mem: m, phase: 'remind' };
       const ripe = today > m.due || (today === m.due && h >= 19);
       if (ripe && m.followed < 2 && Math.random() < 0.2) return { mode: 'followup', mem: m, phase: 'after' };
     }
+  }
+  // 不在着信：声が聞きたくなって電話をかける（ユーザーは出られない）。36時間に1回まで・手が空いているときだけ
+  if (now - (state.lastCallAt || 0) > 36 * 3600e3 && h >= 8 && h < 23) {
+    const a = activityAt(state, now, c.id);
+    const quietFor = now - last.at;
+    const p = quietFor > 60 * MIN && quietFor < 10 * 3600e3 ? 0.02 : 0.006;
+    if (a.avail >= 50 && !isSleepKind(a.kind) && Math.random() < p * ((await isJealous(env, c).catch(() => false)) ? 1.8 : 1)) return { mode: 'call', since: last.at };
   }
   // 嫉妬（嫉妬しやすいキャラだけ。12時間に1回まで）
   if (now - (state.lastJealousAt || 0) > 12 * 3600e3 && Math.random() < 0.3) {
@@ -3645,6 +3813,7 @@ async function lifeAfterSend(env, c, d, now) {
   if (d.mode === 'special') state.specials = { ...(state.specials || {}), [d.stateKey]: true };
   if (d.mode === 'absent') state.lastAbsentDay = today;
   if (d.mode === 'jealous') state.lastJealousAt = now;
+  if (d.mode === 'call') state.lastCallAt = now;
   if (d.mode === 'followup') {
     state.followCount = (state.followDay === today ? state.followCount || 0 : 0) + 1;
     state.followDay = today;
@@ -3668,6 +3837,7 @@ async function chooseFlavor(env, c, d, st, now) {
     ['free', 28],
     ['weather', w ? (weatherNotable(w) || (await disasterContext(env, st, now).catch(() => '')) ? 22 : 8) : 0],
     ['story', state.story ? 16 : 0],
+    ['project', state.project && !state.project.finished ? 10 : 0],
     ['question', 12],
     ['weekday', ['月', '金', '土', '日'].includes(wd) ? 9 : 0],
     ['consult', 7],
@@ -3679,17 +3849,19 @@ async function chooseFlavor(env, c, d, st, now) {
   let r = Math.random() * total;
   for (const [k, wgt] of table) { if ((r -= wgt) < 0) { d.flavor = k; break; } }
   if (d.flavor === 'memory' && facts.length) d.memFact = facts[Math.floor(Math.random() * Math.min(facts.length, 20))].text;
+  if (state.project) d.projTitle = state.project.title;
 }
 function flavorText(d) {
   switch (d.flavor) {
     case 'weather': return '今回は、天気や気温の話題で話しかけてください（「傘、持ちましたか？」「今日は冷えますね」のように、ユーザーを気づかう形で）。';
     case 'story': return '今回は、あなたの「続いている出来事」の今日の進み具合を話題にしてください。ユーザーの意見を聞くのもよい。';
+    case 'project': return `今回は、あなたが何週間も続けていること「${d.projTitle || ''}」の最近の進み具合を話題にしてください（うまくいったこと・つまずいたこと・ユーザーに見てほしいこと、など）。`;
     case 'question': return '今回は、ユーザーのことをもっと知るための質問を、キャラクターらしい聞き方で1つしてください（好きなもの、子どもの頃のこと、最近ハマっていること、など。覚えていることと重ならないもの）。';
     case 'weekday': return '今回は、曜日に合った話題にしてください（月曜なら週の始まりの気づかい、金曜なら週末の予定を聞く、休日なら何をしているか聞く、など）。';
     case 'consult': return '今回は、あなた自身の小さな悩みごとをユーザーに相談してください（キャラクターの暮らしや続いている出来事に合ったもの。深刻すぎない）。';
     case 'recommend': return '今回は、あなたが好きなもの（料理・本・音楽・場所など、キャラクター設定に合うもの）をユーザーに具体的に勧めてください。';
     case 'memory': return `今回は、あなたが覚えているユーザーのこと「${d.memFact}」につながる話題で話しかけてください。`;
-    case 'photo': return `今回は、写真を送る流れで話しかけてください。写真の内容は photo に書く（${PHOTO_SUBJECTS}）。`;
+    case 'photo': return `今回は、写真を送る流れで話しかけてください。写真の内容は photo に書く（${PHOTO_SUBJECTS}）。${d.projTitle ? `続けていること「${d.projTitle}」の様子を写してもよい。` : ''}`;
     default: return '';
   }
 }
@@ -3779,6 +3951,12 @@ async function callOmoteRich(env, c, d, system, contents, opt) {
   if (opt.photo) { props.photo = { type: 'string' }; extra += `\n- photo：送る写真の内容を具体的に1文（例「焼きたてのブリヌイ、ジャムを添えて」）。${PHOTO_SUBJECTS}。写真を送らないなら ""。`; }
   if (opt.edit) { props.photo_edit = { type: 'string' }; extra += '\n- photo_edit：ユーザーが送ってくれた写真を、遊び心で加工して送り返したくなったら、加工の内容を1文（例「花の冠を描き足す」「レトロなフィルムカメラ風にする」）。人物やキャラクターは描き足さない。ほとんどの場合は加工しない（""）。'; }
   if (opt.retract) { props.retract = { type: 'integer' }; extra += '\n- retract：書いた吹き出しのうち、照れくさかったり言い過ぎたりして「やっぱり送信取り消し」したくなるものがあれば、その番号（0から）。なければ -1。'; }
+  if (opt.quote && opt.quote.length) {
+    props.quote = { type: 'integer' };
+    extra += `\n- quote：ユーザーの少し前のメッセージに「引用して」返すとき（LINEの引用返信。続けて送られたうちの特定の1つに答える・少し前の話に戻る、など、どれへの返事かを示したほうが自然なとき）、その番号。ふだんは -1。
+${opt.quote.map((m, i) => `  ${i}：「${trunc(m.text, 60)}」`).join('\n')}`;
+  }
+  if (opt.ps) { props.postscript = { type: 'string' }; extra += '\n- postscript：送り終えて数分たってから、ふと思い出したように付け足す短い一言（「あ、そういえば…」「さっき言い忘れましたが」「＊追伸」など、キャラクターらしく）。付け足したいことが自然にあるときだけ。ふだんは ""。'; }
   if (opt.typo) extra += '\n- 今回は、吹き出しのどれか1か所で、スマホらしい自然な打ち間違い（変換ミスなど）をして、次の吹き出しで「＊正しい言葉」と短く訂正する。キャラクターに合わなければしなくてよい。';
   if (opt.react) {
     props.stamp = { type: 'string' };
@@ -3802,6 +3980,8 @@ ${Object.keys(STAMPS).filter((k) => k !== '🏃').map((k) => `  ${k}：${STAMPS[
     photo: opt.photo ? String((r && r.photo) || '').trim() : '',
     edit: opt.edit ? String((r && r.photo_edit) || '').trim() : '',
     retract: opt.retract ? Number(r && r.retract) : -1,
+    quoteId: opt.quote && Number.isInteger(Number(r && r.quote)) && opt.quote[Number(r.quote)] ? opt.quote[Number(r.quote)].id : 0,
+    postscript: opt.ps ? String((r && r.postscript) || '').trim().slice(0, 200) : '',
   };
 }
 
@@ -4093,7 +4273,7 @@ async function pushPayload(env, obj) {
 async function pushToAll(env, c, msgs) {
   if (!msgs.length) return;
   const st = await getSettings(env);
-  const body = truncBytes(msgs.map((m) => (m.image && !m.text ? '📷 写真' : m.text)).filter(Boolean).join('\n'), 1800);
+  const body = truncBytes(msgs.map((m) => (m.kind === 'call' ? '📞 不在着信' : m.image && !m.text ? '📷 写真' : m.text)).filter(Boolean).join('\n'), 1800);
   if (st.notifyVia !== 'bark') await pushPayload(env, { title: c.name, body, charId: c.id, badge: await totalUnread(env) });
   if (st.notifyVia !== 'web') await sendBark(env, st, { title: c.name, body, cid: c.id, group: c.name }).catch((e) => log(env, 'Bark通知: ' + e.message));
 }

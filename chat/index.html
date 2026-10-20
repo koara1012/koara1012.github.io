@@ -335,6 +335,11 @@ body.ura #list.tlMode{background:#efe9f0}
       <input type="text" id="edName" maxlength="40" placeholder="例：ゆい">
     </div>
     <div class="field">
+      <label class="t">誕生日（任意）</label>
+      <div class="inline"><select id="edBdM"></select> 月 <select id="edBdD"></select> 日</div>
+      <div class="hint">その子は自分の誕生日を知っていて、聞かれれば答えます。誕生日が近づくとそわそわし、当日はほかの子もお祝いします（表のトーク・TL）。</div>
+    </div>
+    <div class="field">
       <label class="t" for="edPrompt">キャラ設定（プロンプト）</label>
       <textarea id="edPrompt" placeholder="性格、口調、一人称、ユーザーとの関係、好きなもの、話し方の例など"></textarea>
       <div class="hint">口調の例を何行か書いておくと、キャラらしさが安定します。</div>
@@ -683,7 +688,7 @@ body.ura #list.tlMode{background:#efe9f0}
 
 <script>
 'use strict';
-const APP_VERSION = '第29版（2026-10-19 02:00:00 更新・日常感の強化）';
+const APP_VERSION = '第30版（2026-10-21 04:00:00 更新・キャラの誕生日）';
 const $ = (id) => document.getElementById(id);
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 const esc = (s) => String(s).replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
@@ -1562,6 +1567,11 @@ function openEdit(id) {
   $('edTlPer').value = def(c && c.tlPerDay, 2);
   $('edUraTlPer').value = def(c && c.uraTlPerDay, 1);
   $('edNewsKw').value = c ? c.newsKeywords || '' : '';
+  const two = (n) => String(n).padStart(2, '0');
+  $('edBdM').innerHTML = '<option value="">--</option>' + Array.from({ length: 12 }, (_, i) => `<option value="${two(i + 1)}">${i + 1}</option>`).join('');
+  $('edBdD').innerHTML = '<option value="">--</option>' + Array.from({ length: 31 }, (_, i) => `<option value="${two(i + 1)}">${i + 1}</option>`).join('');
+  const cb = String(c && c.birthday || '').split('-');
+  $('edBdM').value = cb[0] || ''; $('edBdD').value = cb[1] || '';
   edit.jealous = c && c.jealous ? c.jealous : 'auto';
   edit.replySpeed = c && c.replySpeed ? c.replySpeed : 'auto';
   $('edLifeBox').style.display = c ? '' : 'none';
@@ -1638,7 +1648,10 @@ async function saveEdit() {
     uraNarration: edit.uraNarration, uraLength: edit.uraLength || 'normal', uraMaxSplit: +$('edUraSplit').value,
     affinity: +$('edAff').value, snsActivity: +$('edAct').value, tlPerDay: +$('edTlPer').value, uraTlPerDay: +$('edUraTlPer').value,
     newsKeywords: $('edNewsKw').value.trim(), jealous: edit.jealous || 'auto', replySpeed: edit.replySpeed || 'auto',
+    birthday: $('edBdM').value && $('edBdD').value ? $('edBdM').value + '-' + $('edBdD').value : '',
   };
+  if (($('edBdM').value === '') !== ($('edBdD').value === '')) return toast('誕生日は月と日の両方を選んでください');
+  if (char.birthday && ['02-30', '02-31', '04-31', '06-31', '09-31', '11-31'].includes(char.birthday)) return toast('その日付はありません');
   if (edit.icon !== undefined) char.icon = edit.icon;
   if (edit.uraIcon !== undefined) char.uraIcon = edit.uraIcon;
   $('edSave').disabled = true;

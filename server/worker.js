@@ -14,7 +14,7 @@
 //    ・Cron トリガー  * * * * *  （毎分。実際に動くのは13分おき）
 // =====================================================================
 
-const VERSION = '第29版（2026-10-19 02:00:00 更新・日常感の強化）';
+const VERSION = '第30版（2026-10-21 04:00:00 更新・キャラの誕生日）';
 const DEFAULT_MODEL = 'gemini-flash-latest';
 const DEFAULT_GROK_MODEL = 'grok-4.7';                 // X（Twitter）の Grok と同じ最新世代
 const FALLBACK_GROK_MODEL = 'grok-4-fast-non-reasoning'; // 上が使えないときの予備
@@ -227,7 +227,22 @@ function normChar(c) {
     newsKeywords: String(c.newsKeywords || '').slice(0, 200),     // 興味のあるニュースのキーワード（空ならキャラ設定からAIが考える）
     replySpeed: ['fast', 'normal', 'slow'].includes(c.replySpeed) ? c.replySpeed : 'auto', // 返事の早さ：おまかせ（設定から判断）／すぐ返す／ふつう／のんびり
     jealous: ['yes', 'no'].includes(c.jealous) ? c.jealous : 'auto', // 嫉妬する：おまかせ（設定から判断）／する／しない
+    birthday: validMD(c.birthday) ? c.birthday : '', // キャラの誕生日 "MM-DD"（空なら決めていない）
   };
+}
+function validMD(v) { const m = /^(\d{2})-(\d{2})$/.exec(String(v || '')); return !!m && +m[1] >= 1 && +m[1] <= 12 && +m[2] >= 1 && +m[2] <= [31, 29, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31][+m[1] - 1]; }
+const mdText = (md) => `${+md.slice(0, 2)}月${+md.slice(3)}日`;
+const bdayLine = (c) => (c.birthday ? `\n（あなたの誕生日：${mdText(c.birthday)}）` : '');
+// 誕生日まであと何日か（今日なら0）。うるう年の2/29は、平年は2/28に祝う
+function daysToMD(md, now) {
+  const today = jstDay(now), y = +today.slice(0, 4);
+  for (const yy of [y, y + 1]) {
+    let d = `${yy}-${md}`;
+    if (md === '02-29' && !(yy % 4 === 0 && (yy % 100 !== 0 || yy % 400 === 0))) d = `${yy}-02-28`;
+    const n = dayDiff(today, d);
+    if (n >= 0) return n;
+  }
+  return 999;
 }
 
 // "abc#ura" → { base: 'abc', world: 'ura', key: 'abc#ura' }
@@ -1110,7 +1125,7 @@ function buildSystem(c, d, hist, now, tlInfo = '', lifeInfo = '') {
   return `あなたは次のキャラクターになりきって、ユーザーとスマホのメッセージアプリ（LINEのようなチャット）でやり取りしています。
 
 # キャラクター: ${c.name}
-${c.prompt || '（設定なし）'}
+${c.prompt || '（設定なし）'}${bdayLine(c)}
 ${tlInfo}${lifeInfo}
 # やり取りのルール（キャラクター設定に別の指示があればそちらを優先）
 - 実際にスマホでメッセージを打っているように、短く自然な話し言葉で書く。
@@ -1193,7 +1208,7 @@ function buildUraSystem(c, tlInfo = '') {
 これはスマホのメッセージアプリ（SNS）でのやり取りとは完全に別の時間軸・別の世界線の出来事です。SNSでの会話の内容は知らないものとして振る舞ってください。
 
 # キャラクター: ${c.uraName || c.name}${alias}
-${own ? c.uraCharPrompt : (c.prompt || '（設定なし）')}
+${own ? c.uraCharPrompt : (c.prompt || '（設定なし）')}${bdayLine(c)}
 ${c.uraPrompt ? `
 # この場面（対面）での追加設定
 ${c.uraPrompt}
@@ -1959,7 +1974,7 @@ function charPersona(c, world, max = 4000) {
     const own = c.uraCharPrompt && c.uraCharPrompt.trim();
     p = (own ? c.uraCharPrompt : (c.prompt || '（設定なし）')) + (c.uraPrompt ? '\n（この世界での追加設定）\n' + c.uraPrompt : '');
   } else p = c.prompt || '（設定なし）';
-  return p.length > max ? p.slice(0, max) + '…' : p;
+  return (p.length > max ? p.slice(0, max) + '…' : p) + bdayLine(c);
 }
 function meName(st, world) { return (world === 'ura' ? st.meNameUra || st.meName : st.meName) || 'あなた'; }
 function worldDesc(world) {
@@ -2275,7 +2290,7 @@ async function tlLifeTheme(env, c, st, now) {
   const today = jstDay(now);
   let w = null;
   try { w = await getWeather(env, st); } catch (_) {}
-  const occ = state.tlOcc === today ? [] : occasionsToday(c, st, now);
+  const occ = state.tlOcc === today ? [] : occasionsToday(c, st, now, await loadChars(env));
   const ev = state.tlOcc === today ? null : (EVENTS.find(([d]) => d === today.slice(5)) || [])[1];
   const table = [
     ['free', 25],
@@ -2654,7 +2669,9 @@ async function dailyUpdate(env, c, st, now, force = false) {
   const meetsToday = (await kvGet(env, 'meet:' + today, [])).filter((m) => m.a === c.id || m.b === c.id);
   const meetsYday = (await kvGet(env, 'meet:' + addDays(today, -1), [])).filter((m) => m.a === c.id || m.b === c.id);
   const otherOf = (m) => (m.a === c.id ? m.bName : m.aName);
-  const mayMeet = others.length && !meetsToday.length && Math.random() < 0.22;
+  const bdOthers = others.filter((o) => o.birthday && daysToMD(o.birthday, now) === 0);
+  const myBday = c.birthday && daysToMD(c.birthday, now) === 0;
+  const mayMeet = others.length && !meetsToday.length && Math.random() < (bdOthers.length || myBday ? 0.6 : 0.22); // 誕生日の子がいる日は、一緒に過ごしやすい
   const system = 'あなたは、キャラクターの日々の暮らしを考える係です。キャラクター設定と作品の世界観に合った、自然で小さな日常を考えます。大事件は起こしません。';
   const user = `# キャラクター: ${c.name}
 ${trunc(c.prompt || '（設定なし）', 2500)}
@@ -2680,6 +2697,7 @@ ${ySleep ? `昨夜寝た時刻：${hmJ(ySleep.s)}` : ''}
 昨日の疲れ：${nz(state.fatigue, 30)}/100
 ${cond ? `数日続いている体調・状況：「${cond.label}」（${dayDiff(cond.start, today) + 1}日目／${cond.days}日ほどの見込み）` : ''}
 
+${myBday ? '# 今日はあなたの誕生日\n（気分・今日の過ごし方・予定表に反映する。友達にお祝いされる、ちょっとしたごちそう、など）\n' : ''}${bdOthers.length ? `# 今日は ${bdOthers.map((o) => o.name + 'さん').join('・')} の誕生日\n（お祝いのメッセージを送る・プレゼントを渡す・一緒に過ごす、など、関係に合わせて予定や日記に反映してよい）\n` : ''}${c.birthday && !myBday && daysToMD(c.birthday, now) <= 3 ? `（あと${daysToMD(c.birthday, now)}日であなたの誕生日）\n` : ''}
 # 毎週の習慣・季節の好み
 ${rh.habits || '（特になし）'}
 ${rh.seasonal ? '季節：' + rh.seasonal.replace(/\n/g, '／') : ''}
@@ -3697,6 +3715,19 @@ ${(state.diary || []).slice(-2).map((x) => `${fmtDay(x.d)}の出来事：${x.t}`
 ${meets.map((m) => `- 今日${m.time ? ' ' + m.time + 'ごろ' : ''}：${who(m)}さんと「${m.act}」${m.time && jstParts(now).h * 60 + jstParts(now).mi >= m.time.split(':')[0] * 60 + +m.time.split(':')[1] ? '（もう過ごした／過ごしている）' : '（これから）'}`).join('\n')}${meetsY.map((m) => `\n- 昨日：${who(m)}さんと「${m.act}」`).join('')}
 （聞かれたり話の流れが合えば話してよい。相手の子の言っていることと食い違わないように。相手の子の秘密は話さない）`);
   }
+  const bd = [];
+  if (c.birthday) {
+    const n = daysToMD(c.birthday, now);
+    if (n === 0) bd.push(`今日はあなた（${c.name}）の誕生日。ユーザーにお祝いされたら、キャラクターらしく喜ぶ。`);
+    else if (n <= 3) bd.push(`あと${n}日であなたの誕生日（${mdText(c.birthday)}）。自分から言うかどうかはキャラクターしだい（期待してそわそわする、さりげなくほのめかす、など）。`);
+    else if (n >= 362) bd.push(`昨日はあなたの誕生日だった（${mdText(c.birthday)}）。`);
+  }
+  for (const o of (await loadChars(env)).filter((x) => x.id !== c.id && x.birthday)) {
+    const n = daysToMD(o.birthday, now);
+    if (n === 0) bd.push(`今日は${o.name}さんの誕生日（ユーザーもその子を知っている）。`);
+    else if (n === 1) bd.push(`明日は${o.name}さんの誕生日。`);
+  }
+  if (bd.length) out.push('# 誕生日\n' + bd.join('\n'));
   const rh = await getRhythm(env, c, false).catch(() => null);
   if (rh && rh.habits) out.push(`# あなたの毎週の習慣\n${rh.habits}\n（今日の曜日に当てはまるものがあれば、自然ににじませてよい）`);
   out.push(`# あなたが今していること（だいたいの予定）
@@ -3748,9 +3779,11 @@ async function jealousySignal(env, c, chars, now) {
 }
 
 // ---- 特別な日（誕生日・出会って◯日・行事）
-function occasionsToday(c, st, now) {
+function occasionsToday(c, st, now, others = []) {
   const today = jstDay(now), md = today.slice(5);
   const out = [];
+  if (c.birthday && daysToMD(c.birthday, now) === 0) out.push({ key: 'charbday', label: 'あなた自身の誕生日' });
+  for (const o of others) if (o.id !== c.id && o.birthday && daysToMD(o.birthday, now) === 0) out.push({ key: 'obday:' + o.id, label: `${o.name}さんの誕生日`, other: true });
   if (st.birthday && st.birthday === md) out.push({ key: 'birthday', label: 'ユーザーの誕生日' });
   const days = dayDiff(jstDay(c.created || now), today);
   if ([30, 100, 200, 300, 500, 1000].includes(days) || (days > 0 && days % 365 === 0)) {
@@ -3770,7 +3803,7 @@ async function lifeDecide(env, c, hist, lastRead, now, st, ctxAll) {
   const state = await getState(env, c.id);
   const unread = hist.filter((m) => m.sender === 'char' && m.at > lastRead).length;
   // 特別な日：1日1回、朝のうちに届くことが多い
-  for (const occ of occasionsToday(c, st, now)) {
+  for (const occ of occasionsToday(c, st, now).filter((o) => !o.other)) {
     const k = occ.key + ':' + today;
     if ((state.specials || {})[k]) continue;
     if (Math.random() < 0.3) return { mode: 'special', occ, stateKey: k };
@@ -3869,6 +3902,7 @@ function flavorText(d) {
 function lifeSituation(d, now) {
   switch (d.mode) {
     case 'special':
+      if (d.occ.key === 'charbday') return '今日はあなた自身の誕生日です。キャラクターらしく、うれしさ・ちょっとした期待（ユーザーに覚えていてほしい、お祝いしてほしい）・照れなどをにじませて話しかけてください（吹き出し1〜3つ。自分から誕生日だと言うか、遠回しにほのめかすかは性格しだい。もうユーザーにお祝いされていたら、そのお礼を）。';
       return d.occ.key === 'birthday'
         ? '今日はユーザーの誕生日です。キャラクターらしく心をこめて、いつもより長い手紙のようなメッセージを送ってください（1つの吹き出しに200〜450字。最後に短い吹き出しを1つ添えてもよい）。'
         : `今日は「${d.occ.label}」です。キャラクターらしく、その日にちなんだ、いつもより長めの手紙のようなメッセージを送ってください（1つの吹き出しに150〜400字）。`;

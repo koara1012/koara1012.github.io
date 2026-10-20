@@ -110,7 +110,7 @@ ok(d && d.mode === 'followup' && d.phase === 'after', 'follow-up after the date'
 d = await X.lifeDecide(env, C, hist.map(m => ({ ...m, at: day('2026-10-14') - 7200e3 })), day('2026-10-14') - 3600e3, day('2026-10-14'), settings, { chars, lastUserActive: day('2026-10-14') - 3600e3 });
 ok(d && d.mode === 'special' && d.occ.key === 'birthday', 'birthday letter');
 // absent
-d = await X.lifeDecide(env, C, hist, Date.now(), day('2026-10-20'), { ...settings, birthday: '' }, { chars, lastUserActive: day('2026-10-16') });
+d = await X.lifeDecide(env, C, hist.map(m => ({ ...m, at: day('2026-10-16') })), day('2026-10-16'), day('2026-10-20'), { ...settings, birthday: '' }, { chars, lastUserActive: day('2026-10-16') });
 ok(d && d.mode === 'absent' && d.days === 4, 'absent 4 days');
 // jealousy: user talks a lot with rei
 DB.raw.prepare("UPDATE messages SET at=at-8*3600000 WHERE char_id=? AND sender='me'").run(c.id);

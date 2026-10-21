@@ -14,7 +14,7 @@
 //    ・Cron トリガー  * * * * *  （毎分。実際に動くのは13分おき）
 // =====================================================================
 
-const VERSION = '第30版（2026-10-21 04:00:00 更新・キャラの誕生日）';
+const VERSION = '第31版（2026-10-21 19:30:00 更新・TLに写真を投稿）';
 const DEFAULT_MODEL = 'gemini-flash-latest';
 const DEFAULT_GROK_MODEL = 'grok-4.7';                 // X（Twitter）の Grok と同じ最新世代
 const FALLBACK_GROK_MODEL = 'grok-4-fast-non-reasoning'; // 上が使えないときの予備
@@ -795,11 +795,24 @@ async function route(key, url, body, env, ctx) {
     case 'POST /tl/post': {
       const world = body.world === 'ura' ? 'ura' : 'omote';
       const text = String(body.text || '').trim().slice(0, 1000);
-      if (!text) throw new HttpError(400, '投稿が空です');
+      let image = null;
+      if (typeof body.image === 'string' && body.image) {
+        if (body.image.length > 4000000) throw new HttpError(400, '写真が大きすぎます');
+        image = await saveImage(env, body.image);
+      }
+      if (!text && !image) throw new HttpError(400, '投稿が空です');
       const at = Date.now();
-      const r = await env.DB.prepare('INSERT INTO tl_posts (world,author,text,at,planned) VALUES (?,?,?,?,0)').bind(world, ME, text, at).run();
-      const post = { id: r.meta.last_row_id, world, author: ME, text, at, planned: 0 };
-      ctx.waitUntil(runTlJobs(env, 2).catch((e) => log(env, 'TL: ' + e.message))); // 誰がどう反応するかをすぐに決める
+      // 写真付きは、AIが写真の中身を言葉にしてから反応を決める（それまでは planned=1 で待たせる）
+      const r = await env.DB.prepare('INSERT INTO tl_posts (world,author,text,at,planned,image) VALUES (?,?,?,?,?,?)').bind(world, ME, text, at, image ? 1 : 0, image).run();
+      const post = { id: r.meta.last_row_id, world, author: ME, text, at, planned: 0, ...(image ? { image } : {}) };
+      ctx.waitUntil((async () => {
+        if (image) {
+          let alt = '';
+          try { alt = await describePhoto(env, world, image, text); } catch (e) { await log(env, 'TLの写真の説明: ' + e.message); }
+          await env.DB.prepare('UPDATE tl_posts SET alt=?, planned=0 WHERE id=?').bind(alt || '（写真。内容はよくわからない）', post.id).run();
+        }
+        await runTlJobs(env, 2); // 誰がどう反応するかをすぐに決める
+      })().catch((e) => log(env, 'TL: ' + e.message)));
       return json({ post: { ...post, likes: [], comments: [] } });
     }
 
@@ -1564,6 +1577,16 @@ async function runDuePostscripts(env) {
   return n;
 }
 
+// あなたがTLに載せた写真を、キャラたちが反応できるように短い言葉にする（1回だけ）
+async function describePhoto(env, world, imageId, text) {
+  const im = await loadImage(env, imageId);
+  if (!im) return '';
+  const contents = [{ role: 'user', parts: [{ inlineData: { mimeType: im.mime, data: im.b64 } }, { text: `SNSに投稿された写真です。${text ? `本文は「${trunc(text, 200)}」。` : ''}写っているものを、見た人が反応しやすいように具体的に1〜2文で説明してください（何が・どんな様子か・雰囲気。人物が写っていれば、人数やしていることだけを書き、見た目の特徴は書かない）。` }] }];
+  const r = await callAIObj(env, world, 'あなたは写真の内容を短く正確に説明する係です。', contents,
+    { type: 'object', properties: { alt: { type: 'string' } }, required: ['alt'], additionalProperties: false }, 'photo_alt');
+  return String((r && r.alt) || '').trim().slice(0, 200);
+}
+
 async function applyRetracts(env) {
   await env.DB.prepare('UPDATE messages SET retracted=1 WHERE retract_at IS NOT NULL AND retract_at<=? AND retracted=0').bind(Date.now()).run();
 }
@@ -2056,14 +2079,14 @@ async function talkContext(env, c, world) {
 async function tlContextForTalk(env, c, world) {
   const now = Date.now();
   const ura = world === 'ura';
-  const { results: mine } = await env.DB.prepare("SELECT id,text,at FROM tl_posts WHERE world=? AND author='me' AND at>? ORDER BY id DESC LIMIT 4").bind(world, now - 48 * 3600e3).all();
+  const { results: mine } = await env.DB.prepare("SELECT id,text,at,alt FROM tl_posts WHERE world=? AND author='me' AND at>? ORDER BY id DESC LIMIT 4").bind(world, now - 48 * 3600e3).all();
   const { results: own } = await env.DB.prepare('SELECT id,text,at FROM tl_posts WHERE world=? AND author=? ORDER BY id DESC LIMIT 2').bind(world, c.id).all();
   if (!mine.length && !own.length) return '';
   const lines = [];
   for (const p of mine) {
     const liked = await env.DB.prepare('SELECT 1 FROM tl_likes WHERE post_id=? AND author=?').bind(p.id, c.id).first();
     const cm = await env.DB.prepare('SELECT text FROM tl_comments WHERE post_id=? AND author=? ORDER BY id DESC LIMIT 1').bind(p.id, c.id).first();
-    lines.push(`- ユーザーの投稿${ura ? '' : `（${fmtDur(now - p.at)}前）`}「${trunc(p.text, 100)}」→ あなたは${liked ? 'いいね済み' : 'いいねしていない'}${cm ? `・コメント「${trunc(cm.text, 60)}」` : ''}`);
+    lines.push(`- ユーザーの投稿${ura ? '' : `（${fmtDur(now - p.at)}前）`}「${trunc(p.text, 100)}」${p.alt ? `（写真：${trunc(p.alt, 80)}）` : ''}→ あなたは${liked ? 'いいね済み' : 'いいねしていない'}${cm ? `・コメント「${trunc(cm.text, 60)}」` : ''}`);
   }
   for (const p of own) {
     const lk = await env.DB.prepare("SELECT 1 FROM tl_likes WHERE post_id=? AND author='me'").bind(p.id).first();
@@ -2103,7 +2126,7 @@ ${worldDesc(world)}
 
 # 投稿
 投稿者: ${authorName}${post.author === ME ? '（ユーザー本人）' : ''}
-本文: ${post.text}${post.alt ? `\n添付写真：${post.alt}` : ''}
+本文: ${post.text || '（本文なし。写真だけの投稿）'}${post.alt ? `\n添付写真：${post.alt}` : ''}
 ${post.author !== ME ? `\n# 投稿者（${authorName}）のキャラクター設定\n${charPersona(author, world, 1500)}\n` : ''}
 # 判定するキャラクター
 ${cands.map((c) => `## id: ${c.id} ／ 名前: ${cName(c, world)}
@@ -2223,7 +2246,7 @@ ${worldDesc(world)}
 
 # 投稿
 投稿者: ${nameOf(post.author)}${world === 'omote' ? `（${fmtDur(now - post.at)}前）` : ''}
-本文: ${post.text}${post.alt ? `\n添付写真：${post.alt}` : ''}
+本文: ${post.text || '（本文なし。写真だけの投稿）'}${post.alt ? `\n添付写真：${post.alt}` : ''}
 
 # これまでのコメント
 ${cms.length ? cms.map((x) => `${nameOf(x.author)}${x.reply_to ? '（返信）' : ''}: ${trunc(x.text, 150)}`).join('\n') : '（まだなし）'}
@@ -2394,7 +2417,7 @@ async function execJob(env, j) {
   if (j.kind === 'like') {
     const r = await env.DB.prepare('INSERT OR IGNORE INTO tl_likes (post_id,author,at) VALUES (?,?,?)').bind(post.id, c.id, Date.now()).run();
     if (r.meta && r.meta.changes === 0) return false;
-    if (post.author === ME) await pushTL(env, st, world, 'tlLike', { title: `${who}さんがいいねしました`, body: trunc(post.text, 80), post, tag: 'like-' + post.id, actor: c.id });
+    if (post.author === ME) await pushTL(env, st, world, 'tlLike', { title: `${who}さんがいいねしました`, body: trunc(post.text || '📷 写真', 80), post, tag: 'like-' + post.id, actor: c.id });
     return true;
   }
 

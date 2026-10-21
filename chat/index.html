@@ -206,7 +206,11 @@ body.ura #list.tlMode{background:#efe9f0}
 .compose{background:var(--bg);margin:10px;border-radius:14px;padding:12px;display:flex;gap:10px;align-items:flex-start;border:1px solid var(--line)}
 .compose .mid{flex:1;min-width:0;display:flex;flex-direction:column;gap:8px}
 .compose textarea{width:100%;border:0;resize:none;outline:none;min-height:44px;max-height:160px;line-height:1.5;background:transparent;font-size:15px}
-.compose .act{display:flex;justify-content:flex-end}
+.compose .act{display:flex;justify-content:space-between;align-items:center}
+.compose .camb{border:0;background:none;font-size:22px;padding:2px 6px;cursor:pointer;line-height:1}
+.compose .prev{position:relative;align-self:flex-start}
+.compose .prev img{display:block;max-width:180px;max-height:180px;border-radius:12px}
+.compose .prev button{position:absolute;top:4px;right:4px;width:26px;height:26px;border-radius:50%;border:0;background:rgba(0,0,0,.6);color:#fff;font-size:15px;line-height:1;cursor:pointer}
 .pill{padding:7px 16px;border-radius:999px;background:var(--accent);color:#fff;font-weight:700;font-size:14px}
 .pill:disabled{background:#c5cbd5}
 .post{background:var(--bg);margin:0 10px 10px;border-radius:14px;padding:12px;display:flex;gap:10px;border:1px solid var(--line);cursor:pointer}
@@ -688,7 +692,7 @@ body.ura #list.tlMode{background:#efe9f0}
 
 <script>
 'use strict';
-const APP_VERSION = '第30版（2026-10-21 04:00:00 更新・キャラの誕生日）';
+const APP_VERSION = '第31版（2026-10-21 19:30:00 更新・TLに写真を投稿）';
 const $ = (id) => document.getElementById(id);
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 const esc = (s) => String(s).replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
@@ -1310,7 +1314,7 @@ function postHTML(p, world, big) {
     ${authorAvatar(p.author, world)}
     <div class="mid">
       <div class="hd"><span class="nm">${esc(authorName(p.author, world))}</span>${t ? `<span class="tm">${t}</span>` : ''}</div>
-      <div class="tx">${esc(p.text)}</div>
+      ${p.text ? `<div class="tx">${esc(p.text)}</div>` : ''}
       ${p.image ? `<div class="pimg"><img ${imgCache[p.image] ? `src="${imgCache[p.image]}"` : `data-img="${esc(p.image)}"`} alt="${esc(p.alt || '写真')}"></div>` : ''}
       ${!big && lk ? `<div class="who">${esc(lk)}</div>` : ''}
       <div class="acts">
@@ -1334,7 +1338,9 @@ function renderTL() {
         <span id="tlMeAv"></span>
         <div class="mid">
           <textarea id="tlInput" placeholder="${w === 'ura' ? '裏のタイムラインに投稿' : 'いまどうしてる？'}" maxlength="1000">${esc(draft)}</textarea>
-          <div class="act"><button class="pill" id="tlPost" ${draft.trim() ? '' : 'disabled'}>投稿</button></div>
+          <div class="prev" id="tlPrev" hidden><img id="tlPrevImg" alt="添付する写真"><button id="tlPrevX" aria-label="写真を外す">×</button></div>
+          <div class="act"><button class="camb" id="tlCam" aria-label="写真を付ける">📷</button><button class="pill" id="tlPost" ${draft.trim() ? '' : 'disabled'}>投稿</button></div>
+          <input type="file" id="tlFile" accept="image/*" hidden>
         </div>
       </div>
       <div id="tlPosts"></div>
@@ -1342,6 +1348,7 @@ function renderTL() {
     wrap = el.querySelector('#tlWrap');
     const ta = el.querySelector('#tlInput');
     ta.style.height = 'auto'; ta.style.height = Math.min(160, Math.max(44, ta.scrollHeight)) + 'px';
+    syncTlCompose();
   }
   const av = authorAvatar(ME, w);
   if (el.querySelector('#tlMeAv').innerHTML !== av) el.querySelector('#tlMeAv').innerHTML = av;
@@ -1354,22 +1361,33 @@ function renderTL() {
   if (box.innerHTML !== html) box.innerHTML = html;
 }
 
+// 投稿に付ける写真（送る前に縮める。世界ごとに1枚）
+const tlPhoto = { omote: null, ura: null };
+function syncTlCompose() {
+  const ta = $('tlInput'); if (!ta) return;
+  const ph = tlPhoto[S.world];
+  $('tlPrev').hidden = !ph; if (ph) $('tlPrevImg').src = ph;
+  $('tlPost').disabled = !ta.value.trim() && !ph;
+}
 async function postTL() {
   const ta = $('tlInput'); if (!ta) return;
-  const text = ta.value.trim(); if (!text) return;
   const w = S.world;
-  const tmp = { id: 'tmp' + Date.now(), world: w, author: ME, text, at: Date.now(), likes: [], comments: [], pending: true };
+  const text = ta.value.trim(), image = tlPhoto[w];
+  if (!text && !image) return;
+  if (image) imgCache['tmpimg'] = image;
+  const tmp = { id: 'tmp' + Date.now(), world: w, author: ME, text, at: Date.now(), likes: [], comments: [], pending: true, ...(image ? { image: 'tmpimg' } : {}) };
   S.tl[w] = [tmp].concat(S.tl[w] || []);
-  ta.value = ''; store.del('tl.draft.' + w); ta.style.height = '44px'; $('tlPost').disabled = true; ta.blur();
+  ta.value = ''; store.del('tl.draft.' + w); ta.style.height = '44px'; tlPhoto[w] = null; syncTlCompose(); ta.blur();
   renderAll();
   try {
-    const d = await api('POST', '/tl/post', { world: w, text });
+    const d = await api('POST', '/tl/post', { world: w, text, ...(image ? { image } : {}) });
+    if (image && d.post.image) imgCache[d.post.image] = image; // 送った写真はそのまま表示に使う
     S.tl[w] = (S.tl[w] || []).map((p) => (p === tmp ? d.post : p));
     renderAll();
     setTimeout(() => loadTL(w, true), 6000); // 早い子は数分で反応するので、少ししたら読み直す
   } catch (e) {
     S.tl[w] = (S.tl[w] || []).filter((p) => p !== tmp);
-    store.set('tl.draft.' + w, text); ta.value = text; $('tlPost').disabled = false; renderAll();
+    store.set('tl.draft.' + w, text); ta.value = text; tlPhoto[w] = image; syncTlCompose(); renderAll();
     toast('投稿できませんでした：' + e.message, 4000);
   }
 }
@@ -2005,11 +2023,19 @@ $('list').addEventListener('input', (e) => {
   if (e.target.id !== 'tlInput') return;
   const ta = e.target; store.set('tl.draft.' + S.world, ta.value);
   ta.style.height = 'auto'; ta.style.height = Math.min(160, Math.max(44, ta.scrollHeight)) + 'px';
-  const b = $('tlPost'); if (b) b.disabled = !ta.value.trim();
+  const b = $('tlPost'); if (b) b.disabled = !ta.value.trim() && !tlPhoto[S.world];
+});
+$('list').addEventListener('change', async (e) => {
+  if (e.target.id !== 'tlFile') return;
+  const f = e.target.files[0]; e.target.value = '';
+  if (!f) return;
+  try { tlPhoto[S.world] = await photoToDataUrl(f); syncTlCompose(); } catch (err) { toast(err.message); }
 });
 $('list').addEventListener('click', (e) => {
   if (S.mode !== 'tl') return;
   if (e.target.closest('#tlPost')) { postTL(); return; }
+  if (e.target.closest('#tlCam')) { $('tlFile').click(); return; }
+  if (e.target.closest('#tlPrevX')) { tlPhoto[S.world] = null; syncTlCompose(); return; }
   const lk = e.target.closest('[data-like]'); if (lk) { e.stopPropagation(); toggleLike(lk.dataset.like); return; }
   if (e.target.closest('.compose')) return;
   const op = e.target.closest('[data-open]') || e.target.closest('.post');

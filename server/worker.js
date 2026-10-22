@@ -14,7 +14,7 @@
 //    ・Cron トリガー  * * * * *  （毎分。実際に動くのは13分おき）
 // =====================================================================
 
-const VERSION = '第31版（2026-10-21 19:30:00 更新・TLに写真を投稿）';
+const VERSION = '第32版（2026-10-23 05:00:00 更新・裏のグループ）';
 const DEFAULT_MODEL = 'gemini-flash-latest';
 const DEFAULT_GROK_MODEL = 'grok-4.7';                 // X（Twitter）の Grok と同じ最新世代
 const FALLBACK_GROK_MODEL = 'grok-4-fast-non-reasoning'; // 上が使えないときの予備
@@ -103,10 +103,11 @@ async function ensureSchema(env) {
     env.DB.prepare('CREATE INDEX IF NOT EXISTS idx_memories ON memories(char_id, id)'),
     env.DB.prepare('CREATE TABLE IF NOT EXISTS char_state (char_id TEXT PRIMARY KEY, data TEXT NOT NULL)'),
     env.DB.prepare('CREATE TABLE IF NOT EXISTS images (id TEXT NOT NULL, part INTEGER NOT NULL, mime TEXT NOT NULL, data TEXT NOT NULL, PRIMARY KEY (id, part))'),
+    env.DB.prepare('CREATE TABLE IF NOT EXISTS groups (id TEXT PRIMARY KEY, data TEXT NOT NULL, created INTEGER)'), // 裏のグループ
     env.DB.prepare('CREATE TABLE IF NOT EXISTS ai_cost (world TEXT NOT NULL, month TEXT NOT NULL, usd REAL NOT NULL DEFAULT 0, calls INTEGER NOT NULL DEFAULT 0, tin INTEGER NOT NULL DEFAULT 0, tout INTEGER NOT NULL DEFAULT 0, images INTEGER NOT NULL DEFAULT 0, PRIMARY KEY (world, month))'), // AIの利用料金（目安）
   ]);
   // 既存の messages に写真・送信取り消し用の列を足す（2回目以降は「もうある」で失敗するので無視）
-  for (const col of ['image TEXT', 'alt TEXT', 'retracted INTEGER NOT NULL DEFAULT 0', 'retract_at INTEGER', 'reaction TEXT', 'reacted_at INTEGER', 'reply_to INTEGER', 'kind TEXT']) {
+  for (const col of ['image TEXT', 'alt TEXT', 'retracted INTEGER NOT NULL DEFAULT 0', 'retract_at INTEGER', 'reaction TEXT', 'reacted_at INTEGER', 'reply_to INTEGER', 'kind TEXT', 'speaker TEXT']) {
     try { await env.DB.prepare('ALTER TABLE messages ADD COLUMN ' + col).run(); } catch (_) {}
   }
   // TLの投稿に写真を付けられるようにする
@@ -259,6 +260,37 @@ async function loadChars(env) {
   const { results } = await env.DB.prepare(`SELECT ${CHAR_COLS} ORDER BY c.created`).all();
   return results.map(rowToChar);
 }
+// 裏のグループ（id は "grp-" で始まる）
+const isGroupId = (id) => String(id || '').startsWith('grp-');
+function normGroup(g) {
+  return {
+    id: typeof g.id === 'string' && /^grp-[\w-]{1,60}$/.test(g.id) ? g.id : 'grp-' + crypto.randomUUID(),
+    name: String(g.name || '').trim().slice(0, 40) || 'グループ',
+    members: [...new Set((Array.isArray(g.members) ? g.members : []).map(String))].slice(0, 10),
+    synopsis: String(g.synopsis || '').slice(0, 6000),        // あらすじ（物語の導入）
+    narration: g.narration !== false,                          // ナレーションを入れるか
+    length: ['short', 'normal', 'long'].includes(g.length) ? g.length : 'normal',
+    maxSplit: clamp(Math.round(num(g.maxSplit, 6)), 2, 12),   // 1回の返事の吹き出しの最大数
+  };
+}
+async function loadGroups(env) {
+  const { results } = await env.DB.prepare('SELECT id,data,created FROM groups ORDER BY created').all();
+  return results.map((r) => ({ ...JSON.parse(r.data), id: r.id, created: r.created }));
+}
+async function getGroup(env, id) {
+  const r = await env.DB.prepare('SELECT id,data,created FROM groups WHERE id=?').bind(String(id || '')).first();
+  if (!r) throw new HttpError(404, 'グループが見つかりません');
+  return { ...JSON.parse(r.data), id: r.id, created: r.created };
+}
+// トークの相手（キャラかグループ）を確かめる。グループは裏だけ
+async function getOwner(env, base, world) {
+  if (isGroupId(base)) {
+    if (world !== 'ura') throw new HttpError(400, 'グループは裏のトークだけです');
+    return { group: await getGroup(env, base) };
+  }
+  return { char: await getChar(env, base) };
+}
+
 async function getChar(env, id) {
   const r = await env.DB.prepare(`SELECT ${CHAR_COLS} WHERE c.id=?`).bind(String(id || '')).first();
   if (!r) throw new HttpError(404, 'キャラが見つかりません');
@@ -267,8 +299,8 @@ async function getChar(env, id) {
 const rowToMsg = (r) => ({ id: r.id, charId: r.char_id, sender: r.sender, text: r.retracted ? '' : r.text, at: r.at,
   ...(r.image && !r.retracted ? { image: r.image } : {}), ...(r.alt ? { alt: r.alt } : {}), ...(r.retracted ? { retracted: 1, origText: r.text } : {}),
   ...(r.reaction ? { reaction: r.reaction, reactedAt: r.reacted_at || 0 } : {}),
-  ...(r.reply_to ? { replyTo: r.reply_to } : {}), ...(r.kind ? { kind: r.kind } : {}) });
-const MSG_COLS = 'id,char_id,sender,text,at,image,alt,retracted,reaction,reacted_at,reply_to,kind';
+  ...(r.reply_to ? { replyTo: r.reply_to } : {}), ...(r.kind ? { kind: r.kind } : {}), ...(r.speaker ? { speaker: r.speaker } : {}) });
+const MSG_COLS = 'id,char_id,sender,text,at,image,alt,retracted,reaction,reacted_at,reply_to,kind,speaker';
 
 // ---------------------------------------------------------------- スタンプ（表のトークだけ）
 // キャラの吹き出しにはユーザーが、ユーザーの吹き出しにはキャラが付ける（1つのメッセージに1つ）
@@ -339,6 +371,7 @@ async function route(key, url, body, env, ctx) {
           messages.push(...(await recent(env, c.id, 200)));
           messages.push(...(await recent(env, c.id + URA, 200)));
         }
+        for (const g of await loadGroups(env)) messages.push(...(await recent(env, g.id + URA, 200)));
       } else {
         const { results } = await env.DB.prepare(`SELECT ${MSG_COLS} FROM messages WHERE id>? ORDER BY id LIMIT 501`).bind(since).all();
         more = results.length > 500;
@@ -363,7 +396,30 @@ async function route(key, url, body, env, ctx) {
         const { results: ss } = await env.DB.prepare("SELECT char_id, json_extract(data,'$.statusMsg') AS m, json_extract(data,'$.statusEmoji') AS e FROM char_state").all();
         for (const r of ss) if (r.m || r.e) status[r.char_id] = { msg: r.m || '', emoji: r.e || '' };
       }
-      return json({ chars, messages, more, reads, charRead, reactions, status, cost: await costSummary(env).catch(() => null), outage: dis && dis.outage ? dis.outage : null, retracted: rt.map((r) => r.id), settings: await getSettings(env), now: Date.now(), version: VERSION });
+      return json({ chars, groups: await loadGroups(env), messages, more, reads, charRead, reactions, status, cost: await costSummary(env).catch(() => null), outage: dis && dis.outage ? dis.outage : null, retracted: rt.map((r) => r.id), settings: await getSettings(env), now: Date.now(), version: VERSION });
+    }
+
+    // ---- 裏のグループ
+    case 'POST /group': { // 作る・変える
+      const old = body.group && body.group.id && isGroupId(body.group.id) ? await env.DB.prepare('SELECT created FROM groups WHERE id=?').bind(body.group.id).first() : null;
+      const g = normGroup({ ...(body.group || {}), id: old ? body.group.id : undefined });
+      const chars = await loadChars(env);
+      g.members = g.members.filter((id) => chars.some((c) => c.id === id));
+      if (!g.members.length) throw new HttpError(400, 'メンバーを1人以上選んでください');
+      const { id, ...data } = g;
+      await env.DB.prepare('INSERT INTO groups (id,data,created) VALUES (?,?,?) ON CONFLICT(id) DO UPDATE SET data=excluded.data').bind(id, JSON.stringify(data), old ? old.created : Date.now()).run();
+      return json({ group: await getGroup(env, id) });
+    }
+    case 'DELETE /group': {
+      const id = url.searchParams.get('id') || '';
+      if (!isGroupId(id)) throw new HttpError(400, 'グループではありません');
+      await noteUserDelete(env);
+      await env.DB.batch([
+        env.DB.prepare('DELETE FROM groups WHERE id=?').bind(id),
+        env.DB.prepare('DELETE FROM messages WHERE char_id=?').bind(id + URA),
+        env.DB.prepare('DELETE FROM reads WHERE char_id=?').bind(id + URA),
+      ]);
+      return json({ ok: true });
     }
 
     case 'GET /export': return exportAll(env, url.searchParams.get('images') === '1');
@@ -548,13 +604,17 @@ async function route(key, url, body, env, ctx) {
         env.DB.prepare('DELETE FROM tl_comments WHERE author=?').bind(id),
         env.DB.prepare('DELETE FROM tl_likes WHERE author=?').bind(id),
       ]);
+      for (const g of await loadGroups(env)) if (g.members.includes(id)) {
+        const { id: gid, created, ...data } = g;
+        await env.DB.prepare('UPDATE groups SET data=? WHERE id=?').bind(JSON.stringify({ ...data, members: g.members.filter((x) => x !== id) }), gid).run();
+      }
       return json({ ok: true });
     }
 
     case 'POST /clear': { // 表・裏それぞれ別に消す（charId に #ura が付いていれば裏）
-      const { base, key } = splitCid(body.charId);
+      const { base, world, key } = splitCid(body.charId);
       await noteUserDelete(env);
-      await getChar(env, base);
+      await getOwner(env, base, world);
       await env.DB.batch([
         env.DB.prepare('DELETE FROM messages WHERE char_id=?').bind(key),
         env.DB.prepare('DELETE FROM reads WHERE char_id=?').bind(key),
@@ -617,9 +677,9 @@ async function route(key, url, body, env, ctx) {
     }
 
     case 'POST /messages/delete': { // 選んだメッセージだけ消す（表・裏それぞれ）
-      const { base, key } = splitCid(body.charId);
+      const { base, world, key } = splitCid(body.charId);
       await noteUserDelete(env);
-      await getChar(env, base);
+      await getOwner(env, base, world);
       const ids = [...new Set((Array.isArray(body.ids) ? body.ids : []).map((x) => num(x, 0)).filter((x) => x > 0))].slice(0, 2000);
       if (!ids.length) throw new HttpError(400, '消すメッセージが選ばれていません');
       let deleted = 0;
@@ -635,8 +695,8 @@ async function route(key, url, body, env, ctx) {
     }
 
     case 'POST /send': {
-      const { base, key } = splitCid(body.charId);
-      await getChar(env, base);
+      const { base, world, key } = splitCid(body.charId);
+      await getOwner(env, base, world);
       const text = String(body.text || '').trim().slice(0, 4000);
       let image = null;
       if (typeof body.image === 'string' && body.image) {
@@ -652,6 +712,14 @@ async function route(key, url, body, env, ctx) {
 
     case 'POST /reply': {
       const { base, world, key } = splitCid(body.charId);
+      if (isGroupId(base)) { // 裏のグループ
+        const { group } = await getOwner(env, base, world);
+        if ((await getSettings(env)).uraPaused) return json({ messages: [], paused: true });
+        const hist = await recent(env, key, 60);
+        const last = hist[hist.length - 1];
+        if (!(body.start && !hist.length) && (!last || last.sender !== 'me')) return json({ messages: [] }); // start：あらすじから物語を始める
+        return json({ messages: await groupReply(env, group, hist, key) });
+      }
       const c = await getChar(env, base);
       const hist = await recent(env, key, 60);
       const last = hist[hist.length - 1];
@@ -700,6 +768,7 @@ async function route(key, url, body, env, ctx) {
 
     case 'POST /reply/decide': { // 表：すぐ返すかどうかだけ先に決める（アプリが「既読」「入力中…」を出すため）
       const { base, world, key } = splitCid(body.charId);
+      if (isGroupId(base)) return json({ now: !(await getSettings(env)).uraPaused });
       const c = await getChar(env, base);
       if (world === 'ura' && (await getSettings(env)).uraPaused) return json({ now: false, paused: true });
       if (world !== 'omote' || !delayOn(await getSettings(env))) return json({ now: true });
@@ -712,8 +781,8 @@ async function route(key, url, body, env, ctx) {
     }
 
     case 'POST /read': {
-      const { base, key } = splitCid(body.charId);
-      await getChar(env, base);
+      const { base, world, key } = splitCid(body.charId);
+      await getOwner(env, base, world);
       await setRead(env, key, Date.now());
       return json({ ok: true, badge: await totalUnread(env) });
     }
@@ -1350,10 +1419,10 @@ function parseJsonLoose(text, label) {
 async function aiJson(env, world, system, userText, schema, schemaName) {
   return callAIObj(env, world, system, [{ role: 'user', parts: [{ text: userText }] }], schema, schemaName);
 }
-async function callAIObj(env, world, system, contents, schema, schemaName) {
+async function callAIObj(env, world, system, contents, schema, schemaName, opts) {
   const st = await getSettings(env);
   if (providerFor(st, world) === 'grok') {
-    return parseJsonLoose(await grokText(env, grokModelFor(env, st), system, contents, schema, schemaName, { world }), 'Grok');
+    return parseJsonLoose(await grokText(env, grokModelFor(env, st), system, contents, schema, schemaName, { ...(opts || {}), world }), 'Grok');
   }
   return parseJsonLoose(await geminiText(env, system, contents, toGeminiSchema(schema), world), 'Gemini');
 }
@@ -1542,6 +1611,88 @@ async function generateAndStore(env, c, d, hist, lastRead, world = 'omote') {
   return out;
 }
 
+// ================================================================ 裏のグループ：何人かと同じ場面で
+const GROUP_SCHEMA = {
+  type: 'object',
+  properties: { messages: { type: 'array', items: { type: 'object', properties: { who: { type: 'string' }, text: { type: 'string' } }, required: ['who', 'text'], additionalProperties: false } } },
+  required: ['messages'], additionalProperties: false,
+};
+const NARR_WHO = ['ナレーション', 'narration', 'narr', '地の文', '＊', '*'];
+function buildGroupSystem(g, members, st, start) {
+  const nm = (c) => c.uraName || c.name;
+  const narr = g.narration
+    ? { short: '- 情景・動作・表情の描写（ナレーション）は who を "ナレーション" にして、三人称・現在形で1〜3文。セリフは短めに。',
+      normal: '- 情景・動作・表情・心の動きの描写（ナレーション）は who を "ナレーション" にして、三人称・現在形で2〜5文。ほとんどの返答にナレーションを入れて、場の空気や誰が誰を見ているかが伝わるようにする。',
+      long: '- 小説のように地の文の多い長めの返答にする（全体で500〜1200字）。地の文は who を "ナレーション" にして、情景・光や音・距離感・表情・しぐさ・それぞれの心の動きを段落としてじっくり描く（1つに4〜10文。地の文の中に「」でセリフを織り交ぜてもよい）。これまでの返答が短くても合わせない。' }[g.length]
+    : { short: '- ナレーションは書かず、セリフだけで表現する。短めに。', normal: '- ナレーションは書かず、セリフだけで表現する。', long: '- ナレーションは書かず、セリフだけで表現する。ただし長めに、それぞれの気持ちをじっくり言葉にする。' }[g.length];
+  const me = st.meNameUra || st.meName || '';
+  return `あなたは、ユーザーと次の登場人物たちが「実際に同じ場所にいる場面」のロールプレイを、物語の語り手として進めています。
+これはスマホのメッセージアプリ（SNS）でのやり取りとは別の時間軸・別の世界線の出来事です。SNSでの会話の内容は知らないものとして扱ってください。
+
+# 登場人物（ユーザー以外）
+${members.map((c) => `## ${nm(c)}
+${charPersona(c, 'ura', Math.max(800, Math.floor(6000 / members.length)))}`).join('\n\n')}
+
+# ユーザー
+${me ? `名前：${me}（登場人物たちからの呼ばれ方は、それぞれのキャラクター設定に従う）` : '（名前は登場人物たちのキャラクター設定での呼び方に従う）'}
+
+# あらすじ（物語の導入・いまの状況）
+${g.synopsis || '（特になし。これまでの流れやユーザーの言動から自然に判断する）'}
+
+# ルール
+- 1回の返答は、吹き出し${Math.max(2, Math.min(g.maxSplit, 12))}個まで。吹き出しごとに who（話す人の名前。上の登場人物の名前どおり）と text を書く。
+- 全員が毎回話す必要はない。場面の流れ・それぞれの性格・ユーザーとの距離に合わせて、話す人と順番を自然に選ぶ（登場人物どうしの掛け合いや、ユーザーの取り合いもあってよい）。
+- 登場人物それぞれの口調・一人称・ユーザーの呼び方を守り、混ぜない。
+${narr}
+- セリフの text には、その人が口にする言葉だけを書く（「」や（ ）書きは付けない）。
+- ユーザーの発言のうち（ ）で書かれた部分は、ユーザーの行動や状況の描写として受け取る。
+- ユーザーの行動・発言・気持ちを勝手に決めて書かない。ユーザーが次にどうするかの余地を残す。
+- 自分がAIであることには触れない。
+- 登場人物が未成年の設定である場合、性的な内容や描写は一切しない。
+${start ? '\n# 今回\nまだ物語は始まっていません。あらすじを受けて、小説の書き出しのように場面を描き、登場人物が自然に動き出すところまでを書いてください（ユーザーが最初の行動を選べる余地を残す）。' : ''}
+
+出力は {"messages": [{"who": "ナレーション", "text": "…"}, {"who": "${members[0] ? nm(members[0]) : '名前'}", "text": "…"}]} の形のJSONのみ。`;
+}
+function buildGroupContents(hist, members, st) {
+  const nameOf = (id) => { const c = members.find((x) => x.id === id); return c ? c.uraName || c.name : '（もういない人）'; };
+  const turns = [];
+  for (const m of hist) {
+    const role = m.sender === 'me' ? 'user' : 'model';
+    const line = m.sender === 'me' ? (m.image ? '（写真を見せた）' : '') + m.text : m.sender === 'narr' ? '＊' + m.text : `【${nameOf(m.speaker)}】${m.text}`;
+    const t = turns[turns.length - 1];
+    if (t && t.role === role) t.parts[0].text += '\n' + line;
+    else turns.push({ role, parts: [{ text: line }] });
+  }
+  if (!turns.length || turns[turns.length - 1].role !== 'user') turns.push({ role: 'user', parts: [{ text: '（物語を始めてください）' }] });
+  return turns;
+}
+async function groupReply(env, g, hist, key) {
+  const st = await getSettings(env);
+  const members = (await loadChars(env)).filter((c) => g.members.includes(c.id));
+  if (!members.length) throw new HttpError(400, 'このグループにはメンバーがいません');
+  const start = !hist.length;
+  const wb = await worldBlock(env, members.map((c) => c.prompt).join('\n') + '\n' + g.synopsis + '\n' + hist.slice(-20).map((m) => m.text).join('\n'));
+  const r = await callAIObj(env, 'ura', wb + buildGroupSystem(g, members, st, start), buildGroupContents(hist, members, st), GROUP_SCHEMA, 'group_reply', g.length === 'long' ? { effort: 'medium' } : null);
+  const byName = (w) => {
+    const s = String(w || '').trim().replace(/^[【「]|[】」]$/g, '');
+    return members.find((c) => s === (c.uraName || c.name) || s === c.name) || members.find((c) => s && (s.includes(c.uraName || c.name) || (c.uraName || c.name).includes(s)));
+  };
+  const items = [];
+  for (const x of (r && r.messages) || []) {
+    const text = String(x.text || '').trim().replace(/^「([\s\S]*)」$/, '$1');
+    if (!text) continue;
+    const who = String(x.who || '').trim();
+    if (NARR_WHO.includes(who) || /^[＊*]/.test(text)) { items.push({ sender: 'narr', text: text.replace(/^[＊*]+\s*/, '') }); continue; }
+    const c = byName(who);
+    items.push(c ? { sender: 'char', text, speaker: c.id } : { sender: 'narr', text: `${who}「${text}」` }); // 登場人物にいない名前は、地の文として残す
+  }
+  const out = items.slice(0, Math.min(g.maxSplit, 12) + 2);
+  if (!out.length) throw new Error('返答が空でした');
+  const t0 = Date.now();
+  const res = await env.DB.batch(out.map((x, i) => env.DB.prepare('INSERT INTO messages (char_id,sender,text,at,speaker) VALUES (?,?,?,?,?)').bind(key, x.sender, x.text, t0 + i, x.speaker || null)));
+  return out.map((x, i) => ({ id: res[i].meta.last_row_id, charId: key, sender: x.sender, text: x.text, at: t0 + i, ...(x.speaker ? { speaker: x.speaker } : {}) }));
+}
+
 // 引用返信の候補：最近のユーザーのメッセージ（続けて2つ以上送られたときや、少し前の話があるとき）
 function quoteCandidates(hist) {
   const mine = hist.slice(-20).filter((m) => m.sender === 'me' && m.text && !m.retracted);
@@ -1594,7 +1745,7 @@ async function applyRetracts(env) {
 // ================================================================ バックアップ（全データの書き出し・自動バックアップ・確認・復元）
 // 通知の宛先（subs）と、この端末・このサーバー専用の値（通知の鍵 vapid、アドレス origin、バックアップ自身の記録 bk:*）は含めない。
 // 合言葉やAPIキーはDBに無いので、ファイルにも入らない。
-const EXPORT_TABLES = ['chars', 'messages', 'reads', 'kv', 'char_state', 'memories', 'ura_icons', 'me_icons', 'tl_posts', 'tl_comments', 'tl_likes', 'tl_jobs', 'ai_cost'];
+const EXPORT_TABLES = ['chars', 'groups', 'messages', 'reads', 'kv', 'char_state', 'memories', 'ura_icons', 'me_icons', 'tl_posts', 'tl_comments', 'tl_likes', 'tl_jobs', 'ai_cost'];
 const BK_TABLES = [...EXPORT_TABLES, 'images'];
 const KV_LOCAL_SQL = "(k < 'bk:' OR k >= 'bk;') AND k NOT IN ('vapid','origin')"; // 書き出し・消去・復元の対象にする kv
 const kvRowOk = (r) => !(String(r.k).startsWith('bk:') || r.k === 'vapid' || r.k === 'origin');
@@ -1718,7 +1869,7 @@ async function bkIntegrity(env) {
   const bad = cs.filter((c) => { try { JSON.parse(c.data); return false; } catch (_) { return true; } });
   if (bad.length) problems.push(`キャラ設定が読めません（${bad.length}人）`);
   const one = async (sql) => ((await env.DB.prepare(sql).first()) || {}).n || 0;
-  const orphan = await one(`SELECT COUNT(*) AS n FROM messages WHERE char_id NOT IN (SELECT id FROM chars) AND char_id NOT IN (SELECT id || '${URA}' FROM chars)`);
+  const orphan = await one(`SELECT COUNT(*) AS n FROM messages WHERE char_id NOT IN (SELECT id FROM chars) AND char_id NOT IN (SELECT id || '${URA}' FROM chars) AND char_id NOT IN (SELECT id || '${URA}' FROM groups)`);
   if (orphan) warnings.push(`持ち主のいないメッセージが${orphan}件あります`);
   const brokenImg = await one('SELECT COUNT(*) AS n FROM (SELECT id FROM images GROUP BY id HAVING COUNT(*)<>MAX(part)+1 OR COUNT(DISTINCT mime)>1)');
   if (brokenImg) warnings.push(`欠けている写真が${brokenImg}枚あります`);
@@ -1799,6 +1950,7 @@ async function bkCheckAndCommit(env, job) {
 // 1回分だけ進める（cronは毎分・アプリは開いているあいだ続けて呼ぶ）
 async function backupStep(env, { cron = false, budgetMs = 20e3, maxParts = cron ? 4 : 6 } = {}) {
   if (!env.BACKUP) return { noR2: true };
+  await ensureSchema(env); // 新しい表（グループなど）ができてから数える
   let job = await kvGet(env, 'bk:job', null);
   let rs = await kvGet(env, 'bk:restore', null);
   if (!job && !rs) {

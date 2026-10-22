@@ -187,6 +187,15 @@ pre.diag{white-space:pre-wrap;word-break:break-all;font-size:11px;background:#f3
 .tabs button.on{background:#fff;color:var(--head)}
 body.ura{--head:#3b2a3f;--chat-bg:#5a4a5e;--me:#f3d9e6;--me-fg:#2b1a24;--accent:#9a5c8a}
 .uraMode .msg .meta{display:none}
+.synopsis{margin:14px 10px 18px;padding:14px 16px;border-radius:14px;background:rgba(255,255,255,.12);color:#f3eef4;font-size:13.5px;line-height:1.85;white-space:pre-wrap;word-break:break-word;border:1px solid rgba(255,255,255,.18)}
+.synopsis .h{font-weight:700;font-size:12px;letter-spacing:.2em;opacity:.8;margin-bottom:6px;text-align:center}
+.startbtn{display:block;margin:6px auto 0;padding:10px 22px;border-radius:999px;border:1px solid rgba(255,255,255,.5);background:rgba(255,255,255,.15);color:#fff;font-size:15px;font-weight:700;cursor:pointer}
+.av.grp{position:relative;background:#5b6b86;display:grid;grid-template-columns:1fr 1fr;gap:1px;overflow:hidden;padding:0}
+.av.grp > *{width:100%!important;height:100%!important;border-radius:0!important;font-size:12px!important}
+.av.grp.one{grid-template-columns:1fr}
+.newgrp{display:block;width:calc(100% - 20px);margin:10px;padding:12px;border-radius:12px;border:1px dashed var(--line);background:var(--bg);font-size:15px;font-weight:700;color:var(--fg);cursor:pointer}
+.grMembers label{display:flex;align-items:center;gap:10px;padding:6px 0;font-size:15px}
+.grMembers .av{width:36px;height:36px;font-size:14px}
 .narr{margin:10px 6px;color:#f3eef4;font-size:13.5px;line-height:1.7;font-style:italic;text-align:center;white-space:pre-wrap;word-break:break-word;opacity:.92}
 .narr.long{text-align:left;margin:10px 14px}
 .uraMode .msg{margin:6px 0}
@@ -298,6 +307,7 @@ body.ura #list.tlMode{background:#efe9f0}
   <header class="bar">
     <button class="ib" id="btnBack" aria-label="戻る">‹</button>
     <h1 id="chatTitle"></h1>
+    <button class="ib" id="btnGrpReset" aria-label="会話をリセット" style="font-size:14px;font-weight:700;padding:0 8px" hidden>リセット</button>
     <button class="ib" id="btnSelect" aria-label="メッセージを選んで消す" style="font-size:14px;font-weight:700;padding:0 8px">選択</button>
     <button class="ib" id="btnEditChar" aria-label="キャラを編集" style="font-size:14px;font-weight:700;padding:0 8px">編集</button>
   </header>
@@ -473,6 +483,46 @@ body.ura #list.tlMode{background:#efe9f0}
 </section>
 
 <!-- 設定 -->
+<section class="view" id="grpView">
+  <header class="bar">
+    <button class="ib" id="btnGrpBack" aria-label="戻る">‹</button>
+    <h1 id="grpTitle">グループを作る</h1>
+  </header>
+  <div class="scroll"><div class="form">
+    <div class="field">
+      <label class="t" for="grName">グループ名</label>
+      <input type="text" id="grName" maxlength="40" placeholder="例：雨の日の談話室">
+    </div>
+    <div class="field">
+      <label class="t">メンバー</label>
+      <div class="grMembers" id="grMembers"></div>
+      <div class="hint">裏の名前・アイコン・キャラ設定で登場します（10人まで）。</div>
+    </div>
+    <div class="field">
+      <label class="t" for="grSyn">あらすじ（物語の導入）</label>
+      <textarea id="grSyn" style="min-height:160px" placeholder="例：雨の放課後。寮の談話室には、なぜか三人だけが残っていた。窓の外は暗く、停電で灯りはランプひとつ——"></textarea>
+      <div class="hint">トークのいちばん上に、小説の導入のように表示されます。みんなはこの状況から物語を始めます。リセットしても、あらすじは残ります。</div>
+    </div>
+    <div class="field">
+      <label class="t">ナレーション（情景や動作の描写）</label>
+      <div class="seg" id="grNarr"><button data-v="1">あり</button><button data-v="0">なし</button></div>
+    </div>
+    <div class="field">
+      <label class="t">返事の長さ</label>
+      <div class="seg" id="grLen"><button data-v="short">短め</button><button data-v="normal">ふつう</button><button data-v="long">長め（小説風）</button></div>
+    </div>
+    <div class="field">
+      <label class="t">1回の吹き出しの最大数 <span class="rangeval" id="grSplitV"></span></label>
+      <input type="range" id="grSplit" min="2" max="12" step="1">
+    </div>
+    <button class="btn" id="grSave">保存</button>
+    <div class="btns" id="grDanger" style="margin-top:14px">
+      <button class="btn danger" id="grReset">会話をリセット（あらすじから始め直す）</button>
+      <button class="btn danger" id="grDelete">グループを削除</button>
+    </div>
+  </div></div>
+</section>
+
 <section class="view" id="setView">
   <header class="bar">
     <button class="ib" id="btnSetBack" aria-label="戻る">‹</button>
@@ -692,7 +742,7 @@ body.ura #list.tlMode{background:#efe9f0}
 
 <script>
 'use strict';
-const APP_VERSION = '第31版（2026-10-21 19:30:00 更新・TLに写真を投稿）';
+const APP_VERSION = '第32版（2026-10-23 05:00:00 更新・裏のグループ）';
 const $ = (id) => document.getElementById(id);
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 const esc = (s) => String(s).replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
@@ -742,6 +792,8 @@ const isUraKey = (id) => String(id || '').endsWith(URA);
 const keyOf = (id, world = S.world) => (world === 'ura' ? baseId(id) + URA : baseId(id)); // 履歴を入れておく場所
 const curKey = () => (S.current ? keyOf(S.current) : null);
 const charById = (id) => S.chars.find((c) => c.id === baseId(id));
+const groupById = (id) => (S.groups || []).find((g) => g.id === baseId(id)); // 裏のグループ
+const isGroupKey = (id) => baseId(id).startsWith('grp-');
 
 // ------------------------------------------------ サーバー通信
 async function api(method, path, body) {
@@ -776,7 +828,7 @@ async function sync() {
     let more = true;
     while (more) {
       const d = await api('GET', '/sync?since=' + S.maxId);
-      S.chars = d.chars; S.status = d.status || {}; S.reads = d.reads || {}; S.charRead = d.charRead || {}; S.outage = d.outage || null; S.cost = d.cost || S.cost; renderCost(); renderPause(); S.settings = d.settings || S.settings;
+      S.chars = d.chars; S.groups = d.groups || []; S.status = d.status || {}; S.reads = d.reads || {}; S.charRead = d.charRead || {}; S.outage = d.outage || null; S.cost = d.cost || S.cost; renderCost(); renderPause(); S.settings = d.settings || S.settings;
       const fresh = [];
       for (const m of d.messages) if (addMsg(m)) fresh.push(m);
       applyRetracted(d.retracted || []);
@@ -785,10 +837,10 @@ async function sync() {
       more = !!d.more;
     }
     // 消えたキャラの片付け
-    for (const id of Object.keys(S.msgs)) if (!charById(id)) delete S.msgs[id];
+    for (const id of Object.keys(S.msgs)) if (!charById(id) && !groupById(id)) delete S.msgs[id];
     S.synced = true;
     await loadIcons();
-    if (S.view === 'chat' && !charById(S.current)) show('list');
+    if (S.view === 'chat' && !charById(S.current) && !groupById(S.current)) show('list');
     renderAll();
     updateBadge();
   } catch (e) {
@@ -842,7 +894,7 @@ async function loadIcons() {
 const revealQ = [];
 let revealing = false;
 function typingMs(m) {
-  const c = charById(m.charId) || {};
+  const c = charById(m.speaker || m.charId) || {};
   const per = { slow: 150, normal: 95, fast: 55 }[c.typing] || 95;
   return Math.min(4200, Math.max(700, 400 + m.text.length * per));
 }
@@ -912,7 +964,7 @@ function scheduleReply(charId) {
   // 続けて送るかもしれないので少し待ってから返信をもらう
   replyTimers[charId] = setTimeout(() => requestReply(charId), 2200 + Math.random() * 1500);
 }
-async function requestReply(charId) {
+async function requestReply(charId, opt = {}) {
   if (S.replyBusy[charId]) { S.replyAgain[charId] = true; return; }
   S.replyBusy[charId] = true;
   let t0 = Date.now();
@@ -929,7 +981,7 @@ async function requestReply(charId) {
     renderAll(true); // 既読をつける
     await sleep(500 + Math.random() * 900);
     if (S.view === 'chat' && curKey() === charId && !revealing) setTyping(charId);
-    const d = await api('POST', '/reply', { charId });
+    const d = await api('POST', '/reply', { charId, ...(opt.start ? { start: true } : {}) });
     if (!isUraKey(charId)) setTimeout(() => sync(), 400); // キャラが付けたスタンプも早めに反映
     if (d.delayed) { setTyping(null); return; } // 相手が忙しくて、まだ読んでいない（あとで返事が届く）
     const fresh = d.messages.filter((m) => addMsg(m) || S.hidden.has(m.id));
@@ -1021,8 +1073,12 @@ function renderList() {
   const rows = S.chars.map((c) => {
     const v = visibleMsgs(keyOf(c.id)); const last = v[v.length - 1];
     return { c, last, sortAt: last ? last.at : c.created || 0 };
-  }).sort((a, b) => b.sortAt - a.sortAt);
-  el.innerHTML = rows.map(({ c, last }) => {
+  }).concat(ura ? (S.groups || []).map((g) => {
+    const v = visibleMsgs(keyOf(g.id)); const last = v[v.length - 1];
+    return { g, last, sortAt: last ? last.at : g.created || 0 };
+  }) : []).sort((a, b) => b.sortAt - a.sortAt);
+  el.innerHTML = (ura ? '<button class="newgrp" id="btnNewGroup">👥 グループを作る</button>' : '') + rows.map(({ c, g, last }) => {
+    if (g) return groupRowHTML(g, last);
     const k = keyOf(c.id);
     const n = ura ? 0 : unreadCount(c.id); // 裏は未読バッジなし
     const empty = ura ? 'まだ会っていません' : 'メッセージはまだありません';
@@ -1037,13 +1093,33 @@ function renderList() {
   }).join('') + `<div class="foot">${esc(APP_VERSION)}</div>`;
 }
 
+// 裏のグループ：アイコン（メンバーを並べる）・一覧の行
+function groupAvatarHTML(g, cls = '') {
+  const ms = g.members.map((id) => charById(id)).filter(Boolean).slice(0, 4);
+  if (!ms.length) return `<div class="av ${cls}" style="background:#5b6b86">👥</div>`;
+  return `<div class="av grp ${cls} ${ms.length === 1 ? 'one' : ''}">${ms.map((c) => avatarHTML(c, '', 'ura')).join('')}</div>`;
+}
+function speakerName(id) { const c = charById(id); return c ? dispName(c, 'ura') : '（いなくなった人）'; }
+function groupRowHTML(g, last) {
+  const k = keyOf(g.id, 'ura');
+  const lastTxt = last ? (last.image && !last.text ? '写真' : last.text) : '';
+  const pv = S.typingFor === k ? '入力中…' : last ? (last.sender === 'me' ? 'あなた: ' : last.sender === 'narr' ? '＊' : speakerName(last.speaker) + ': ') + lastTxt.replace(/\s+/g, ' ') : g.synopsis ? 'あらすじ：' + g.synopsis.replace(/\s+/g, ' ') : 'まだ始まっていません';
+  return `<div class="row" role="button" tabindex="0" data-id="${esc(g.id)}"><div class="avw">${groupAvatarHTML(g)}</div>
+    <div class="mid"><div class="nm">${esc(g.name)}<span class="stm">${g.members.length}人</span></div><div class="pv ${S.typingFor === k ? 'typing' : ''}">${esc(pv)}</div></div>
+    <div class="rt"></div>
+    <button class="edbtn" data-gedit="${esc(g.id)}" aria-label="${esc(g.name)}を編集">✎</button>
+  </div>`;
+}
+
 function renderChat(keepPos, forceBottom) {
-  const c = charById(S.current);
+  const grp = groupById(S.current);
+  const c = grp ? { id: grp.id, name: grp.name } : charById(S.current);
   if (!c) return;
+  $('btnGrpReset').hidden = !grp;
   const k = curKey(), ura = isUraKey(k);
-  const nm = dispName(c, ura ? 'ura' : 'omote');
+  const nm = grp ? grp.name : dispName(c, ura ? 'ura' : 'omote');
   const so = !ura && (S.status || {})[c.id];
-  $('chatTitle').innerHTML = esc(ura ? nm + '（裏）' : nm) + (so && (so.msg || so.emoji) ? `<small>${esc([so.emoji, so.msg].filter(Boolean).join(' '))}</small>` : '');
+  $('chatTitle').innerHTML = grp ? esc(nm) + `<small>${esc(grp.members.map(speakerName).join('・'))}</small>` : esc(ura ? nm + '（裏）' : nm) + (so && (so.msg || so.emoji) ? `<small>${esc([so.emoji, so.msg].filter(Boolean).join(' '))}</small>` : '');
   const box = $('msgs');
   box.classList.toggle('uraMode', ura);
   const nearBottom = box.scrollHeight - box.scrollTop - box.clientHeight < 120;
@@ -1058,7 +1134,7 @@ function renderChat(keepPos, forceBottom) {
   for (const m of v) {
     const dk = dayKey(m.at);
     if (!ura && dk !== prevDay) { html += `<div class="day"><span>${dayLabel(m.at)}</span></div>`; prevDay = dk; prev = null; }
-    const cont = prev && prev.sender === m.sender && (ura || m.at - prev.at < 5 * 60e3);
+    const cont = prev && prev.sender === m.sender && (prev.speaker || '') === (m.speaker || '') && (ura || m.at - prev.at < 5 * 60e3);
     if (m.sender === 'narr') {
       html += `<div class="narr ${m.text.length > 70 ? 'long' : ''}" data-id="${esc(m.id)}">${esc(m.text)}</div>`;
     } else if (m.sender === 'me') {
@@ -1067,17 +1143,21 @@ function renderChat(keepPos, forceBottom) {
       const meta = m.failed ? '<span>送信失敗</span>' : m.pending ? '<span>送信中</span>' : `${read ? '<span>既読</span>' : ''}<span>${hm(m.at)}</span>`;
       html += `<div class="msg me ${m.failed ? 'fail' : ''}" data-id="${esc(m.id)}"><div class="meta">${meta}</div><div class="mecol">${bubHTML(m)}${rxHTML(m)}</div></div>`;
     } else {
+      const sp = grp ? charById(m.speaker) : c; // グループでは、話した人ごとにアイコンと名前
       html += `<div class="msg them ${cont ? 'cont' : ''}" data-id="${esc(m.id)}">
-        <div class="who">${cont ? '' : avatarHTML(c, 'sm')}</div>
-        <div class="col">${cont ? '' : `<div class="name">${esc(nm)}</div>`}${bubHTML(m)}${rxHTML(m)}</div>
+        <div class="who">${cont ? '' : sp ? avatarHTML(sp, 'sm') : '<div class="av sm">？</div>'}</div>
+        <div class="col">${cont ? '' : `<div class="name">${esc(grp ? speakerName(m.speaker) : nm)}</div>`}${bubHTML(m)}${rxHTML(m)}</div>
         <div class="meta"><span>${hm(m.at)}</span></div></div>`;
     }
     prev = m;
   }
   if (S.typingFor === k) {
-    html += `<div class="msg them typing"><div class="who">${prev && prev.sender === 'char' ? '' : avatarHTML(c, 'sm')}</div><div class="col"><div class="bub"><i></i><i></i><i></i></div></div></div>`;
+    html += `<div class="msg them typing"><div class="who">${grp ? '' : prev && prev.sender === 'char' ? '' : avatarHTML(c, 'sm')}</div><div class="col"><div class="bub"><i></i><i></i><i></i></div></div></div>`;
   }
-  if (!v.length && S.typingFor !== k) html = ura
+  if (grp) { // あらすじ（小説の導入）を、いちばん上に
+    html = (grp.synopsis ? `<div class="synopsis"><div class="h">あらすじ</div>${esc(grp.synopsis)}</div>` : '') +
+      (!v.length && S.typingFor !== k ? `<div class="empty" style="color:#fff;padding-top:${grp.synopsis ? 4 : 40}px">${grp.synopsis ? '' : `${esc(grp.members.map(speakerName).join('・'))}と同じ場面にいます。<br>`}最初のひと言や行動を送るか、<br><button class="startbtn" id="btnGrpStart">物語を始める</button></div>` : '') + html;
+  } else if (!v.length && S.typingFor !== k) html = ura
     ? `<div class="empty" style="color:#fff">${esc(nm)}と会っている場面です。<br>セリフを送ってみましょう。<br>（ ）で書くと、あなたの行動になります。<br>例：（手を振って）おまたせ！</div>`
     : `<div class="empty" style="color:#fff">${esc(nm)}にメッセージを送ってみましょう</div>`;
   setTimeout(fillImages, 0);
@@ -1206,7 +1286,7 @@ function renderAll(keepPos, forceBottom) {
 
 function show(view) {
   S.view = view;
-  for (const [v, id] of [['list', 'listView'], ['chat', 'chatView'], ['edit', 'editView'], ['set', 'setView'], ['post', 'postView']]) $(id).classList.toggle('on', v === view);
+  for (const [v, id] of [['list', 'listView'], ['chat', 'chatView'], ['edit', 'editView'], ['set', 'setView'], ['post', 'postView'], ['grp', 'grpView']]) $(id).classList.toggle('on', v === view);
   if (view !== 'chat') {
     // 別画面に移ったら、待ち中の吹き出しはすぐ出す
     if (revealQ.length) { revealQ.forEach((m) => S.hidden.delete(m.id)); revealQ.length = 0; }
@@ -1216,7 +1296,8 @@ function show(view) {
 
 function openChat(id, world) {
   endSelect();
-  if (!charById(id)) return;
+  if (!charById(id) && !groupById(id)) return;
+  if (groupById(id)) world = 'ura'; // グループは裏だけ
   if (world) setWorld(world);
   S.current = baseId(id);
   show('chat');
@@ -1958,6 +2039,9 @@ function autosize() {
 
 // ------------------------------------------------ イベント
 $('list').addEventListener('click', (e) => {
+  if (e.target.closest('#btnNewGroup')) { grpFrom = 'list'; openGroupEdit(null); return; }
+  const ge = e.target.closest('[data-gedit]');
+  if (ge) { grpFrom = 'list'; openGroupEdit(ge.dataset.gedit); return; }
   const ed = e.target.closest('.edbtn');
   if (ed) { editFrom = 'list'; openEdit(ed.dataset.edit); return; }
   const b = e.target.closest('.row'); if (b) openChat(b.dataset.id);
@@ -2012,7 +2096,66 @@ $('msgs').addEventListener('click', (e) => {
   e.stopPropagation(); e.preventDefault();
   if (el && !el.classList.contains('typing')) selTap(el);
 }, true);
-$('btnEditChar').onclick = () => { editFrom = 'chat'; openEdit(S.current); };
+$('btnEditChar').onclick = () => { if (groupById(S.current)) { grpFrom = 'chat'; openGroupEdit(S.current); return; } editFrom = 'chat'; openEdit(S.current); };
+// ---- 裏のグループ
+let grpEdit = null, grpFrom = 'list';
+function openGroupEdit(id) {
+  if (!S.chars.length) return toast('先にキャラを登録してください');
+  const g = id ? groupById(id) : null;
+  grpEdit = { id: g ? g.id : null, narration: g ? g.narration !== false : true, length: g ? g.length || 'normal' : 'normal' };
+  $('grpTitle').textContent = g ? `${g.name} を編集` : 'グループを作る';
+  $('grName').value = g ? g.name : '';
+  $('grSyn').value = g ? g.synopsis || '' : '';
+  $('grSplit').value = g ? g.maxSplit || 6 : 6;
+  const mem = new Set(g ? g.members : []);
+  $('grMembers').innerHTML = S.chars.map((c) => `<label><input type="checkbox" value="${esc(c.id)}" ${mem.has(c.id) ? 'checked' : ''}>${avatarHTML(c, '', 'ura')}<span>${esc(dispName(c, 'ura'))}</span></label>`).join('');
+  $('grDanger').style.display = g ? '' : 'none';
+  syncGroupLabels();
+  show('grp');
+  $('grpView').querySelector('.scroll').scrollTop = 0;
+}
+function syncGroupLabels() {
+  $('grNarr').querySelectorAll('button').forEach((b) => b.classList.toggle('on', (b.dataset.v === '1') === grpEdit.narration));
+  $('grLen').querySelectorAll('button').forEach((b) => b.classList.toggle('on', b.dataset.v === grpEdit.length));
+  $('grSplitV').textContent = $('grSplit').value + '個まで';
+}
+$('grNarr').addEventListener('click', (e) => { const b = e.target.closest('button'); if (b) { grpEdit.narration = b.dataset.v === '1'; syncGroupLabels(); } });
+$('grLen').addEventListener('click', (e) => { const b = e.target.closest('button'); if (b) { grpEdit.length = b.dataset.v; syncGroupLabels(); } });
+$('grSplit').addEventListener('input', syncGroupLabels);
+$('btnGrpBack').onclick = () => { if (grpEdit && grpEdit.id && grpFrom === 'chat' && groupById(grpEdit.id)) openChat(grpEdit.id, 'ura'); else { show('list'); renderAll(); } };
+$('grSave').onclick = async () => {
+  const members = [...$('grMembers').querySelectorAll('input:checked')].map((x) => x.value);
+  if (!members.length) return toast('メンバーを1人以上選んでください');
+  if (members.length > 10) return toast('メンバーは10人までです');
+  const group = { id: grpEdit.id || undefined, name: $('grName').value.trim() || members.map((id) => speakerName(id)).join('・').slice(0, 40), members, synopsis: $('grSyn').value, narration: grpEdit.narration, length: grpEdit.length, maxSplit: +$('grSplit').value };
+  $('grSave').disabled = true;
+  try {
+    const d = await api('POST', '/group', { group });
+    S.groups = (S.groups || []).filter((g) => g.id !== d.group.id).concat(d.group);
+    toast('保存しました');
+    openChat(d.group.id, 'ura');
+  } catch (e) { toast(e.message); } finally { $('grSave').disabled = false; }
+};
+async function resetGroup(id) {
+  const g = groupById(id); if (!g) return;
+  if (!confirm(`「${g.name}」の会話をリセットします。あらすじとメンバーはそのまま残ります。よろしいですか？`)) return;
+  const k = keyOf(g.id, 'ura');
+  try { await api('POST', '/clear', { charId: k }); S.msgs[k] = []; S.replyAgain[k] = false; if (S.typingFor === k) S.typingFor = null; toast('会話をリセットしました'); openChat(g.id, 'ura'); }
+  catch (e) { toast(e.message); }
+}
+$('grReset').onclick = () => grpEdit && grpEdit.id && resetGroup(grpEdit.id);
+$('btnGrpReset').onclick = () => resetGroup(S.current);
+$('grDelete').onclick = async () => {
+  const g = grpEdit && groupById(grpEdit.id); if (!g) return;
+  if (!confirm(`グループ「${g.name}」を削除します。会話も消えます。よろしいですか？`)) return;
+  try { await api('DELETE', '/group?id=' + encodeURIComponent(g.id)); S.groups = S.groups.filter((x) => x.id !== g.id); delete S.msgs[keyOf(g.id, 'ura')]; toast('削除しました'); show('list'); renderAll(); }
+  catch (e) { toast(e.message); }
+};
+$('msgs').addEventListener('click', (e) => {
+  if (!e.target.closest('#btnGrpStart')) return;
+  const k = curKey(); e.target.disabled = true;
+  requestReply(k, { start: true });
+});
 $('btnAdd').addEventListener('click', () => { editFrom = 'list'; });
 $('btnEditBack').onclick = () => { if (edit && edit.id && editFrom === 'chat') openChat(edit.id); else { show('list'); renderAll(); } };
 $('btnSetBack').onclick = () => { show('list'); applyWorld(); renderAll(); };

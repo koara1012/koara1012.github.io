@@ -26,7 +26,7 @@ iPhone（PWA）  ──HTTPS──▶  Cloudflare Worker「chara-chat」 ──�
 | サーバー | `server/worker.js`・`server/wrangler.jsonc` | Cloudflare Workers Builds が GitHub の main を見て自動デプロイ（Root directory = `server`） |
 | テスト | `tests/` | 手元で `node --no-warnings tests/run-all.mjs` |
 
-- サーバーURL：（Cloudflare の Workers の画面で確認できます）
+- サーバーURL：Cloudflare の Workers の画面で確認できます（公開リポジトリなので、ここには書きません）。
 - アプリの設定画面で「サーバーURL」と「合言葉（APP_TOKEN）」を入れて使います。この2つは iPhone の中だけに保存されます。
 - 画面とサーバーは、それぞれ版の文字列を持っています（`chat/index.html` の `APP_VERSION`、`server/worker.js` の `VERSION`）。更新するときは両方そろえます。
 

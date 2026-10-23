@@ -350,6 +350,11 @@ body.ura #list.tlMode{background:#efe9f0}
       <input type="text" id="edName" maxlength="40" placeholder="例：ゆい">
     </div>
     <div class="field">
+      <label class="t">登場する世界</label>
+      <div class="seg" id="edWorlds"><button data-v="both">表と裏</button><button data-v="ura">裏だけ</button></div>
+      <div class="hint" id="edWorldsHint"></div>
+    </div>
+    <div class="field">
       <label class="t">誕生日（任意）</label>
       <div class="inline"><select id="edBdM"></select> 月 <select id="edBdD"></select> 日</div>
       <div class="hint">その子は自分の誕生日を知っていて、聞かれれば答えます。誕生日が近づくとそわそわし、当日はほかの子もお祝いします（表のトーク・TL）。</div>
@@ -743,7 +748,7 @@ body.ura #list.tlMode{background:#efe9f0}
 
 <script>
 'use strict';
-const APP_VERSION = '第32版（2026-10-23 13:40:00 更新・裏のグループ／表のリセット表示を修正）';
+const APP_VERSION = '第33版（2026-10-23 16:00:00 更新・裏だけのキャラ）';
 const $ = (id) => document.getElementById(id);
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 const esc = (s) => String(s).replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
@@ -1071,7 +1076,12 @@ function renderList() {
     return;
   }
   const ura = S.world === 'ura';
-  const rows = S.chars.map((c) => {
+  const shown = ura ? S.chars : S.chars.filter((c) => !c.uraOnly); // 裏だけの子は、表の一覧に出さない
+  if (!shown.length) {
+    el.innerHTML = `<div class="empty">表に登場するキャラはまだいません。<br>右上の ＋ から登録しましょう。</div><div class="foot">${esc(APP_VERSION)}</div>`;
+    return;
+  }
+  const rows = shown.map((c) => {
     const v = visibleMsgs(keyOf(c.id)); const last = v[v.length - 1];
     return { c, last, sortAt: last ? last.at : c.created || 0 };
   }).concat(ura ? (S.groups || []).map((g) => {
@@ -1298,7 +1308,7 @@ function show(view) {
 function openChat(id, world) {
   endSelect();
   if (!charById(id) && !groupById(id)) return;
-  if (groupById(id)) world = 'ura'; // グループは裏だけ
+  if (groupById(id) || (charById(id) || {}).uraOnly) world = 'ura'; // グループと裏だけの子は、裏で開く
   if (world) setWorld(world);
   S.current = baseId(id);
   show('chat');
@@ -1674,7 +1684,7 @@ function openEdit(id) {
   $('edBdM').value = cb[0] || ''; $('edBdD').value = cb[1] || '';
   edit.jealous = c && c.jealous ? c.jealous : 'auto';
   edit.replySpeed = c && c.replySpeed ? c.replySpeed : 'auto';
-  $('edLifeBox').style.display = c ? '' : 'none';
+  edit.uraOnly = c ? !!c.uraOnly : S.world === 'ura'; // 裏のタブから追加するときは「裏だけ」から
   if (c) loadLife(c.id);
   edit.uraNarration = c ? c.uraNarration !== false : true;
   edit.uraLength = c && c.uraLength ? c.uraLength : 'normal';
@@ -1715,6 +1725,16 @@ function syncEditLabels() {
   $('edTyping').querySelectorAll('button').forEach((b) => b.classList.toggle('on', b.dataset.v === edit.typing));
   $('edJealous').querySelectorAll('button').forEach((b) => b.classList.toggle('on', b.dataset.v === (edit.jealous || 'auto')));
   $('edSpeed').querySelectorAll('button').forEach((b) => b.classList.toggle('on', b.dataset.v === (edit.replySpeed || 'auto')));
+  // 裏だけの子には、表でしか使わない設定を見せない
+  $('edWorlds').querySelectorAll('button').forEach((b) => b.classList.toggle('on', (b.dataset.v === 'ura') === !!edit.uraOnly));
+  $('edWorldsHint').textContent = edit.uraOnly
+    ? '裏（会う場面）のトーク・裏のタイムライン・裏のグループにだけ登場します。表のトーク・表のタイムライン・くらしには出てきません。'
+    : '表（トーク）と裏（会う場面）の両方に登場します。';
+  for (const id of ['edPerDay', 'edNudge', 'edSplit', 'edJealous', 'edSpeed', 'edNewsKw', 'edTlPer', 'edLifeBox']) {
+    const f = $(id).closest('.field');
+    f.style.display = edit.uraOnly || (id === 'edLifeBox' && !edit.id) ? 'none' : '';
+  }
+  for (const id of ['edPoke', 'edNewsPoke', 'edTlPoke', 'edClear']) $(id).style.display = edit.uraOnly ? 'none' : '';
 }
 function drawEditIcon() {
   const el = $('edIcon');
@@ -1749,6 +1769,7 @@ async function saveEdit() {
     affinity: +$('edAff').value, snsActivity: +$('edAct').value, tlPerDay: +$('edTlPer').value, uraTlPerDay: +$('edUraTlPer').value,
     newsKeywords: $('edNewsKw').value.trim(), jealous: edit.jealous || 'auto', replySpeed: edit.replySpeed || 'auto',
     birthday: $('edBdM').value && $('edBdD').value ? $('edBdM').value + '-' + $('edBdD').value : '',
+    uraOnly: !!edit.uraOnly,
   };
   if (($('edBdM').value === '') !== ($('edBdD').value === '')) return toast('誕生日は月と日の両方を選んでください');
   if (char.birthday && ['02-30', '02-31', '04-31', '06-31', '09-31', '11-31'].includes(char.birthday)) return toast('その日付はありません');
@@ -2260,6 +2281,7 @@ $('edUraLen').addEventListener('click', (e) => { const b = e.target.closest('but
 $('edUraNarr').addEventListener('click', (e) => { const b = e.target.closest('button'); if (b) { edit.uraNarration = b.dataset.v === '1'; syncEditLabels(); } });
 $('edTyping').addEventListener('click', (e) => { const b = e.target.closest('button'); if (b) { edit.typing = b.dataset.v; syncEditLabels(); } });
 $('edSpeed').addEventListener('click', (e) => { const b = e.target.closest('button'); if (b) { edit.replySpeed = b.dataset.v; syncEditLabels(); } });
+$('edWorlds').addEventListener('click', (e) => { const b = e.target.closest('button'); if (b) { edit.uraOnly = b.dataset.v === 'ura'; syncEditLabels(); } });
 $('edJealous').addEventListener('click', (e) => { const b = e.target.closest('button'); if (b) { edit.jealous = b.dataset.v; syncEditLabels(); } });
 $('edMems').addEventListener('click', async (e) => {
   const b = e.target.closest('[data-mem]'); if (!b) return;

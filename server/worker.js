@@ -14,7 +14,7 @@
 //    ・Cron トリガー  * * * * *  （毎分。実際に動くのは13分おき）
 // =====================================================================
 
-const VERSION = '第32版（2026-10-23 13:40:00 更新・裏のグループ／表のリセット表示を修正）';
+const VERSION = '第33版（2026-10-23 16:00:00 更新・裏だけのキャラ）';
 const DEFAULT_MODEL = 'gemini-flash-latest';
 const DEFAULT_GROK_MODEL = 'grok-4.7';                 // X（Twitter）の Grok と同じ最新世代
 const FALLBACK_GROK_MODEL = 'grok-4-fast-non-reasoning'; // 上が使えないときの予備
@@ -229,6 +229,7 @@ function normChar(c) {
     replySpeed: ['fast', 'normal', 'slow'].includes(c.replySpeed) ? c.replySpeed : 'auto', // 返事の早さ：おまかせ（設定から判断）／すぐ返す／ふつう／のんびり
     jealous: ['yes', 'no'].includes(c.jealous) ? c.jealous : 'auto', // 嫉妬する：おまかせ（設定から判断）／する／しない
     birthday: validMD(c.birthday) ? c.birthday : '', // キャラの誕生日 "MM-DD"（空なら決めていない）
+    uraOnly: !!c.uraOnly, // 裏だけに登場する（表のトーク・表のTL・くらしには出てこない）
   };
 }
 function validMD(v) { const m = /^(\d{2})-(\d{2})$/.exec(String(v || '')); return !!m && +m[1] >= 1 && +m[1] <= 12 && +m[2] >= 1 && +m[2] <= [31, 29, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31][+m[1] - 1]; }
@@ -288,8 +289,11 @@ async function getOwner(env, base, world) {
     if (world !== 'ura') throw new HttpError(400, 'グループは裏のトークだけです');
     return { group: await getGroup(env, base) };
   }
-  return { char: await getChar(env, base) };
+  const char = await getChar(env, base);
+  if (world === 'omote' && char.uraOnly) throw new HttpError(400, 'このキャラは裏だけに登場します');
+  return { char };
 }
+const inOmote = (c) => !c.uraOnly; // 表に登場するキャラか
 
 async function getChar(env, id) {
   const r = await env.DB.prepare(`SELECT ${CHAR_COLS} WHERE c.id=?`).bind(String(id || '')).first();
@@ -720,7 +724,7 @@ async function route(key, url, body, env, ctx) {
         if (!(body.start && !hist.length) && (!last || last.sender !== 'me')) return json({ messages: [] }); // start：あらすじから物語を始める
         return json({ messages: await groupReply(env, group, hist, key) });
       }
-      const c = await getChar(env, base);
+      const c = (await getOwner(env, base, world)).char;
       const hist = await recent(env, key, 60);
       const last = hist[hist.length - 1];
       const stamp = world === 'omote' ? lastUserStamp(hist, Date.now()) : null; // スタンプへの返事
@@ -788,7 +792,7 @@ async function route(key, url, body, env, ctx) {
     }
 
     case 'POST /poke': { // テスト用：今すぐ自分から話しかけさせる（表のみ）
-      const c = await getChar(env, splitCid(body.charId).base);
+      const c = (await getOwner(env, splitCid(body.charId).base, 'omote')).char;
       const hist = await recent(env, c.id, 60);
       const lastRead = await getRead(env, c.id);
       let d = decide(c, hist, lastRead, Date.now(), await getSettings(env), true) || { mode: 'topic' };
@@ -937,7 +941,7 @@ async function route(key, url, body, env, ctx) {
 
     case 'POST /tl/poke': { // テスト用：今すぐTLに投稿してもらう
       const world = body.world === 'ura' ? 'ura' : 'omote';
-      const c = await getChar(env, splitCid(body.charId).base);
+      const c = (await getOwner(env, splitCid(body.charId).base, world)).char;
       const post = await charPostNow(env, c, world, await getSettings(env));
       ctx.waitUntil(runTlJobs(env, 2).catch((e) => log(env, 'TL: ' + e.message)));
       return json({ post });
@@ -1068,7 +1072,8 @@ async function tick(env) {
   await ensureSchema(env);
   const now = Date.now();
   const settings = await getSettings(env);
-  const chars = await loadChars(env);
+  const allChars = await loadChars(env);
+  const chars = allChars.filter(inOmote); // 表の話しかけ・くらしは、表に登場する子だけ
   const done = [];
   await applyRetracts(env).catch(() => {});
   // くらし：毎日の様子と記憶の整理（話しかける前に）
@@ -1127,8 +1132,8 @@ async function tick(env) {
       await log(env, `自動送信（${c.name}）: ${e.message}`);
     }
   }
-  // タイムライン：キャラが自分からつぶやく（表・裏それぞれ）
-  for (const c of chars) {
+  // タイムライン：キャラが自分からつぶやく（表・裏それぞれ。裏だけの子は裏だけ）
+  for (const c of allChars) {
     for (const world of ['omote', 'ura']) {
       try {
         if (!(await shouldCharPost(env, c, world, now, settings))) continue;
@@ -2309,7 +2314,7 @@ async function planReactions(env, post) {
   const chars = await loadChars(env);
   const author = post.author === ME ? null : chars.find((c) => c.id === post.author);
   if (post.author !== ME && !author) return [];
-  const cands = chars.filter((c) => c.id !== post.author);
+  const cands = chars.filter((c) => c.id !== post.author && (post.world === 'ura' || inOmote(c)));
   if (!cands.length) return [];
   let scores = {};
   try { scores = await scoreReactions(env, post, author, cands, st); }
@@ -2352,7 +2357,7 @@ async function planReplyToMe(env, post, comment, replyTo) {
   else if (!replyTo && post.author !== ME) target = post.author;
   if (!target) return;
   const c = (await loadChars(env)).find((x) => x.id === target);
-  if (!c) return;
+  if (!c || (post.world === 'omote' && !inOmote(c))) return;
   const { results: all } = await env.DB.prepare('SELECT id,author,reply_to FROM tl_comments WHERE post_id=?').bind(post.id).all();
   const root = threadRoot(all, comment.id);
   const charReplies = all.filter((x) => x.author === c.id && x.reply_to && threadRoot(all, x.id) === root).length;
@@ -2465,7 +2470,7 @@ async function tlLifeTheme(env, c, st, now) {
   const today = jstDay(now);
   let w = null;
   try { w = await getWeather(env, st); } catch (_) {}
-  const occ = state.tlOcc === today ? [] : occasionsToday(c, st, now, await loadChars(env));
+  const occ = state.tlOcc === today ? [] : occasionsToday(c, st, now, (await loadChars(env)).filter(inOmote));
   const ev = state.tlOcc === today ? null : (EVENTS.find(([d]) => d === today.slice(5)) || [])[1];
   const table = [
     ['free', 25],
@@ -2511,6 +2516,7 @@ ${w ? '天気：' + weatherText(w, st) + '\n' : ''}${seasonText(now)}／${weekda
 
 // ---- キャラが自分からつぶやくか（15分ごと）
 async function shouldCharPost(env, c, world, now, st) {
+  if (world === 'omote' && c.uraOnly) return false;
   const perDay = nz(world === 'ura' ? c.uraTlPerDay : c.tlPerDay, world === 'ura' ? 1 : 2);
   if (perDay <= 0) return false;
   if (world === 'ura' && st.uraPaused) return false; // 裏は止めている
@@ -2840,7 +2846,7 @@ async function dailyUpdate(env, c, st, now, force = false) {
   const cond = state.condition || null;
   const mayCond = !cond && Math.random() < 0.07;
   // ほかの子たち（同じユーザーと話している仲間）と、今日・昨日の約束
-  const others = (await loadChars(env)).filter((x) => x.id !== c.id);
+  const others = (await loadChars(env)).filter((x) => x.id !== c.id && inOmote(x));
   const meetsToday = (await kvGet(env, 'meet:' + today, [])).filter((m) => m.a === c.id || m.b === c.id);
   const meetsYday = (await kvGet(env, 'meet:' + addDays(today, -1), [])).filter((m) => m.a === c.id || m.b === c.id);
   const otherOf = (m) => (m.a === c.id ? m.bName : m.aName);
@@ -3708,7 +3714,7 @@ async function addEvent(env, st, s, ev, now) {
     if (e) ev.eewSent = Object.keys(e.sent || {});
     await env.DB.prepare("DELETE FROM kv WHERE k LIKE ?").bind('disjob:' + ev.eew + ':%').run();
   }
-  let chars = await loadChars(env);
+  let chars = (await loadChars(env)).filter(inOmote);
   if (ev.type === 'far') { // 遠くのニュースは、1〜2人だけ（心配性な子ほど選ばれやすい）
     const scored = [];
     for (const c of chars) { const rh = await getRhythm(env, c, false); scored.push({ c, w: (100 - nz(rh.calm, 50)) / 100 + Math.random() }); }
@@ -3897,7 +3903,7 @@ ${meets.map((m) => `- 今日${m.time ? ' ' + m.time + 'ごろ' : ''}：${who(m)}
     else if (n <= 3) bd.push(`あと${n}日であなたの誕生日（${mdText(c.birthday)}）。自分から言うかどうかはキャラクターしだい（期待してそわそわする、さりげなくほのめかす、など）。`);
     else if (n >= 362) bd.push(`昨日はあなたの誕生日だった（${mdText(c.birthday)}）。`);
   }
-  for (const o of (await loadChars(env)).filter((x) => x.id !== c.id && x.birthday)) {
+  for (const o of (await loadChars(env)).filter((x) => x.id !== c.id && x.birthday && inOmote(x))) {
     const n = daysToMD(o.birthday, now);
     if (n === 0) bd.push(`今日は${o.name}さんの誕生日（ユーザーもその子を知っている）。`);
     else if (n === 1) bd.push(`明日は${o.name}さんの誕生日。`);

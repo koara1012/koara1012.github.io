@@ -29,6 +29,7 @@ input,textarea,select{font:inherit;font-size:16px}
 header.bar{flex:none;display:flex;align-items:center;gap:8px;background:var(--head);color:var(--head-fg);
   padding:calc(env(safe-area-inset-top) + 8px) 12px 10px;min-height:52px}
 header.bar h1{flex:1;margin:0;font-size:17px;font-weight:700;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+[hidden]{display:none!important}
 header.bar .ib{min-width:36px;height:36px;display:grid;place-items:center;border-radius:8px;font-size:22px;line-height:1}
 header.bar .ib:active{background:rgba(255,255,255,.15)}
 .scroll{flex:1;overflow-y:auto;-webkit-overflow-scrolling:touch}
@@ -307,7 +308,7 @@ body.ura #list.tlMode{background:#efe9f0}
   <header class="bar">
     <button class="ib" id="btnBack" aria-label="戻る">‹</button>
     <h1 id="chatTitle"></h1>
-    <button class="ib" id="btnGrpReset" aria-label="会話をリセット" style="font-size:14px;font-weight:700;padding:0 8px" hidden>リセット</button>
+    <button class="ib" id="btnGrpReset" aria-label="会話をリセット" style="font-size:14px;font-weight:700;padding:0 8px;display:none">リセット</button>
     <button class="ib" id="btnSelect" aria-label="メッセージを選んで消す" style="font-size:14px;font-weight:700;padding:0 8px">選択</button>
     <button class="ib" id="btnEditChar" aria-label="キャラを編集" style="font-size:14px;font-weight:700;padding:0 8px">編集</button>
   </header>
@@ -742,7 +743,7 @@ body.ura #list.tlMode{background:#efe9f0}
 
 <script>
 'use strict';
-const APP_VERSION = '第32版（2026-10-23 05:00:00 更新・裏のグループ）';
+const APP_VERSION = '第32版（2026-10-23 13:40:00 更新・裏のグループ／表のリセット表示を修正）';
 const $ = (id) => document.getElementById(id);
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 const esc = (s) => String(s).replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
@@ -1115,7 +1116,7 @@ function renderChat(keepPos, forceBottom) {
   const grp = groupById(S.current);
   const c = grp ? { id: grp.id, name: grp.name } : charById(S.current);
   if (!c) return;
-  $('btnGrpReset').hidden = !grp;
+  $('btnGrpReset').style.display = grp ? '' : 'none'; // .ib は display を指定しているので hidden 属性では消えない
   const k = curKey(), ura = isUraKey(k);
   const nm = grp ? grp.name : dispName(c, ura ? 'ura' : 'omote');
   const so = !ura && (S.status || {})[c.id];

@@ -14,7 +14,7 @@
 //    ・Cron トリガー  * * * * *  （毎分。実際に動くのは13分おき）
 // =====================================================================
 
-const VERSION = '第34版（2026-10-26 23:59:00 更新・AIのクレジット切れの表示）';
+const VERSION = '第35版（2026-10-27 03:30:00 更新・グループ設定とメンバーの立場）';
 const DEFAULT_MODEL = 'gemini-flash-latest';
 const DEFAULT_GROK_MODEL = 'grok-4.7';                 // X（Twitter）の Grok と同じ最新世代
 const FALLBACK_GROK_MODEL = 'grok-4-fast-non-reasoning'; // 上が使えないときの予備
@@ -268,7 +268,9 @@ function normGroup(g) {
     id: typeof g.id === 'string' && /^grp-[\w-]{1,60}$/.test(g.id) ? g.id : 'grp-' + crypto.randomUUID(),
     name: String(g.name || '').trim().slice(0, 40) || 'グループ',
     members: [...new Set((Array.isArray(g.members) ? g.members : []).map(String))].slice(0, 10),
-    synopsis: String(g.synopsis || '').slice(0, 6000),        // あらすじ（物語の導入）
+    synopsis: String(g.synopsis || '').slice(0, 6000),        // あらすじ（物語の導入。画面にも出る）
+    prompt: String(g.prompt || '').slice(0, 8000),            // グループ設定（AIだけが読む。各キャラの設定より優先）
+    roles: Object.fromEntries(Object.entries(g.roles && typeof g.roles === 'object' ? g.roles : {}).map(([k, v]) => [String(k), String(v || '').trim().slice(0, 1500)]).filter(([, v]) => v).slice(0, 10)), // メンバーごとの「このグループでの立場」
     narration: g.narration !== false,                          // ナレーションを入れるか
     length: ['short', 'normal', 'long'].includes(g.length) ? g.length : 'normal',
     maxSplit: clamp(Math.round(num(g.maxSplit, 6)), 2, 12),   // 1回の返事の吹き出しの最大数
@@ -409,6 +411,7 @@ async function route(key, url, body, env, ctx) {
       const g = normGroup({ ...(body.group || {}), id: old ? body.group.id : undefined });
       const chars = await loadChars(env);
       g.members = g.members.filter((id) => chars.some((c) => c.id === id));
+      g.roles = Object.fromEntries(Object.entries(g.roles).filter(([id]) => g.members.includes(id))); // メンバーでない子の立場は捨てる
       if (!g.members.length) throw new HttpError(400, 'メンバーを1人以上選んでください');
       const { id, ...data } = g;
       await env.DB.prepare('INSERT INTO groups (id,data,created) VALUES (?,?,?) ON CONFLICT(id) DO UPDATE SET data=excluded.data').bind(id, JSON.stringify(data), old ? old.created : Date.now()).run();
@@ -1678,8 +1681,11 @@ function buildGroupSystem(g, members, st, start) {
 
 # 登場人物（ユーザー以外）
 ${members.map((c) => `## ${nm(c)}
-${charPersona(c, 'ura', Math.max(800, Math.floor(6000 / members.length)))}`).join('\n\n')}
-
+${charPersona(c, 'ura', Math.max(800, Math.floor(6000 / members.length)))}${(g.roles || {})[c.id] ? `\n### このグループでの${nm(c)}の立場（上の設定より優先）\n${g.roles[c.id]}` : ''}`).join('\n\n')}
+${g.prompt ? `
+# このグループの設定（各キャラクター設定より優先）
+${g.prompt}
+` : ''}
 # ユーザー
 ${me ? `名前：${me}（登場人物たちからの呼ばれ方は、それぞれのキャラクター設定に従う）` : '（名前は登場人物たちのキャラクター設定での呼び方に従う）'}
 
@@ -1690,6 +1696,7 @@ ${g.synopsis || '（特になし。これまでの流れやユーザーの言動
 - 1回の返答は、吹き出し${Math.max(2, Math.min(g.maxSplit, 12))}個まで。吹き出しごとに who（話す人の名前。上の登場人物の名前どおり）と text を書く。
 - 全員が毎回話す必要はない。場面の流れ・それぞれの性格・ユーザーとの距離に合わせて、話す人と順番を自然に選ぶ（登場人物どうしの掛け合いや、ユーザーの取り合いもあってよい）。
 - 登場人物それぞれの口調・一人称・ユーザーの呼び方を守り、混ぜない。
+- 「このグループの設定」や「このグループでの立場」が、各キャラクター設定と食い違うときは、このグループの中ではそちら（グループ側）を優先する（関係・立場・ルールなど）。食い違わない部分（口調・一人称・性格など）は、各キャラクター設定に従う。
 ${narr}
 - セリフの text には、その人が口にする言葉だけを書く（「」や（ ）書きは付けない）。
 - ユーザーの発言のうち（ ）で書かれた部分は、ユーザーの行動や状況の描写として受け取る。
@@ -1718,7 +1725,7 @@ async function groupReply(env, g, hist, key) {
   const members = (await loadChars(env)).filter((c) => g.members.includes(c.id));
   if (!members.length) throw new HttpError(400, 'このグループにはメンバーがいません');
   const start = !hist.length;
-  const wb = await worldBlock(env, members.map((c) => c.prompt).join('\n') + '\n' + g.synopsis + '\n' + hist.slice(-20).map((m) => m.text).join('\n'));
+  const wb = await worldBlock(env, members.map((c) => c.prompt).join('\n') + '\n' + g.synopsis + '\n' + (g.prompt || '') + '\n' + Object.values(g.roles || {}).join('\n') + '\n' + hist.slice(-20).map((m) => m.text).join('\n'));
   const r = await callAIObj(env, 'ura', wb + buildGroupSystem(g, members, st, start), buildGroupContents(hist, members, st), GROUP_SCHEMA, 'group_reply', g.length === 'long' ? { effort: 'medium' } : null);
   const byName = (w) => {
     const s = String(w || '').trim().replace(/^[【「]|[】」]$/g, '');

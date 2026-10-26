@@ -83,6 +83,19 @@ const ex = await (await W.fetch(new Request('https://w/export', { headers: { 'X-
 ok(ex.tables.groups && ex.tables.groups.length === 1 && ex.counts.groups === 1, 'groups included in backup');
 const ck = await call('GET', '/backup/check');
 ok(!ck.warnings.some((w) => w.includes('持ち主')), 'group messages are not flagged as orphans');
+// グループ設定とメンバーの立場（第35版）
+ok(!sys0.sys.includes('# このグループの設定'), 'no group-settings section when empty');
+const g3 = (await call('POST', '/group', { group: { name: '生徒会室', members: [sharo.id, iroha.id], synopsis: '放課後の生徒会室。', prompt: '全員、今日が初対面。全員敬語。', roles: { [sharo.id]: '会長。話を仕切る', [iroha.id]: '書記', nobody: '関係ない人' } } })).group;
+ok(g3.prompt.includes('初対面') && g3.roles[sharo.id] === '会長。話を仕切る' && !('nobody' in g3.roles), 'group prompt and roles saved (non-members dropped)');
+answer.group = { messages: [{ who: 'シャロ', text: 'はじめまして' }] };
+calls.length = 0;
+await call('POST', '/reply', { charId: g3.id + '#ura', start: true });
+const sys3 = calls.filter((x) => x.sch && x.sch.includes('"who"')).pop().sys;
+ok(sys3.includes('# このグループの設定（各キャラクター設定より優先）\n全員、今日が初対面') && sys3.includes('このグループでのシャロの立場（上の設定より優先）\n会長。話を仕切る') && sys3.includes('グループ側）を優先'), 'system has group settings, roles and priority rule');
+ok(!sys3.includes('関係ない人'), 'non-member role not used');
+const g4 = (await call('POST', '/group', { group: { ...g3, roles: { [sharo.id]: '会長。話を仕切る' }, members: [sharo.id] } })).group;
+ok(Object.keys(g4.roles).length === 1, 'roles follow member changes');
+await call('DELETE', '/group?id=' + g3.id);
 // 削除
 await call('DELETE', '/group?id=' + g.id);
 sy = await call('GET', '/sync?since=0');

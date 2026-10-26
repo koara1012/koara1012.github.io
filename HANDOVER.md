@@ -1,6 +1,6 @@
 # トーク（キャラチャット）引き継ぎメモ
 
-最終更新：第33版（2026-10-23 裏だけのキャラ）
+最終更新：第34版（2026-10-26 AIのクレジット切れの表示）
 
 iPhoneのホーム画面に置いて使う、キャラクターとのLINE風チャットアプリ（PWA）です。
 このメモは、次に作業する人（または Claude）が、ここだけ読めば全体をつかめるように書いています。
@@ -85,6 +85,7 @@ iPhone（PWA）  ──HTTPS──▶  Cloudflare Worker「chara-chat」 ──�
 - スタンプ：`usleep:` `ulater:`
 - キャラの性質：`rhythm:`（生活リズム・毎週の習慣）、`jealous:`、`meet:<日付>`（キャラ同士の約束）
 - ニュース：`newsKw:` `news:` `newsUsed:`
+- AIのクレジット切れ：`aiAlert:gemini` `aiAlert:grok`（料金まわりのエラーで作られ、次に呼び出しが成功すると消える）
 - 天気・災害：`weather` `forecast` `air` `dis:state` `disjob:`
 - バックアップ：`bk:job` `bk:restore` `bk:lock` `bk:status` `bk:upload` `bk:userdel` `bk:lease`
 
@@ -109,7 +110,7 @@ iPhone（PWA）  ──HTTPS──▶  Cloudflare Worker「chara-chat」 ──�
 
 ## 5. テスト
 ```
-node --no-warnings tests/run-all.mjs            # 全部（今は24本）
+node --no-warnings tests/run-all.mjs            # 全部（今は25本）
 node --no-warnings tests/run-all.mjs t_group     # 名前で絞る
 ```
 - 本物のAI・D1・通知にはつながりません（`tests/fake.mjs` の偽物を使います）。鍵も不要です。
@@ -118,6 +119,9 @@ node --no-warnings tests/run-all.mjs t_group     # 名前で絞る
 - 画面の確認には Playwright（Chromium）を使っていました（作業場所の一時ファイルで、リポジトリには入っていません）。
 
 ## 6. よくある落とし穴
+- 表のトークが急に動かなくなったら、まず設定の「診断情報をコピー」の「サーバーの記録」を見ます。
+  - `Gemini 402 … prepayment credits are depleted` などは、AIのクレジット切れです。プログラムの不具合ではありません。
+  - 第34版から、一覧とトーク画面の上に赤い帯が出て、1日1回通知も届きます。チャージすれば自動で元に戻ります。
 - `hidden` 属性は、CSSで `display` を指定した要素には効きません。そのため `[hidden]{display:none!important}` を入れてあります。
 - テストに日付を直書きすると、日がたつと落ちます。時刻は「今」から相対で作るか、全部固定します。
 - 文字列の中の改行は、`\n` と書きます（本物の改行を入れると文法エラーになります）。
@@ -137,6 +141,7 @@ node --no-warnings tests/run-all.mjs t_group     # 名前で絞る
 - 表の返事の長さ設定（保留）
 
 ## 9. 更新履歴（新しい順）
+- **第34版**：AIのクレジット切れ・利用上限を見つけたら、一覧とトーク画面に赤い帯で表示し、1日1回通知（直れば自動で消える）
 - **第33版**：裏だけに登場するキャラ（`uraOnly`）
 - **第32版**：裏のグループ（メンバー選択・あらすじ・物語を始める・リセット）。表に出ていたリセットボタンを修正
 - **第31版**：TLに写真を投稿（AIが写真を言葉にして、キャラが中身に反応）

@@ -121,6 +121,10 @@ body.ura .pbtn{display:none}
   background:#fff;line-height:1.4;outline:none}
 .send{flex:none;width:40px;height:40px;border-radius:50%;background:var(--accent);color:#fff;display:grid;place-items:center;font-size:18px}
 .send:disabled{background:#c5cbd5}
+.aialert{flex:none;background:#c0392b;color:#fff;font-size:12.5px;line-height:1.5;padding:8px 12px;display:flex;gap:10px;align-items:center}
+.aialert .tx{flex:1;min-width:0}
+.aialert .tx b{display:block;font-size:13px}
+.aialert a{flex:none;background:#fff;color:#c0392b;font-weight:700;border-radius:14px;padding:5px 12px;text-decoration:none;font-size:12.5px}
 .costbar{flex:none;font-size:11.5px;color:var(--sub);text-align:center;padding:4px 10px;background:#f3f5f8;border-bottom:1px solid var(--line);font-variant-numeric:tabular-nums}
 .costbar:empty{display:none}
 .pausebar{flex:none;display:none;align-items:center;justify-content:space-between;gap:8px;padding:6px 12px;font-size:12.5px;background:#2e2333;color:#e4d6e8;border-bottom:1px solid #43354a}
@@ -280,6 +284,7 @@ body.ura #list.tlMode{background:#efe9f0}
   <div class="tabs" id="worldTabs">
     <button data-w="omote">表（トーク）</button><button data-w="ura">裏（会う）</button>
   </div>
+  <div id="aiAlertBar" style="flex:none" hidden></div>
   <div class="costbar" id="costBar" role="button" tabindex="0" title="AIの利用料金（目安）"></div>
   <div class="pausebar" id="uraPauseBar"><span id="uraPauseText"></span><button id="uraPauseBtn"></button></div>
   <div class="scroll" id="list"></div>
@@ -312,6 +317,7 @@ body.ura #list.tlMode{background:#efe9f0}
     <button class="ib" id="btnSelect" aria-label="メッセージを選んで消す" style="font-size:14px;font-weight:700;padding:0 8px">選択</button>
     <button class="ib" id="btnEditChar" aria-label="キャラを編集" style="font-size:14px;font-weight:700;padding:0 8px">編集</button>
   </header>
+  <div class="aialert" id="aiAlertChat" hidden></div>
   <div id="selHint">消したいメッセージをタップして選んでください</div>
   <div class="scroll" id="msgs"></div>
   <div class="inbar">
@@ -748,7 +754,7 @@ body.ura #list.tlMode{background:#efe9f0}
 
 <script>
 'use strict';
-const APP_VERSION = '第33版（2026-10-23 16:00:00 更新・裏だけのキャラ）';
+const APP_VERSION = '第34版（2026-10-26 23:59:00 更新・AIのクレジット切れの表示）';
 const $ = (id) => document.getElementById(id);
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 const esc = (s) => String(s).replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
@@ -834,7 +840,7 @@ async function sync() {
     let more = true;
     while (more) {
       const d = await api('GET', '/sync?since=' + S.maxId);
-      S.chars = d.chars; S.groups = d.groups || []; S.status = d.status || {}; S.reads = d.reads || {}; S.charRead = d.charRead || {}; S.outage = d.outage || null; S.cost = d.cost || S.cost; renderCost(); renderPause(); S.settings = d.settings || S.settings;
+      S.chars = d.chars; S.groups = d.groups || []; S.aiAlerts = d.aiAlerts || {}; S.status = d.status || {}; S.reads = d.reads || {}; S.charRead = d.charRead || {}; S.outage = d.outage || null; S.cost = d.cost || S.cost; renderCost(); renderPause(); S.settings = d.settings || S.settings; renderAiAlert();
       const fresh = [];
       for (const m of d.messages) if (addMsg(m)) fresh.push(m);
       applyRetracted(d.retracted || []);
@@ -1238,6 +1244,29 @@ function yenText(usd) {
   const y = (usd || 0) * (S.settings.yen || 150);
   return y < 1 ? '1円未満' : y < 100 ? '約' + y.toFixed(1) + '円' : '約' + Math.round(y).toLocaleString('ja-JP') + '円';
 }
+// AIのクレジット切れ（サーバーが料金まわりのエラーを見つけたとき。直れば自動で消える）
+const AI_INFO = {
+  gemini: { name: 'Gemini（表のAI）', site: 'https://aistudio.google.com/', siteName: 'AI Studio' },
+  grok: { name: 'Grok（裏のAI）', site: 'https://console.x.ai/', siteName: 'xAI' },
+};
+function aiAlertHTML(p, a) {
+  const st = S.settings || {};
+  const uses = [(st.omoteProvider || 'gemini') === p ? '表' : '', (st.uraProvider || 'grok') === p ? '裏' : ''].filter(Boolean);
+  const what = uses.length ? `${uses.join('・')}のトークの返事や話しかけ、TLが止まっています` : p === 'gemini' ? 'キャラからの写真が作れません' : '';
+  const i = AI_INFO[p] || { name: p, site: '', siteName: '' };
+  const name = i.name.replace(/（.*）/, '') + (uses.length ? `（${uses.join('・')}のAI）` : '');
+  return `<div class="tx"><b>⚠ ${esc(name)}のクレジット（利用枠）が切れています</b>${esc(what)}。チャージすると自動で元に戻ります。</div>${i.site ? `<a href="${i.site}" target="_blank" rel="noopener">${esc(i.siteName)}</a>` : ''}`;
+}
+function renderAiAlert() {
+  const al = S.aiAlerts || {}, keys = Object.keys(al);
+  const bar = $('aiAlertBar');
+  bar.hidden = !keys.length;
+  if (keys.length) bar.innerHTML = keys.map((p) => `<div class="aialert">${aiAlertHTML(p, al[p])}</div>`).join('');
+  // トーク画面：開いている世界のAIが止まっているときだけ
+  const st = S.settings || {}, p = S.world === 'ura' ? st.uraProvider || 'grok' : st.omoteProvider || 'gemini';
+  $('aiAlertChat').hidden = !al[p];
+  if (al[p]) $('aiAlertChat').innerHTML = aiAlertHTML(p, al[p]);
+}
 function renderCost() {
   const el = $('costBar'); if (!el) return;
   const c = S.cost && S.cost[S.world === 'ura' ? 'ura' : 'omote'];
@@ -1279,7 +1308,7 @@ function setWorld(w) {
   if (S.world === w) return;
   if (S.view === 'chat') { if (revealQ.length) { revealQ.forEach((m) => S.hidden.delete(m.id)); revealQ.length = 0; } S.typingFor = null; }
   S.world = w; store.set('chat.world', w);
-  applyWorld(); renderAll();
+  applyWorld(); renderAll(); renderAiAlert();
   if (S.mode === 'tl') loadTL(w);
 }
 function setMode(m) {

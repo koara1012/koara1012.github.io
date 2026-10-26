@@ -14,7 +14,7 @@
 //    ・Cron トリガー  * * * * *  （毎分。実際に動くのは13分おき）
 // =====================================================================
 
-const VERSION = '第33版（2026-10-23 16:00:00 更新・裏だけのキャラ）';
+const VERSION = '第34版（2026-10-26 23:59:00 更新・AIのクレジット切れの表示）';
 const DEFAULT_MODEL = 'gemini-flash-latest';
 const DEFAULT_GROK_MODEL = 'grok-4.7';                 // X（Twitter）の Grok と同じ最新世代
 const FALLBACK_GROK_MODEL = 'grok-4-fast-non-reasoning'; // 上が使えないときの予備
@@ -400,7 +400,7 @@ async function route(key, url, body, env, ctx) {
         const { results: ss } = await env.DB.prepare("SELECT char_id, json_extract(data,'$.statusMsg') AS m, json_extract(data,'$.statusEmoji') AS e FROM char_state").all();
         for (const r of ss) if (r.m || r.e) status[r.char_id] = { msg: r.m || '', emoji: r.e || '' };
       }
-      return json({ chars, groups: await loadGroups(env), messages, more, reads, charRead, reactions, status, cost: await costSummary(env).catch(() => null), outage: dis && dis.outage ? dis.outage : null, retracted: rt.map((r) => r.id), settings: await getSettings(env), now: Date.now(), version: VERSION });
+      return json({ chars, groups: await loadGroups(env), aiAlerts: await aiAlerts(env), messages, more, reads, charRead, reactions, status, cost: await costSummary(env).catch(() => null), outage: dis && dis.outage ? dis.outage : null, retracted: rt.map((r) => r.id), settings: await getSettings(env), now: Date.now(), version: VERSION });
     }
 
     // ---- 裏のグループ
@@ -1382,11 +1382,12 @@ async function grokText(env, model, system, contents, schema, schemaName, opts) 
       await log(env, `Grok: ${model} が使えないため ${FALLBACK_GROK_MODEL} を使いました（${lastErr.slice(0, 120)}）`);
       model = FALLBACK_GROK_MODEL; effort = null; data = null; continue;
     }
-    if (![429, 500, 502, 503, 504].includes(r.status)) throw new Error(lastErr);
+    if (![429, 500, 502, 503, 504].includes(r.status) || isBillingError(r.status, lastErr)) { await aiAlertFail(env, 'grok', r.status, lastErr); throw new Error(lastErr); }
     await new Promise((res) => setTimeout(res, 1500 * (attempt + 1)));
     data = null;
   }
-  if (!data) throw new Error(lastErr);
+  if (!data) { await aiAlertFail(env, 'grok', 429, lastErr); throw new Error(lastErr); }
+  await aiAlertOk(env, 'grok');
   const ch = data.choices && data.choices[0];
   const text = ch && ch.message && typeof ch.message.content === 'string' ? ch.message.content : '';
   const u = data.usage || {};
@@ -1458,7 +1459,7 @@ async function geminiText(env, system, contents, responseSchema, world = 'omote'
     safetySettings: ['HARM_CATEGORY_HARASSMENT', 'HARM_CATEGORY_HATE_SPEECH', 'HARM_CATEGORY_SEXUALLY_EXPLICIT', 'HARM_CATEGORY_DANGEROUS_CONTENT']
       .map((category) => ({ category, threshold: 'BLOCK_ONLY_HIGH' })),
   };
-  let data, lastErr;
+  let data, lastErr, lastStatus = 0;
   for (let attempt = 0; attempt < 3; attempt++) {
     const r = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(model)}:generateContent`, {
       method: 'POST',
@@ -1468,11 +1469,13 @@ async function geminiText(env, system, contents, responseSchema, world = 'omote'
     data = await r.json().catch(() => null);
     if (r.ok) break;
     lastErr = `Gemini ${r.status}: ${(data && data.error && data.error.message) || '不明なエラー'}`;
-    if (![429, 500, 502, 503, 504].includes(r.status)) throw new Error(lastErr);
+    lastStatus = r.status;
+    if (![429, 500, 502, 503, 504].includes(r.status) || isBillingError(r.status, lastErr)) { await aiAlertFail(env, 'gemini', r.status, lastErr); throw new Error(lastErr); }
     await new Promise((res) => setTimeout(res, 1500 * (attempt + 1)));
     data = null;
   }
-  if (!data) throw new Error(lastErr);
+  if (!data) { await aiAlertFail(env, 'gemini', lastStatus, lastErr); throw new Error(lastErr); }
+  await aiAlertOk(env, 'gemini');
   const cand = data.candidates && data.candidates[0];
   const parts = (cand && cand.content && cand.content.parts) || [];
   const text = parts.filter((p) => !p.thought && typeof p.text === 'string').map((p) => p.text).join('');
@@ -1480,6 +1483,45 @@ async function geminiText(env, system, contents, responseSchema, world = 'omote'
   await recordCost(env, world, 'gemini', data.modelVersion || model, nz(u.promptTokenCount, 0), nz(u.cachedContentTokenCount, 0), nz(u.candidatesTokenCount, 0) + nz(u.thoughtsTokenCount, 0)).catch(() => {});
   if (!text) throw new Error('Geminiの返答が空でした（' + ((cand && cand.finishReason) || (data.promptFeedback && data.promptFeedback.blockReason) || '理由不明') + '）');
   return text;
+}
+
+// ---- AIのクレジット切れ・使用量の上限（料金まわりのエラー）を覚えて、アプリに知らせる
+// 次にそのAIの呼び出しが成功したら、自動で消える
+function isBillingError(status, msg) {
+  const m = String(msg || '');
+  if (status === 402) return true; // 前払いクレジットの使い切り など
+  if (/prepay|credit|billing|spending limit|spend limit|insufficient (funds|balance)|exceeded your current quota|RESOURCE_EXHAUSTED.*(billing|plan)/i.test(m)) return true;
+  return false;
+}
+const aiAlertMemo = {}; // この実行の中で「警告なし」と分かっているもの（毎回DBを読まないため）
+async function aiAlertFail(env, provider, status, msg) {
+  if (!isBillingError(status, msg)) return;
+  try {
+    const k = 'aiAlert:' + provider, now = Date.now();
+    const cur = await kvGet(env, k, null);
+    const v = { at: cur ? cur.at : now, last: now, status, msg: String(msg).slice(0, 300), notified: cur ? cur.notified || 0 : 0 };
+    const notify = now - v.notified > 24 * 3600e3; // 通知は1日1回まで
+    if (notify) v.notified = now;
+    await kvSet(env, k, v);
+    aiAlertMemo[provider] = true;
+    if (notify) {
+      const label = provider === 'gemini' ? 'Gemini（Google AI Studio）' : 'Grok（xAI）';
+      await bkNotify(env, `${label}のクレジット（利用枠）が切れているため、AIの返事が止まっています。チャージすると自動で元に戻ります。`, 'トーク（AIの料金）').catch(() => {});
+    }
+  } catch (_) {}
+}
+async function aiAlertOk(env, provider) {
+  if (aiAlertMemo[provider] === false) return;
+  try {
+    await env.DB.prepare('DELETE FROM kv WHERE k=?').bind('aiAlert:' + provider).run();
+    aiAlertMemo[provider] = false;
+  } catch (_) {}
+}
+async function aiAlerts(env) {
+  const { results } = await env.DB.prepare("SELECT k,v FROM kv WHERE k >= 'aiAlert:' AND k < 'aiAlert;'").all();
+  const out = {};
+  for (const r of results) { try { const v = JSON.parse(r.v); out[r.k.slice(8)] = { at: v.at, last: v.last, status: v.status, msg: v.msg }; } catch (_) {} }
+  return out;
 }
 
 // ---- AIの利用料金（目安）。返事ごとに使った量 × 単価を足していく
@@ -1913,10 +1955,10 @@ async function bkFinishJob(env, job, ok, info) {
   await env.DB.prepare("DELETE FROM kv WHERE k='bk:job'").run();
   if (!ok && job.kind === 'auto' && !info.cancelled) await bkNotify(env, info.blocked ? 'バックアップを保存しませんでした（' + (info.problems || []).concat(info.drops || []).slice(0, 2).join('、') + '）。前のバックアップはそのまま残しています。' : 'バックアップに失敗しました：' + (info.error || '')).catch(() => {});
 }
-async function bkNotify(env, body) { // 問題があったときだけ知らせる
+async function bkNotify(env, body, title = 'トーク（バックアップ）') { // 問題があったときだけ知らせる
   const st = await getSettings(env);
-  if (st.notifyVia !== 'bark') await pushPayload(env, { title: 'トーク（バックアップ）', body });
-  if (st.notifyVia !== 'web' && env.BARK_DEVICE_KEY) await sendBark(env, st, { title: 'トーク（バックアップ）', body, group: 'バックアップ' }).catch(() => {});
+  if (st.notifyVia !== 'bark') await pushPayload(env, { title, body });
+  if (st.notifyVia !== 'web' && env.BARK_DEVICE_KEY) await sendBark(env, st, { title, body, group: 'お知らせ' }).catch(() => {});
 }
 async function bkCheckAndCommit(env, job) {
   // ① 件数：始めた時点の件数（以下）と今の件数（以上）のあいだに収まっているか（書き出し中に消された分だけずれてよい）
@@ -4140,7 +4182,7 @@ async function geminiImage(env, prompt, src) {
       body: JSON.stringify({ contents: [{ role: 'user', parts }], generationConfig: { responseModalities: ['TEXT', 'IMAGE'] } }),
     });
     const data = await r.json().catch(() => null);
-    if (!r.ok) { lastErr = `画像 ${model} ${r.status}: ${(data && data.error && data.error.message) || ''}`; if ([400, 403, 404].includes(r.status)) continue; throw new Error(lastErr); }
+    if (!r.ok) { lastErr = `画像 ${model} ${r.status}: ${(data && data.error && data.error.message) || ''}`; await aiAlertFail(env, 'gemini', r.status, lastErr); if ([400, 403, 404].includes(r.status)) continue; throw new Error(lastErr); }
     const ps = (((data || {}).candidates || [])[0] || {}).content;
     const img = ((ps && ps.parts) || []).find((p) => p.inlineData && p.inlineData.data);
     if (img) { await recordCost(env, 'omote', 'gemini', model, 0, 0, 0, 1).catch(() => {}); return `data:${img.inlineData.mimeType || 'image/png'};base64,${img.inlineData.data}`; }

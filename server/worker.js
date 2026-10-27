@@ -14,12 +14,12 @@
 //    ・Cron トリガー  * * * * *  （毎分。実際に動くのは13分おき）
 // =====================================================================
 
-const VERSION = '第35版（2026-10-27 03:30:00 更新・グループ設定とメンバーの立場）';
+const VERSION = '第36版（2026-10-28 03:10:00 更新・キャラごとに見回りの時刻をずらす）';
 const DEFAULT_MODEL = 'gemini-flash-latest';
 const DEFAULT_GROK_MODEL = 'grok-4.7';                 // X（Twitter）の Grok と同じ最新世代
 const FALLBACK_GROK_MODEL = 'grok-4-fast-non-reasoning'; // 上が使えないときの予備
 const JST = 9 * 3600 * 1000;
-const TICK_MIN = 13;              // 起きる間隔（分）。Cronは毎分鳴らし、ちょうど13分ごとのときだけ動く
+const TICK_MIN = 13;              // 1人あたりの見回りの間隔（分）。Cronは毎分鳴らし、キャラごとに13分の中で担当の分をずらして判定する
 const MAX_UNREAD = 8;             // 未読がこれ以上たまったら送らない
 const REPLY_WAIT = 90 * 1000;
 const URA = '#ura';              // 裏タブの会話は char_id にこれを付けて別に保存する     // ユーザーの送信後、アプリが返信を取りに来なかった場合にサーバーが代わりに返すまでの時間
@@ -72,8 +72,8 @@ export default {
     ctx.waitUntil(runDueProactive(env).catch((e) => log(env, '自動送信: ' + e.message))); // 時間をずらした話しかけ
     ctx.waitUntil(runDuePostscripts(env).catch((e) => log(env, '追伸: ' + e.message))); // 追伸・不在着信のあとの言葉
     ctx.waitUntil(runDisasters(env, minute).catch((e) => log(env, '災害の確認: ' + e.message))); // 地震・速報は毎分、ほかは間をあけて確認
-    if (Number.isFinite(minute) && minute % TICK_MIN !== 0) return;
-    ctx.waitUntil(tick(env).catch((e) => log(env, 'tick全体: ' + e.message)));
+    // 見回りは毎分。キャラごとに13分の中で担当の分をずらして判定する（何人も同じ瞬間に動かないように）
+    ctx.waitUntil(tick(env, minute).catch((e) => log(env, 'tick全体: ' + e.message)));
   },
 };
 
@@ -1071,17 +1071,27 @@ function decide(c, hist, lastRead, now, settings, force = false, factor = 1) {
   return { mode: Math.random() * 100 < c.nudgeRate ? 'nudge' : 'topic', since: last.at };
 }
 
-async function tick(env) {
+// キャラごとの見回りの担当の分（13分の中で均等にずらす）。minute が無いとき（テストなど）は全員
+function tickDue(allChars, minute) {
+  if (!Number.isFinite(minute)) return () => true;
+  const order = [...allChars].sort((a, b) => (a.created || 0) - (b.created || 0) || String(a.id).localeCompare(String(b.id)));
+  const slot = new Map(order.map((c, i) => [c.id, Math.floor((i * TICK_MIN) / Math.max(order.length, 1)) % TICK_MIN]));
+  const m = ((minute % TICK_MIN) + TICK_MIN) % TICK_MIN;
+  return (c) => slot.get(c.id) === m;
+}
+async function tick(env, minute) {
   await ensureSchema(env);
   const now = Date.now();
   const settings = await getSettings(env);
   const allChars = await loadChars(env);
-  const chars = allChars.filter(inOmote); // 表の話しかけ・くらしは、表に登場する子だけ
+  const due = tickDue(allChars, minute);
+  const omoteAll = allChars.filter(inOmote); // 表の話しかけ・くらしは、表に登場する子だけ
+  const chars = omoteAll.filter(due); // この分に担当の子
   const done = [];
   await applyRetracts(env).catch(() => {});
   // くらし：毎日の様子と記憶の整理（話しかける前に）
-  const ctxAll = { chars, lastUserActive: 0 };
-  if (settings.lifeEnabled) {
+  const ctxAll = { chars: omoteAll, lastUserActive: 0 };
+  if (settings.lifeEnabled && chars.length) {
     const a = await env.DB.prepare("SELECT MAX((SELECT MAX(at) FROM messages WHERE char_id=c.id AND sender='me')) AS t FROM chars c").first();
     const b = await env.DB.prepare("SELECT MAX(at) AS t FROM reads WHERE char_id NOT LIKE '%#ura'").first();
     ctxAll.lastUserActive = Math.max((a && a.t) || 0, (b && b.t) || 0);
@@ -1135,8 +1145,8 @@ async function tick(env) {
       await log(env, `自動送信（${c.name}）: ${e.message}`);
     }
   }
-  // タイムライン：キャラが自分からつぶやく（表・裏それぞれ。裏だけの子は裏だけ）
-  for (const c of allChars) {
+  // タイムライン：キャラが自分からつぶやく（表・裏それぞれ。裏だけの子は裏だけ）。担当の分の子だけ
+  for (const c of allChars.filter(due)) {
     for (const world of ['omote', 'ura']) {
       try {
         if (!(await shouldCharPost(env, c, world, now, settings))) continue;
@@ -1147,14 +1157,14 @@ async function tick(env) {
       }
     }
   }
-  // タイムライン：予定していた いいね・コメント・返信 を実行
+  // タイムライン：予定していた いいね・コメント・返信 を、時刻が来たものから毎分実行（まとめて届かないように）
   try {
-    const n = await runTlJobs(env, 15);
+    const n = await runTlJobs(env, Number.isFinite(minute) ? 5 : 15);
     if (n) done.push(`TL反応:${n}件`);
   } catch (e) {
     await log(env, 'TL反応: ' + e.message);
   }
-  await kvSet(env, 'lastTick', { at: now, done });
+  if (done.length || !Number.isFinite(minute) || minute % TICK_MIN === 0) await kvSet(env, 'lastTick', { at: now, done }); // 何かしたとき（と13分ごと）だけ記録
 }
 
 // ---------------------------------------------------------------- Gemini

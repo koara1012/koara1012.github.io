@@ -69,8 +69,14 @@ const old = Date.now() - 3 * 3600e3;
 for (const cc of [c, c2, c3]) { DB.raw.prepare("INSERT INTO messages (char_id,sender,text,at) VALUES (?,?,?,?)").run(cc.id, 'char', 'hi', old); DB.raw.prepare("INSERT INTO messages (char_id,sender,text,at) VALUES (?,?,?,?)").run(cc.id, 'me', 'yo', old + 1000); DB.raw.prepare("INSERT INTO messages (char_id,sender,text,at) VALUES (?,?,?,?)").run(cc.id, 'char', 'ok', old + 2000); await call('POST', '/read', { charId: cc.id }); }
 await call('POST', '/settings', { settings: { lifeEnabled: false } });
 Math.random = () => 0.001;
-const w = []; await W.scheduled({ scheduledTime: Math.floor(Date.now() / 60000 / 13) * 13 * 60000 }, env, { waitUntil: (x) => w.push(x) }); await Promise.all(w);
+// 見回りはキャラごとに13分の中でずらしてある（第36版）：13分ぶん回すと全員1回ずつ、別々の分に判定される
+const base = Math.floor(Date.now() / 60000 / 13) * 13 * 60000, perMin = [];
+for (let m = 0; m < 13; m++) {
+  const w = []; await W.scheduled({ scheduledTime: base + m * 60000 }, env, { waitUntil: (x) => w.push(x) }); await Promise.all(w);
+  perMin.push(DB.raw.prepare("SELECT count(*) n FROM kv WHERE k LIKE 'proj:%'").get().n);
+}
 Math.random = R;
+ok(perMin.every((n, i) => n - (i ? perMin[i - 1] : 0) <= 1), 'each character judged in its own minute: ' + perMin.join(','));
 const proj = DB.raw.prepare("SELECT k,v FROM kv WHERE k LIKE 'proj:%'").all().map(r => JSON.parse(r.v)).sort((a, b) => a.due - b.due);
 console.log('  scheduled offsets (min):', proj.map(p => ((p.due - Date.now()) / 60000).toFixed(1)));
 ok(proj.length === 3, 'all three scheduled instead of sent at once');

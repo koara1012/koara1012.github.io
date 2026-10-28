@@ -136,6 +136,11 @@ ok(DB.raw.prepare("SELECT text FROM memories WHERE char_id=? AND kind='fact'").a
 ok(!(await call('GET', '/meet?charId=' + c.id)).log.length, 'meet log cleared');
 await say('楽しかったね');
 ok(lastSys().includes('ユーザーと実際に会った。そのときの様子'), 'LINE prompt: remembers meeting');
+// 終え忘れは6時間で自動で終える
+setAppt(c.id, { place: '公園', at: 0, status: 'meeting', metAt: Date.now() - 7 * 3600e3 });
+DB.raw.prepare('INSERT INTO kv (k,v) VALUES (?,?)').run('meetlog:' + c.id, JSON.stringify([{ who: 'me', text: 'やあ' }, { who: 'char', text: 'こんにちは' }]));
+await X.runAppointments(env);
+ok((await getAppt(c.id)).status === 'done', 'meeting auto-ended after 6h');
 // キャラを消すと片付く
 await call('DELETE', '/char?id=' + c.id);
 ok(!DB.raw.prepare('SELECT k FROM kv WHERE k IN (?,?,?)').all('appt:' + c.id, 'facesO:' + c.id, 'meetlog:' + c.id).length, 'char delete cleans kv');

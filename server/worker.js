@@ -1882,7 +1882,7 @@ async function groupReply(env, g, hist, key) {
 //   status：set（約束あり）／postponed（モードがオフのまま時刻を過ぎた＝日時未定）／replan（決め直しを持ちかける）
 //           meeting（会っている）／done（会った）／missed（通知が届いたのに行かなかった）
 // kv meetlog:<キャラid> = [{ who:'me'|'char'|'narr', text, face }]（会っている場面の会話。終えたら消す）
-const MEET_SOON = 20 * 60e3, MEET_MISS = 2 * 3600e3, MEET_LOG_MAX = 300;
+const MEET_SOON = 20 * 60e3, MEET_MISS = 2 * 3600e3, MEET_LOG_MAX = 300, MEET_AUTO_END = 6 * 3600e3;
 const MEET_URL = 'https://koara1012.github.io/lab/novel.html'; // 通知をタップしたら開くノベル画面（試作）
 const meetOn = (st, c) => !!(st.meetFeature && st.meetOn !== false && c && !c.uraOnly && !(st.meetOffChars || []).includes(c.id));
 const meetUrl = (id) => MEET_URL + '?from=line&meet=' + encodeURIComponent(id);
@@ -1943,6 +1943,7 @@ async function runAppointments(env) {
   for (const row of results) {
     let a; try { a = JSON.parse(row.v); } catch (_) { continue; }
     const c = chars.find((x) => x.id === row.k.slice(5));
+    if (c && a.status === 'meeting' && now - (a.metAt || 0) > MEET_AUTO_END) { await meetEnd(env, c, now); continue; } // 終え忘れ：6時間たったら自動で終えてまとめる
     if (!c || a.status !== 'set' || !a.at) continue;
     let ch = false;
     if (!meetOn(st, c)) { if (now >= a.at) { a.status = 'postponed'; ch = true; } }

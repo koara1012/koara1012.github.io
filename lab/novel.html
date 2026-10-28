@@ -606,6 +606,14 @@ async function buildStage(){
 const faceObj = (c, n) => c.faces.find(f => f.name === n) || null;
 function defaultFace(c){ const f = faceObj(c,'通常') || c.faces[0]; return f ? f.name : '通常'; }
 function faceNames(c){ const n = c.faces.map(f => f.name); return n.length ? n : ['通常']; }
+/* 表情の表示・非表示（トークの種類ごと）：f.off = { normal, ura, omote }（true＝そのトークでは使わない）。既定の表情（「通常」）は外せない */
+const KINDS = [['normal','ふつう'],['ura','裏'],['omote','表']];
+const roomKind = r => (r && r.kind) || 'normal';
+function usableFaces(c, kind){
+  const def = defaultFace(c);
+  const n = c.faces.filter(f => f.name === def || !(f.off && f.off[kind])).map(f => f.name);
+  return n.length ? n : [def];
+}
 function setImg(el, id){
   const u = id ? urlOf(id) : '';
   if (el.dataset.u !== u){ el.dataset.u = u; if (u){ el.onerror = () => { el.style.display = 'none'; const r = REC.get(id); log('error', `画像を表示できませんでした：${r ? r.name : id}` + envHint()); }; el.src = u; } }
@@ -715,7 +723,7 @@ function nowText(){
   const d = new Date(), w = '日月火水木金土'[d.getDay()];
   return `${d.getFullYear()}年${d.getMonth()+1}月${d.getDate()}日(${w}) ${String(d.getHours()).padStart(2,'0')}:${String(d.getMinutes()).padStart(2,'0')}`;
 }
-const faceListText = c => faceNames(c).map(n => { const f = faceObj(c, n); return `  - ${n}${f && f.desc ? '：' + f.desc : ''}`; }).join('\n');
+const faceListText = c => usableFaces(c, roomKind(ROOM)).map(n => { const f = faceObj(c, n); return `  - ${n}${f && f.desc ? '：' + f.desc : ''}`; }).join('\n');
 function systemPrompt(ms){
   const rule = `JSONだけを返す。前後に説明文やコードブロック記号を付けない。`;
   if (ms.length === 1){
@@ -846,7 +854,7 @@ function parseReply(c){
   return lines.map(l => {
     const who = ms.length === 1 ? ms[0].id : matchWho(l.who, ms, prev); prev = who;
     const ch = charById(who); let f = String(l.face || '').trim();
-    if (!faceNames(ch).includes(f)){ if (l.face) log('info', `${ch.name}の知らない表情「${f}」→ ${defaultFace(ch)}`); f = defaultFace(ch); }
+    if (!usableFaces(ch, roomKind(ROOM)).includes(f)){ if (l.face) log('info', `${ch.name}の${faceNames(ch).includes(f) ? 'このトークで使わない' : '知らない'}表情「${f}」→ ${defaultFace(ch)}`); f = defaultFace(ch); }
     return { who, face:f, text:String(l.text || '').replace(/^[（(].*?[)）]\s*/,'').trim() };
   }).filter(l => l.text);
 }
@@ -912,7 +920,7 @@ function uraToHist(msgs, room){   // サーバーのメッセージ → ノベ�
     if (m.sender === 'me'){ out.push({ role:'user', text, t:m.at, sid:m.id }); continue; }
     const who = m.sender === 'narr' ? '' : (m.speaker ? ((novelOfLine(m.speaker) || {}).id || single) : single);
     const ch = who ? charById(who) : null;
-    const line = { who, face: ch ? ((uraFaceCache[m.id] && faceNames(ch).includes(uraFaceCache[m.id])) ? uraFaceCache[m.id] : defaultFace(ch)) : '', text, sid:m.id };
+    const line = { who, face: ch ? ((uraFaceCache[m.id] && usableFaces(ch, 'ura').includes(uraFaceCache[m.id])) ? uraFaceCache[m.id] : defaultFace(ch)) : '', text, sid:m.id };
     const last = out[out.length-1];
     if (last && last.role === 'chars') last.lines.push(line); else out.push({ role:'chars', lines:[line], t:m.at });
   }
@@ -920,10 +928,10 @@ function uraToHist(msgs, room){   // サーバーのメッセージ → ノベ�
 }
 let uraFaceCache = {};
 async function pickFaces(lines){   // 裏の返事に表情を付ける（端末のAIキーで小さく問い合わせ）
-  const need = lines.filter(l => l.who && charById(l.who) && charById(l.who).faces.length > 1);
+  const need = lines.filter(l => l.who && charById(l.who) && usableFaces(charById(l.who), 'ura').length > 1);
   if (!S.uraFaceAI || !need.length) return;
   const prov = S.aiProvider || 'grok'; if (prov === 'gemini' ? !S.geminiKey : !S.apiKey) return;
-  const list = need.map((l,i) => { const c = charById(l.who); return `${i+1}. ${c.name}「${l.text}」 候補：${faceNames(c).map(n => { const f = faceObj(c,n); return n + (f && f.desc ? '（' + f.desc + '）' : ''); }).join('、')}`; }).join('\n');
+  const list = need.map((l,i) => { const c = charById(l.who); return `${i+1}. ${c.name}「${l.text}」 候補：${usableFaces(c, 'ura').map(n => { const f = faceObj(c,n); return n + (f && f.desc ? '（' + f.desc + '）' : ''); }).join('、')}`; }).join('\n');
   const sys = '各台詞に一番合う表情を候補から1つずつ選ぶ。JSONだけを返す：{"faces":["表情名", ...]}（台詞と同じ順・同じ数）';
   try{
     let txt;
@@ -937,7 +945,7 @@ async function pickFaces(lines){   // 裏の返事に表情を付ける（端末
     }
     const a = String(txt).indexOf('{'), b = String(txt).lastIndexOf('}');
     const faces = JSON.parse(String(txt).slice(a, b+1)).faces || [];
-    need.forEach((l,i) => { const c = charById(l.who); if (faceNames(c).includes(faces[i])){ l.face = faces[i]; if (l.sid) uraFaceCache[l.sid] = faces[i]; } });
+    need.forEach((l,i) => { const c = charById(l.who); if (usableFaces(c, 'ura').includes(faces[i])){ l.face = faces[i]; if (l.sid) uraFaceCache[l.sid] = faces[i]; } });
     try{ await idb.set('uraFaces', uraFaceCache); }catch(e){}
   }catch(e){ log('warn', '裏トークの表情を選べませんでした（通常の顔で表示）：' + e.message); }
 }
@@ -1163,6 +1171,7 @@ function renderCharEditor(c){
     <div class="row"><input type="text" id="ceNewFace" placeholder="表情の名前（例：通常、喜ぶ、困る）"><button class="b p" id="ceAddFace">＋表情を追加</button></div>
     <div id="ceFaces">${c.faces.map((f,i) => `<div class="card">
       <div class="row"><input type="text" data-fname="${f.id}" value="${esc(f.name)}" style="max-width:150px;flex:none"><input type="text" data-fdesc="${f.id}" value="${esc(f.desc)}" placeholder="どんな気持ちの顔か（AIが選ぶ手がかり）"></div>
+      <div class="row"><label>使うトーク</label>${KINDS.map(([k,l]) => `<label><input type="checkbox" data-foff="${f.id}|${k}" ${f.off && f.off[k] ? '' : 'checked'} ${f.name === defaultFace(c) ? 'disabled' : ''}> ${l}</label>`).join('')}<span class="note">${f.name === defaultFace(c) ? 'いつもの顔なので外せません' : '外すと、そのトークではAIがこの表情を選ばず、ほかの表情から選びます'}</span></div>
       <div class="slots"><div class="grp"><b>目</b>${SLOTS.eye.map(([k,l]) => tileHtml(f.id,'eye',k,l,f.eye[k])).join('')}</div>
       <div class="grp"><b>口</b>${SLOTS.mouth.map(([k,l]) => tileHtml(f.id,'mouth',k,l,f.mouth[k])).join('')}</div></div>
       <div class="row"><button class="b p s" data-ftry="${f.id}">試す</button>${i > 0 ? `<button class="b s" data-fup="${f.id}">↑上へ</button>` : ''}<button class="b d s" data-fdel="${f.id}">この表情を消す</button></div></div>`).join('') || '<p class="note">まだ表情がありません。</p>'}</div>`;
@@ -1192,6 +1201,11 @@ function renderCharEditor(c){
     f.name = n; saveCharsSoon(); menuDirty = true;
   }));
   area.querySelectorAll('[data-fdesc]').forEach(i => i.addEventListener('input', () => { c.faces.find(x => x.id === i.dataset.fdesc).desc = i.value; saveCharsSoon(); }));
+  area.querySelectorAll('[data-foff]').forEach(i => i.addEventListener('change', () => {
+    const [fid, k] = i.dataset.foff.split('|'); const f = c.faces.find(x => x.id === fid); if (!f) return;
+    f.off = Object.assign({}, f.off); if (i.checked) delete f.off[k]; else f.off[k] = true;
+    saveCharsSoon(); menuDirty = true;
+  }));
   area.querySelectorAll('[data-slot]').forEach(t => t.onclick = e => {
     if (e.target.closest('[data-clr]')) return;
     const [fid, kind, key] = t.dataset.slot.split('|'); const f = c.faces.find(x => x.id === fid);

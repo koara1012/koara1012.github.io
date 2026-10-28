@@ -6,11 +6,11 @@
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-status-bar-style" content="default">
-<meta name="apple-mobile-web-app-title" content="トーク試作">
+<meta name="apple-mobile-web-app-title" content="トーク">
 <meta name="theme-color" content="#24324a">
 <link rel="manifest" href="manifest.json">
 <link rel="apple-touch-icon" href="../chat/icon-180.png">
-<title>【試作】トーク（統合）</title>
+<title>トーク</title>
 <style>
 :root{
   --head:#24324a; --head-fg:#fff;
@@ -777,14 +777,17 @@ body.ura #list.tlMode{background:#efe9f0}
 
 <script>
 'use strict';
-const APP_VERSION = '【試作】統合 lab-2（2026-10-28 21:00:00 更新・会う約束・本番 第37版がもと）';
-// 試作版：本番（chat/）と同じサイトなので、保存の名前に「lab.」を付けて本番の chat.* には書き込まない
+// 置き場所で切り替える：/lab/（試作）と /chat/（本番）で同じファイルを使う
+// 試作は本番と同じサイトなので、保存の名前に「lab.」を付けて本番の chat.* には書き込まない。通知も登録しない
+const IS_LAB = /\/lab\//.test(location.pathname);
+const APP_VERSION = '第40版（2026-10-28 22:30:00 更新・LINE風とノベル画面の統合）' + (IS_LAB ? '【試作】' : '');
+if (IS_LAB) { document.title = '【試作】トーク（統合）'; const mt = document.querySelector('meta[name=apple-mobile-web-app-title]'); if (mt) mt.content = 'トーク試作'; }
 const $ = (id) => document.getElementById(id);
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 const esc = (s) => String(s).replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 
 // ------------------------------------------------ 保存（localStorageは失敗しても動くように）
-const LAB = (k) => 'lab.' + k;
+const LAB = (k) => (IS_LAB ? 'lab.' : '') + k;
 const store = {
   get(k, d) { try { const v = localStorage.getItem(LAB(k)); return v == null ? d : JSON.parse(v); } catch (_) { return d; } },
   set(k, v) { try { localStorage.setItem(LAB(k), JSON.stringify(v)); } catch (_) {} },
@@ -792,6 +795,7 @@ const store = {
 };
 // 初回だけ：本番のサーバーURL・合言葉を読み写す（本番のデータは読むだけ）
 (function copyProdCfg() {
+  if (!IS_LAB) return;
   try {
     if (localStorage.getItem(LAB('chat.cfg')) != null) return;
     const p = JSON.parse(localStorage.getItem('chat.cfg') || 'null');
@@ -1859,7 +1863,7 @@ function b64uToU8(s) {
 }
 let swReg = null;
 async function registerSW() {
-  return null; // 試作版：サービスワーカーを登録しない（通知は本番のアプリで受け取る）
+  if (IS_LAB) return null; // 試作版：サービスワーカーを登録しない（通知は本番のアプリで受け取る）
   if (!('serviceWorker' in navigator)) return null;
   try { swReg = await navigator.serviceWorker.register('sw.js'); }
   catch (e) { logDiag('SW登録失敗: ' + e.message); }
@@ -1882,7 +1886,7 @@ async function refreshPushState() {
   $('stPushState').style.whiteSpace = 'pre-line';
 }
 async function enablePush() {
-  toast('試作版では通知をオンにしません（通知は本番のアプリで受け取ってください）', 4500); return;
+  if (IS_LAB) { toast('試作版では通知をオンにしません（通知は本番のアプリで受け取ってください）', 4500); return; }
   if (!('Notification' in window) || !('serviceWorker' in navigator)) {
     toast(isStandalone() ? 'この端末では通知が使えません' : '先に「ホーム画面に追加」してから開いてください', 4000); return;
   }

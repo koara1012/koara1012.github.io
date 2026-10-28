@@ -6,10 +6,10 @@
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
-<meta name="apple-mobile-web-app-title" content="朱里(試作)">
+<meta name="apple-mobile-web-app-title" content="朱里">
 <link rel="apple-touch-icon" href="../akari-icon.png">
 <link rel="icon" href="../akari-icon.png">
-<title>【試作】朱里ノベル（統合）</title>
+<title>朱里ノベル</title>
 <style>
 :root{
   --S:1px; --sx:0px; --sy:0px; --sw:100vw; --sh:100vh;
@@ -181,7 +181,7 @@ pre.box{white-space:pre-wrap;word-break:break-all;background:#1a161d;border:1px 
       <div class="row"><label>裏トークの表情</label><label><input type="checkbox" id="sUraFace"> サーバーが表情を付けなかった返事だけ、下のAIのキーで選ぶ（少し料金がかかります。オフなら「通常」の顔）。ふだんは LINE風のサーバー（第38版〜）が返事と一緒に選びます</label></div>
       <p class="note">LINE風アプリの「設定」にあるサーバーURLと合言葉を入れてください。この端末の中だけに保存されます。</p></div>
       <div class="card"><b>本番のノベル画面からデータを写す</b>
-      <div class="row"><button class="b" id="copyProd">本番（akari.html）のキャラ・素材・トーク・設定を写す</button></div>
+      <div class="row"><button class="b" id="copyProd">akari.html のキャラ・素材・トーク・設定を写す</button><button class="b" id="copyLab">試作（lab）のキャラ・素材・トーク・設定を写す</button></div>
       <p class="note">Safariで開いているときだけ使えます（本番のデータは読むだけで、変えません）。ホーム画面から開いているときは、本番で「バックアップ」→書き出し、ここで復元してください。</p></div>
       <div class="row"><label>AIの種類（共通）</label><select id="sProv"><option value="grok">Grok（xAI）</option><option value="gemini">Gemini（Google）</option></select><span class="note">トークごとにも変えられます（トーク→編集）</span></div>
       <h4>Grok（xAI）</h4>
@@ -213,9 +213,14 @@ pre.box{white-space:pre-wrap;word-break:break-all;background:#1a161d;border:1px 
     </div>
 
     <div class="pn" id="pBak"><h3>バックアップ</h3>
-      <div class="row"><label><input type="checkbox" id="bkAssets" checked> 画像・音・フォントも含める</label><label><input type="checkbox" id="bkKey"> APIキーも含める</label></div>
-      <div class="row"><button class="b p" id="bkExport">全部を書き出す</button></div>
+      <h4>手動で保存（iPhoneの「ファイル」へ）</h4>
+      <div class="row"><label><input type="checkbox" id="bkAssets" checked> 素材（画像・音・フォント）も含める</label><label><input type="checkbox" id="bkKey"> AIのキー・合言葉も含める</label></div>
+      <div class="row"><button class="b p" id="bkExport">全部を書き出す</button><span class="note" id="bkSaved"></span></div>
+      <p class="note" id="bkLast">最後に手動で保存：まだありません</p>
       <p class="note">iPhoneでは共有メニューが開くので「"ファイル"に保存」を選んでください。トーク1つだけの書き出しは「トーク」の各トークから。</p>
+      <h4>自動バックアップ（会話・設定だけ。素材とAIのキーは入りません）</h4>
+      <div class="card" id="bkAuto">（LINE風アプリのサーバーにつなぐと使えます）</div>
+      <div class="row"><button class="b" id="bkSyncNow">今すぐサーバーに預ける</button><button class="b" id="bkFromSrv">サーバーに預けた会話・設定から戻す</button><button class="b" id="bkFromPrev" hidden>減る前のものから戻す</button></div>
       <h4>読み込む</h4>
       <div class="row"><button class="b" id="bkImport">バックアップから復元</button></div>
       <p class="note">全部のバックアップは、今のデータと置き換わります（ファイルにAPIキーが無ければ今のキーを残します）。トーク1つのファイルは、新しいトークとして追加されます。第1回・第2回のバックアップも読み込めます。</p>
@@ -244,13 +249,19 @@ pre.box{white-space:pre-wrap;word-break:break-all;background:#1a161d;border:1px 
 <script>
 'use strict';
 /* ====== 版 ====== */
-const VERSION = { no: 5, at: '2026-10-28 21:00:00' };
-const VERSION_TEXT = `試作・段階${VERSION.no}（${VERSION.at} 更新・本番 akari.html 第6回がもと）`;
+const VERSION = { no: 6, at: '2026-10-28 22:30:00' };
+const VERSION_TEXT = `${/\/lab\//.test(location.pathname) ? '試作・' : ''}統合 第${VERSION.no}回（${VERSION.at} 更新・akari.html 第6回がもと）`;
 
 /* ====== 改善ログ（他のAIへの引き継ぎ用）======
    改善のたびに「## 第〜回」を先頭側へ追記し、概要も最新に保つ */
 const DEV_LOG = `# 朱里ノベル 統合の試作（lab/novel.html） 改善ログ
 ※ 本番 akari.html 第6回をもとにした試作。保存先は本番と分けている（localStorage lab.settings / lab.logs、IndexedDB akariLab）。
+## 統合 第6回（2026-10-28 22:30:00）
+- 置き場所で保存の名前を切り替える（IS_LAB・K）。/lab/：lab.settings・lab.logs・IndexedDB akariLab・lab.chat.cfg。/chat/（本番）：novel.settings・novel.logs・IndexedDB charaNovel・chat.cfg（LINE風アプリと同じ）。同じファイルを両方に置く。
+- 統合後のバックアップ：手動は「保存しました：ファイル名」「最後に手動で保存：日時（今日・素材あり・サイズ）」（サーバーにも POST /backup/novel-manual で記録）。素材は最初から含める（外せる）。「AIのキー・合言葉も含める」を外すと apiKey・geminiKey・srvToken を入れない（前は geminiKey が入っていた不具合を修正）。
+- 自動バックアップ：会話・設定（素材・キー・合言葉・URL は除く）を変えてから20秒後と画面を離れたときにサーバー（POST /novel/save → kv novel:data）へ預ける。LINE風アプリと一緒に R2 へ自動で保存される。R2 が未接続なら赤い注意。急に減ったら前のものを novel:prev に残し、「減る前のものから戻す」で戻せる。「サーバーに預けた会話・設定から戻す」（素材とキーは今のまま）。
+- 本番の場所では「試作（lab）のデータを写す」も使える（Safariのみ）。
+
 ## 試作・段階5（2026-10-28 21:00:00）
 - 表トーク（会う場面）：kind 'omote'、target＝LINE風のキャラid。novel.html?from=line&meet=<id>（LINE風の帯［会いに行く］・通知のタップ）で開く。無ければ自動で作る（立ち絵のキャラが「LINE風のキャラ」とつながっていなければ案内）。
 - 会話はサーバー（第39版）：POST /meet/start（会えた場面から始める）・/meet/say・/meet/end（まとめて表の記憶へ）。AIは LINE風の表と同じ。メニューに［会うのを終える］。編集・書き出しは出さない。
@@ -344,16 +355,21 @@ const uid = () => Date.now().toString(36) + Math.random().toString(36).slice(2,8
 const norm = s => String(s || '').replace(/[\s　・･]/g,'');
 function lsGet(k){ try{ return localStorage.getItem(k); }catch(e){ return null; } }
 function lsSet(k,v){ try{ localStorage.setItem(k,v); return true; }catch(e){ return false; } }
+/* 置き場所で保存の名前を切り替える：/lab/（試作）と /chat/（本番）で同じファイルを使う */
+const IS_LAB = /\/lab\//.test(location.pathname);
+const K = IS_LAB
+  ? { settings:'lab.settings', logs:'lab.logs', idb:'akariLab', cfg:'lab.chat.cfg', manual:'lab.novelManual', synced:'lab.novelSynced' }
+  : { settings:'novel.settings', logs:'novel.logs', idb:'charaNovel', cfg:'chat.cfg', manual:'novel.manual', synced:'novel.synced' };
 const isStandalone = !!(window.navigator.standalone || (window.matchMedia && matchMedia('(display-mode: standalone)').matches));
 
 /* ====== 動作の記録 ====== */
-let LOGS = []; try{ LOGS = JSON.parse(lsGet('lab.logs')||'[]'); }catch(e){ LOGS = []; }
+let LOGS = []; try{ LOGS = JSON.parse(lsGet(K.logs)||'[]'); }catch(e){ LOGS = []; }
 let lastReq = null, lastResp = null, lastError = null;
 function log(level, msg, extra){
   const e = { t: new Date().toLocaleString('ja-JP'), level, msg: String(msg).slice(0,2000) };
   if (extra) e.x = String(extra).slice(0,3000);
   LOGS.push(e); if (LOGS.length > 300) LOGS = LOGS.slice(-300);
-  lsSet('lab.logs', JSON.stringify(LOGS));
+  lsSet(K.logs, JSON.stringify(LOGS));
   if (level === 'error'){ lastError = e; toast(msg, true); }
 }
 window.addEventListener('error', e => log('error', 'JSエラー：' + e.message, `${e.filename||''}:${e.lineno||''}:${e.colno||''}\n${e.error && e.error.stack || ''}`));
@@ -388,12 +404,12 @@ const AKARI_PROMPT = `あなたは「伊達朱里（だて あかり）」とし
 const GDEF = { apiKey:'', endpoint:'https://api.x.ai/v1/chat/completions', model:'grok-4.6', temperature:0.9, turns:30,
   userName:'あなた', srvUrl:'', srvToken:'', uraFaceAI:true, aiProvider:'grok', geminiKey:'', geminiModel:'gemini-flash-latest', speed:45, auto:false, seOn:true, seVol:80, room:null, seErrName:'', blinkFade:true, blinkHalfMs:45, blinkCloseMs:90, blinkAlpha:50 };
 let S = Object.assign({}, GDEF);
-try{ Object.assign(S, JSON.parse(lsGet('lab.settings')||'{}')); }catch(e){}
-function saveS(){ if(!lsSet('lab.settings', JSON.stringify(S))) log('warn','設定を保存できませんでした（プライベートブラウズ等）'); syncLineCfg(true); }
-/* LINE風アプリ（lab/index.html）とサーバーURL・合言葉を共有：lab.chat.cfg（{url, token}） */
+try{ Object.assign(S, JSON.parse(lsGet(K.settings)||'{}')); }catch(e){}
+function saveS(){ if(!lsSet(K.settings, JSON.stringify(S))) log('warn','設定を保存できませんでした（プライベートブラウズ等）'); syncLineCfg(true); scheduleNovelSync(); }
+/* LINE風アプリ（同じフォルダの index.html）とサーバーURL・合言葉を共有：K.cfg（{url, token}）。本番は chat.cfg */
 function syncLineCfg(write){
-  let c = null; try{ c = JSON.parse(lsGet('lab.chat.cfg') || 'null'); }catch(e){}
-  if (write){ if (S.srvUrl && (!c || c.url !== S.srvUrl || (c.token || '') !== (S.srvToken || ''))) lsSet('lab.chat.cfg', JSON.stringify(Object.assign({}, c || {}, { url:S.srvUrl, token:S.srvToken || '' }))); return; }
+  let c = null; try{ c = JSON.parse(lsGet(K.cfg) || 'null'); }catch(e){}
+  if (write){ if (S.srvUrl && (!c || c.url !== S.srvUrl || (c.token || '') !== (S.srvToken || ''))) lsSet(K.cfg, JSON.stringify(Object.assign({}, c || {}, { url:S.srvUrl, token:S.srvToken || '' }))); return; }
   if (c && c.url){ S.srvUrl = c.url; S.srvToken = c.token || ''; }
   else if (S.srvUrl) syncLineCfg(true);
 }
@@ -404,7 +420,7 @@ const FROM_LINE = QS.get('from') === 'line';
 /* ====== IndexedDB ====== */
 const idb = {
   db:null,
-  open(){ return new Promise((res,rej)=>{ const r = indexedDB.open('akariLab',1);
+  open(){ return new Promise((res,rej)=>{ const r = indexedDB.open(K.idb,1);
     r.onupgradeneeded = () => r.result.createObjectStore('kv');
     r.onsuccess = () => { this.db = r.result; res(); }; r.onerror = () => rej(r.error); }); },
   tx(mode, fn){ return new Promise((res,rej)=>{ const tx = this.db.transaction('kv', mode); const st = tx.objectStore('kv'); let out;
@@ -466,7 +482,7 @@ let GLOBAL = { bg:null, font:null, se:null };
 let CHARS = [], ROOMS = [], ROOM = null, HIST = [];
 const charById = id => CHARS.find(c => c.id === id);
 function newChar(name){ return { id:uid(), name, prompt:'', callName:'あなた', scale:146.5, top:1.2, xoff:0, base:null, faces:[] }; }
-async function saveChars(){ try{ await idb.set('chars', CHARS); }catch(e){ log('error','キャラを保存できませんでした：' + e.message); } pushFacesSoon(); }
+async function saveChars(){ try{ await idb.set('chars', CHARS); }catch(e){ log('error','キャラを保存できませんでした：' + e.message); } pushFacesSoon(); scheduleNovelSync(); }
 /* 裏トーク用：LINE風につないだキャラの表情（名前・説明だけ。画像は送らない）をサーバーに登録。サーバーが裏の返事で表情を選ぶ */
 let facesSent = {}, pushFacesT = 0;
 function pushFacesSoon(){ clearTimeout(pushFacesT); pushFacesT = setTimeout(() => pushFaces().catch(() => {}), 1500); }
@@ -484,9 +500,9 @@ async function pushFaces(){
     }
   }
 }
-async function saveRooms(){ try{ await idb.set('rooms', ROOMS); }catch(e){ log('error','トークを保存できませんでした：' + e.message); } }
-async function saveGlobal(){ try{ await idb.set('global', GLOBAL); }catch(e){ log('error','素材を保存できませんでした：' + e.message); } }
-async function saveHist(){ if (!ROOM) return; try{ await idb.set('hist:' + ROOM.id, HIST); }catch(e){ log('error','会話を保存できませんでした：' + e.message); } }
+async function saveRooms(){ try{ await idb.set('rooms', ROOMS); }catch(e){ log('error','トークを保存できませんでした：' + e.message); } scheduleNovelSync(); }
+async function saveGlobal(){ try{ await idb.set('global', GLOBAL); }catch(e){ log('error','素材を保存できませんでした：' + e.message); } scheduleNovelSync(); }
+async function saveHist(){ if (!ROOM) return; try{ await idb.set('hist:' + ROOM.id, HIST); }catch(e){ log('error','会話を保存できませんでした：' + e.message); } scheduleNovelSync(); }
 let saveCharsT = 0; function saveCharsSoon(){ clearTimeout(saveCharsT); saveCharsT = setTimeout(saveChars, 400); }
 
 /* 第1・2回のデータを引っ越す */
@@ -1148,6 +1164,7 @@ function showPanel(p){
   if (p === 'pRoom') renderRooms(); if (p === 'pChar') renderChars(); if (p === 'pLog') renderLog();
   if (p === 'pSet') fillSettings(); if (p === 'pAsset') refreshAssetUI(); if (p === 'pHelp') renderHelp();
   if (p === 'pDev') $('#devView').textContent = DEV_LOG;
+  if (p === 'pBak') refreshBak();
   $('#panels').scrollTop = 0;
 }
 function openMenu(p){ $('#menu').classList.add('show'); showPanel(p || curPanel); }
@@ -1405,6 +1422,7 @@ function refreshAssetUI(){
   $('#aSe').innerHTML = d(GLOBAL.se) + (GLOBAL.se ? (seBuf ? ` ✓ ${seBuf.duration.toFixed(2)}秒` : ' ✗') : '');
 }
 const gInput = { bg:'#fImg', font:'#fFont', se:'#fSe' };
+if (IS_LAB) $('#copyLab').hidden = true;
 async function setGlobal(k, file){
   const old = GLOBAL[k]; GLOBAL[k] = await putRec(file); await saveGlobal(); if (old) await delRec(old);
   if (k === 'se'){ sePrepared = null; S.seErrName = ''; } await applyGlobal(); refreshAssetUI();
@@ -1430,10 +1448,10 @@ function stamp(){ const d = new Date(), p = n => String(n).padStart(2,'0'); retu
 async function saveFile(name, data){
   const blob = new Blob([JSON.stringify(data)], { type:'application/json' }), file = new File([blob], name, { type:'application/json' });
   if (navigator.canShare && navigator.canShare({ files:[file] })){
-    try{ await navigator.share({ files:[file] }); log('info','書き出しました：' + name); return; }catch(e){ if (e.name === 'AbortError') return; }
+    try{ await navigator.share({ files:[file] }); log('info','書き出しました：' + name); return true; }catch(e){ if (e.name === 'AbortError') return false; }
   }
   const a = document.createElement('a'); a.href = URL.createObjectURL(blob); a.download = name; document.body.appendChild(a); a.click(); a.remove();
-  log('info','書き出しました：' + name); toast('書き出しました');
+  log('info','書き出しました：' + name); toast('書き出しました'); return true;
 }
 function allRecIds(){
   const s = new Set([GLOBAL.bg, GLOBAL.font, GLOBAL.se]);
@@ -1442,13 +1460,77 @@ function allRecIds(){
 }
 $('#bkExport').onclick = async () => {
   try{
-    const set = Object.assign({}, S); if (!$('#bkKey').checked) delete set.apiKey;
+    const set = Object.assign({}, S); if (!$('#bkKey').checked){ delete set.apiKey; delete set.geminiKey; delete set.srvToken; }
     const hists = {}; for (const r of ROOMS) hists[r.id] = (await idb.get('hist:' + r.id)) || [];
     const data = { app:'akari-novel', schema:3, version:VERSION_TEXT, exportedAt:new Date().toISOString(), settings:set, global:GLOBAL, chars:CHARS, rooms:ROOMS, hists };
     if ($('#bkAssets').checked){ data.files = {}; for (const id of allRecIds()){ const r = await loadRec(id); if (r) data.files[id] = { name:r.name, type:r.type, b64: await b64(r.buf) }; } }
-    await saveFile(`akari-backup-${stamp()}.json`, data);
-  }catch(e){ log('error','バックアップを書き出せませんでした：' + e.message); }
+    const name = `akari-backup-${stamp()}.json`, assets = !!data.files, bytes = new Blob([JSON.stringify(data)]).size;
+    $('#bkSaved').textContent = '書き出しています…';
+    if (!(await saveFile(name, data))){ $('#bkSaved').textContent = ''; return; }
+    $('#bkSaved').textContent = '保存しました：' + name;
+    const m = { at:Date.now(), assets, bytes }; lsSet(K.manual, JSON.stringify(m)); showManual(m);
+    if (S.srvUrl) srv('POST', '/backup/novel-manual', { assets, bytes }).catch(() => {});
+  }catch(e){ $('#bkSaved').textContent = ''; log('error','バックアップを書き出せませんでした：' + e.message); }
 };
+/* 手動バックアップの表示（LINE風アプリ第37版と同じ形） */
+const fmtMB = b => b >= 1e6 ? (b / 1e6).toFixed(1) + 'MB' : Math.max(1, Math.round(b / 1e3)) + 'KB';
+const fmtDT = t => { const d = new Date(t), p = n => String(n).padStart(2,'0'); return `${d.getFullYear()}/${p(d.getMonth()+1)}/${p(d.getDate())} ${p(d.getHours())}:${p(d.getMinutes())}`; };
+function daysAgo(t){ const a = new Date(t), b = new Date(); a.setHours(0,0,0,0); b.setHours(0,0,0,0); return Math.round((b - a) / 864e5); }
+function showManual(m){
+  if (!m || !m.at){ $('#bkLast').textContent = '最後に手動で保存：まだありません'; return; }
+  const d = daysAgo(m.at);
+  $('#bkLast').textContent = `最後に手動で保存：${fmtDT(m.at)}（${d <= 0 ? '今日' : d + '日前'}・${m.assets ? '素材あり' : '素材なし'}${m.bytes ? '・' + fmtMB(m.bytes) : ''}）`;
+}
+/* 自動バックアップ：会話・設定（素材・AIのキー・合言葉は除く）をサーバーに預ける。LINE風アプリと一緒に R2 へ自動で保存される */
+async function novelData(){
+  const set = Object.assign({}, S); for (const k of ['apiKey','geminiKey','srvToken','srvUrl']) delete set[k];
+  const hists = {}; for (const r of ROOMS) if (!r.kind){ const h = await idb.get('hist:' + r.id); if (h && h.length) hists[r.id] = h; }
+  return { app:'akari-novel-data', version:VERSION_TEXT, settings:set, global:GLOBAL, chars:CHARS, rooms:ROOMS.map(({ _pending, ...r }) => r), hists, uraFaces:uraFaceCache };
+}
+let novelSyncT = 0, novelReady = false;
+function scheduleNovelSync(){ if (!novelReady || !S.srvUrl) return; clearTimeout(novelSyncT); novelSyncT = setTimeout(() => syncNovel().catch(() => {}), 20000); }
+async function syncNovel(manual){
+  clearTimeout(novelSyncT);
+  if (!S.srvUrl){ if (manual) toast('設定で LINE風アプリのサーバーURLを入れてください', true, 4000); return; }
+  try{
+    const r = await srv('POST', '/novel/save', { data: await novelData() });
+    const v = { at:r.at || Date.now(), lines:r.lines || 0 }; lsSet(K.synced, JSON.stringify(v));
+    if (manual) toast('サーバーに預けました'); if ($('#menu').classList.contains('show')) refreshBak();
+  }catch(e){ log('warn', '会話・設定をサーバーに預けられませんでした：' + e.message); if (manual) toast('預けられませんでした：' + e.message, true, 6000); }
+}
+document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'hidden' && novelSyncT) syncNovel().catch(() => {}); });
+async function refreshBak(){
+  let m = null; try{ m = JSON.parse(lsGet(K.manual) || 'null'); }catch(e){}
+  showManual(m);
+  let sy = null; try{ sy = JSON.parse(lsGet(K.synced) || 'null'); }catch(e){}
+  const el = $('#bkAuto');
+  if (!S.srvUrl){ el.innerHTML = '（設定で LINE風アプリのサーバーにつなぐと使えます）'; return; }
+  let st = null; try{ st = await srv('GET', '/backup/status'); }catch(e){ el.innerHTML = 'サーバーの状態を読めませんでした：' + esc(e.message); return; }
+  if (st.novelManual && (!m || st.novelManual.at > m.at)) showManual(st.novelManual);
+  const last = st.last && st.last.at ? `最後の自動バックアップ：${fmtDT(st.last.at)}` : '自動バックアップはまだありません';
+  el.innerHTML = (st.r2 ? `<div>毎月1日・15日の朝4時ごろ、LINE風アプリと一緒に自動で保存されます（「1日用」「15日用」を交互に上書き）。${esc(last)}</div>`
+    : '<div style="color:#fff;background:#c0392b;border-radius:6px;padding:6px 8px">自動バックアップの保存先（R2）が、まだつながっていません。つながると、LINE風アプリと一緒に自動で動き始めます。それまでは手動のバックアップで守ってください。</div>')
+    + `<div class="note" style="margin-top:4px">サーバーに預けた最新：${sy ? fmtDT(sy.at) + `（会話${sy.lines}件）` : 'まだありません'}（変えてから20秒ほどで自動で預けます）</div>`;
+  try{ const d = await srv('GET', '/novel/data'); $('#bkFromPrev').hidden = !d.hasPrev; }catch(e){}
+}
+async function restoreFromServer(prev){
+  try{
+    const d = await srv('GET', '/novel/data' + (prev ? '?prev=1' : ''));
+    if (!d.data) throw new Error('サーバーに預けたデータがありません');
+    const n = Object.values(d.data.hists || {}).reduce((a, h) => a + h.length, 0);
+    if (!confirm(`${fmtDT(d.at)} に預けた会話・設定（キャラ${(d.data.chars || []).length}人・トーク${(d.data.rooms || []).length}件・会話${n}件）で、今のものを置き換えますか？\n素材とAIのキーは今のまま残ります。`)) return;
+    for (const r of ROOMS) try{ await idb.del('hist:' + r.id); }catch(e){}
+    for (const [rid, h] of Object.entries(d.data.hists || {})) await idb.set('hist:' + rid, h);
+    await idb.set('chars', d.data.chars || []); await idb.set('rooms', d.data.rooms || []); await idb.set('global', Object.assign({}, GLOBAL, d.data.global || {}));
+    if (d.data.uraFaces) await idb.set('uraFaces', d.data.uraFaces);
+    const keep = {}; for (const k of ['apiKey','geminiKey','srvToken','srvUrl']) keep[k] = S[k];
+    S = Object.assign({}, GDEF, d.data.settings || {}, keep); saveS();
+    log('info', 'サーバーに預けた会話・設定から戻しました'); location.reload();
+  }catch(e){ log('error', '戻せませんでした：' + e.message); }
+}
+$('#bkSyncNow').onclick = () => syncNovel(true);
+$('#bkFromSrv').onclick = () => restoreFromServer(false);
+$('#bkFromPrev').onclick = () => restoreFromServer(true);
 async function exportRoom(id){
   const r = ROOMS.find(x => x.id === id); const hist = (await idb.get('hist:' + r.id)) || [];
   const names = {}; r.members.forEach(m => names[m] = (charById(m) || {}).name);
@@ -1494,7 +1576,7 @@ function diagText(){
   const chars = CHARS.map(c => `${c.name}[ベース:${c.base ? ((REC.get(c.base) || {}).name || '?') + (DIMS.get(c.base) ? '(' + DIMS.get(c.base).join('×') + ')' : '') : 'なし'} 大きさ${c.scale}/上${c.top}/ずれ${c.xoff} 表情:${c.faces.map(f => `${f.name}(目${Object.keys(f.eye).join('/') || '-'} 口${Object.keys(f.mouth).join('/') || '-'})`).join(' ') || 'なし'} 設定${(c.prompt || '').length}字]`).join('\n  ');
   const recent = LOGS.slice(-40).reverse().map(l => `[${l.t}] ${l.level}: ${l.msg}${l.x ? '\n    ' + l.x.replace(/\n/g,'\n    ') : ''}`).join('\n');
   const se = GLOBAL.se && REC.get(GLOBAL.se);
-  return `【朱里ノベル 統合の試作 診断情報】
+  return `【朱里ノベル${IS_LAB ? ' 統合の試作' : ''} 診断情報】
 版：${VERSION_TEXT}
 日時：${new Date().toLocaleString('ja-JP')}
 端末：${navigator.userAgent}
@@ -1514,26 +1596,28 @@ ${recent || '（なし）'}`;
 }
 async function copyDiag(){ const ok = await copyText(diagText()); toast(ok ? '診断情報をコピーしました。Claudeに貼り付けてください' : 'コピーできませんでした。困ったとき欄の文字を長押しで選んでください', !ok); }
 $('#copyDiag').onclick = copyDiag; $('#toastBtn').onclick = copyDiag; $('#toastX').onclick = () => $('#toast').classList.remove('show');
-$('#clearLogs').onclick = () => { if (!confirm('動作の記録を消しますか？')) return; LOGS = []; lastError = null; lsSet('lab.logs','[]'); renderHelp(); };
+$('#clearLogs').onclick = () => { if (!confirm('動作の記録を消しますか？')) return; LOGS = []; lastError = null; lsSet(K.logs,'[]'); renderHelp(); };
 function renderHelp(){ $('#logView').textContent = diagText(); }
 $('#copyDev').onclick = async () => { const ok = await copyText(DEV_LOG); toast(ok ? '改善ログをコピーしました' : 'コピーできませんでした', !ok); };
 
 /* ====== 本番のデータを写す（読むだけ） ====== */
-function openProd(){ return new Promise((res,rej) => { const r = indexedDB.open('akariNovel'); r.onupgradeneeded = () => { try{ r.result.createObjectStore('kv'); }catch(e){} }; r.onsuccess = () => res(r.result); r.onerror = () => rej(r.error); }); }
-$('#copyProd').onclick = async () => {
+function openProd(name = 'akariNovel'){ return new Promise((res,rej) => { const r = indexedDB.open(name); r.onupgradeneeded = () => { try{ r.result.createObjectStore('kv'); }catch(e){} }; r.onsuccess = () => res(r.result); r.onerror = () => rej(r.error); }); }
+$('#copyProd').onclick = () => copyFrom('akariNovel', 'akari.settings', 'akari.html');
+$('#copyLab').onclick = () => copyFrom('akariLab', 'lab.settings', '試作（lab）');
+async function copyFrom(dbName, setKey, label){
   try{
-    const db = await openProd();
+    const db = await openProd(dbName);
     const all = await new Promise((res,rej) => { const out = []; const tx = db.transaction('kv'); const q = tx.objectStore('kv').openCursor();
       q.onsuccess = () => { const c = q.result; if (c){ out.push([c.key, c.value]); c.continue(); } else res(out); }; q.onerror = () => rej(q.error); });
     db.close();
-    if (!all.some(([k]) => k === 'chars')) throw new Error('本番のデータが見つかりません（ホーム画面から開いている場合は、バックアップのファイルで写してください）');
-    if (!confirm(`本番のデータ（${all.length}件）で、試作のキャラ・トーク・素材を置き換えますか？（本番は変わりません）`)) return;
+    if (!all.some(([k]) => k === 'chars')) throw new Error(`${label}のデータが見つかりません（ホーム画面から開いている場合は、バックアップのファイルで写してください）`);
+    if (!confirm(`${label}のデータ（${all.length}件）で、ここのキャラ・トーク・素材を置き換えますか？（${label}は変わりません）`)) return;
     for (const [k,v] of all) await idb.set(k, v);
-    let ps = {}; try{ ps = JSON.parse(localStorage.getItem('akari.settings') || '{}'); }catch(e){}
+    let ps = {}; try{ ps = JSON.parse(localStorage.getItem(setKey) || '{}'); }catch(e){}
     for (const k of ['apiKey','endpoint','model','temperature','turns','userName','aiProvider','geminiKey','geminiModel','speed','seOn','seVol','blinkFade','blinkHalfMs','blinkCloseMs','blinkAlpha']) if (ps[k] != null) S[k] = ps[k];
-    saveS(); log('info', `本番のデータを写しました（${all.length}件）`); location.reload();
-  }catch(e){ log('error', '本番のデータを写せませんでした：' + e.message); }
-};
+    saveS(); log('info', `${label}のデータを写しました（${all.length}件）`); location.reload();
+  }catch(e){ log('error', `${label}のデータを写せませんでした：` + e.message); }
+}
 
 /* ====== 開いている場所の確認 ====== */
 let envBad = false, persistState = '未確認';
@@ -1542,7 +1626,7 @@ let envBad = false, persistState = '未確認';
   if (!/^https?:$/.test(location.protocol) || framed){
     envBad = true;
     log('warn', `制限のある画面で開かれています（${location.protocol}${framed ? '／埋め込み表示' : ''}）`);
-    setTimeout(() => toast('プレビュー画面では画像や保存が制限されます。Safariで https://koara1012.github.io/lab/novel.html を開いてください', false, 12000), 600);
+    setTimeout(() => toast(`プレビュー画面では画像や保存が制限されます。Safariで https://koara1012.github.io${IS_LAB ? '/lab/' : '/chat/'}novel.html を開いてください`, false, 12000), 600);
   }
 })();
 
@@ -1580,6 +1664,7 @@ let envBad = false, persistState = '未確認';
   if (wantMeet){ const id = await meetRoomFor(wantMeet, lineP); if (id) startId = id; }
   await openRoom(startId);
   const empty = !CHARS.some(c => c.base) && !GLOBAL.bg;
+  novelReady = true; scheduleNovelSync();   // 会話・設定をサーバーに預ける（自動バックアップ用）
   if (isStandalone && empty) setTimeout(() => toast('ホーム画面のアプリは、Safariとは保存場所が別です。Safariで「バックアップ」→書き出し、ここで「バックアップから復元」すると引っ越せます', false, 14000), 900);
 })();
 </script>

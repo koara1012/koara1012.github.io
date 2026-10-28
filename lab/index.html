@@ -125,6 +125,11 @@ body.ura .pbtn{display:none}
 .aialert .tx{flex:1;min-width:0}
 .aialert .tx b{display:block;font-size:13px}
 .aialert a{flex:none;background:#fff;color:#c0392b;font-weight:700;border-radius:14px;padding:5px 12px;text-decoration:none;font-size:12.5px}
+.meetbar{flex:none;display:flex;gap:8px;align-items:center;padding:8px 12px;background:#fff6e3;color:#5a4320;border-bottom:1px solid #ecd6a8;font-size:12.5px;line-height:1.45}
+.meetbar .tx{flex:1;min-width:0}
+.meetbar .tx b{display:block;font-size:13px}
+.meetbar button{flex:none;height:30px;padding:0 11px;border-radius:15px;font-size:12.5px;font-weight:700;background:#e9893a;color:#fff}
+.meetbar button.sub{background:#fff;color:#8a6a3a;border:1px solid #e3c99a}
 .costbar{flex:none;font-size:11.5px;color:var(--sub);text-align:center;padding:4px 10px;background:#f3f5f8;border-bottom:1px solid var(--line);font-variant-numeric:tabular-nums}
 .costbar:empty{display:none}
 .pausebar{flex:none;display:none;align-items:center;justify-content:space-between;gap:8px;padding:6px 12px;font-size:12.5px;background:#2e2333;color:#e4d6e8;border-bottom:1px solid #43354a}
@@ -320,6 +325,7 @@ body.ura #list.tlMode{background:#efe9f0}
     <button class="ib" id="btnEditChar" aria-label="キャラを編集" style="font-size:14px;font-weight:700;padding:0 8px">編集</button>
   </header>
   <div class="aialert" id="aiAlertChat" hidden></div>
+  <div class="meetbar" id="meetBar" hidden></div>
   <div id="selHint">消したいメッセージをタップして選んでください</div>
   <div class="scroll" id="msgs"></div>
   <div class="inbar">
@@ -683,6 +689,15 @@ body.ura #list.tlMode{background:#efe9f0}
       <button class="btn sub" id="costSave" style="margin-top:10px">料金の設定を保存</button>
     </div>
 
+    <div class="sec">会う約束（試作・表のトーク）</div>
+    <div class="field">
+      <label class="chk"><input type="checkbox" id="stMeet"> トークで決めた「実際に会う約束」を記録して、時間になったら通知する（ノベル画面で会う）</label>
+      <label class="chk" style="margin-top:6px"><input type="checkbox" id="stMeetOn"> 会う約束モード（全員）</label>
+      <div class="t" style="margin-top:8px">キャラごとの会う約束モード</div>
+      <div id="stMeetChars"></div>
+      <div class="hint">モードをオフにすると、キャラは「あなたは今忙しい」と受け取って、会う話を催促しません。約束の記録と通知も止まります（約束は消えずに残ります）。オフのまま約束の時刻を過ぎると「延期（日時未定）」になり、オンに戻すとキャラから日時の決め直しを持ちかけます。</div>
+    </div>
+
     <div class="sec">災害・停電（表のトーク・TL）</div>
     <div class="field">
       <label class="chk"><input type="checkbox" id="stDis"> 地震・台風・大雨・大雪などの本物の情報に、キャラたちも反応する</label>
@@ -762,7 +777,7 @@ body.ura #list.tlMode{background:#efe9f0}
 
 <script>
 'use strict';
-const APP_VERSION = '【試作】統合 lab-1（2026-10-28 19:10:00 更新・本番 第37版がもと）';
+const APP_VERSION = '【試作】統合 lab-2（2026-10-28 21:00:00 更新・会う約束・本番 第37版がもと）';
 // 試作版：本番（chat/）と同じサイトなので、保存の名前に「lab.」を付けて本番の chat.* には書き込まない
 const $ = (id) => document.getElementById(id);
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
@@ -858,7 +873,7 @@ async function sync() {
     let more = true;
     while (more) {
       const d = await api('GET', '/sync?since=' + S.maxId);
-      S.chars = d.chars; S.groups = d.groups || []; S.aiAlerts = d.aiAlerts || {}; S.status = d.status || {}; S.reads = d.reads || {}; S.charRead = d.charRead || {}; S.outage = d.outage || null; S.cost = d.cost || S.cost; renderCost(); renderPause(); S.settings = d.settings || S.settings; renderAiAlert();
+      S.chars = d.chars; S.groups = d.groups || []; S.aiAlerts = d.aiAlerts || {}; S.status = d.status || {}; S.reads = d.reads || {}; S.charRead = d.charRead || {}; S.outage = d.outage || null; S.cost = d.cost || S.cost; renderCost(); renderPause(); S.settings = d.settings || S.settings; S.appts = d.appts || S.appts || {}; renderAiAlert();
       const fresh = [];
       for (const m of d.messages) if (addMsg(m)) fresh.push(m);
       applyRetracted(d.retracted || []);
@@ -1151,6 +1166,7 @@ function renderChat(keepPos, forceBottom) {
   const c = grp ? { id: grp.id, name: grp.name } : charById(S.current);
   if (!c) return;
   $('btnGrpReset').style.display = grp ? '' : 'none'; // .ib は display を指定しているので hidden 属性では消えない
+  renderMeetBar();
   const k = curKey(), ura = isUraKey(k);
   const nm = grp ? grp.name : dispName(c, ura ? 'ura' : 'omote');
   const so = !ura && (S.status || {})[c.id];
@@ -1964,6 +1980,7 @@ function openSettings() {
   [['costGeminiIn', 'geminiIn'], ['costGeminiOut', 'geminiOut'], ['costGrokIn', 'grokIn'], ['costGrokOut', 'grokOut'], ['costImage', 'image']].forEach(([id, k]) => { $(id).value = cs[k] != null ? cs[k] : ''; });
   $('stDis').checked = S.settings.disasterEnabled !== false; $('stQuake').value = S.settings.quakeMin || '4';
   loadDisStatus();
+  renderMeetSettings();
   $('stLife').checked = S.settings.lifeEnabled !== false; $('stImages').checked = S.settings.imagesEnabled !== false; $('stDelay').checked = S.settings.delayEnabled !== false;
   const two = (n) => String(n).padStart(2, '0');
   $('stBdM').innerHTML = '<option value="">--</option>' + Array.from({ length: 12 }, (_, i) => `<option value="${two(i + 1)}">${i + 1}</option>`).join('');
@@ -2695,6 +2712,54 @@ $('btnNovel').onclick = () => {
   const q = ura ? '?from=line&ura=' + encodeURIComponent(baseId(S.current) + URA) : '?from=line&back=' + encodeURIComponent(baseId(S.current));
   setTimeout(() => { location.href = 'novel.html' + q; }, ura ? 0 : 1200);
 };
+
+// ------------------------------------------------ 試作：会う約束（トーク画面の帯・設定）
+const meetModeOn = (id) => !!(S.settings.meetFeature && S.settings.meetOn !== false && !(S.settings.meetOffChars || []).includes(id));
+function fmtAt(at) { const d = new Date(at + 9 * 3600e3); return `${d.getUTCMonth() + 1}/${d.getUTCDate()}(${'日月火水木金土'[d.getUTCDay()]}) ${String(d.getUTCHours()).padStart(2, '0')}:${String(d.getUTCMinutes()).padStart(2, '0')}`; }
+function renderMeetBar() {
+  const bar = $('meetBar');
+  const c = S.view === 'chat' && S.world !== 'ura' && !groupById(S.current) ? charById(S.current) : null;
+  const a = c && S.settings.meetFeature ? (S.appts || {})[c.id] : null;
+  if (!a || a.status === 'done' || a.status === 'cancelled') { bar.hidden = true; return; }
+  const place = a.place ? esc(a.place) : '場所未定';
+  let html;
+  if (a.status === 'set') html = `<div class="tx"><b>📍 ${a.at ? fmtAt(a.at) : '日時未定'}　${place}で会う約束</b>${meetModeOn(c.id) ? '' : 'モードがオフなので保留中です'}</div><button data-mt="go">会いに行く</button><button class="sub" data-mt="cancel">取り消す</button>`;
+  else if (a.status === 'postponed' || a.status === 'replan') html = `<div class="tx"><b>📍 ${place}で会う約束（延期・日時未定）</b>${a.status === 'replan' ? '次の返事で、日時の決め直しを持ちかけてくれます' : ''}</div>${a.status === 'replan' ? '' : '<button data-mt="replan">日時を決め直す</button>'}<button class="sub" data-mt="cancel">取り消す</button>`;
+  else if (a.status === 'meeting') html = `<div class="tx"><b>🫶 今、${a.place ? place + 'で' : ''}会っています</b></div><button data-mt="go">続きへ</button>`;
+  else if (a.status === 'missed') html = `<div class="tx"><b>📍 ${a.at ? fmtAt(a.at) : ''}の約束に行けませんでした</b>${place}</div><button data-mt="replan">日時を決め直す</button><button class="sub" data-mt="cancel">取り消す</button>`;
+  else { bar.hidden = true; return; }
+  bar.innerHTML = html; bar.hidden = false;
+  bar.querySelectorAll('[data-mt]').forEach((b) => b.onclick = () => meetAction(c, b.dataset.mt));
+}
+async function meetAction(c, act) {
+  if (act === 'go') { location.href = 'novel.html?from=line&meet=' + encodeURIComponent(c.id); return; }
+  if (act === 'cancel' && !confirm(`${c.name}さんとの会う約束を取り消しますか？`)) return;
+  try {
+    const r = await api('POST', '/appt', { charId: c.id, action: act });
+    S.appts = S.appts || {};
+    if (r.appt) S.appts[c.id] = r.appt; else delete S.appts[c.id];
+    renderMeetBar();
+    toast(act === 'cancel' ? '約束を取り消しました' : `次の返事で、${c.name}さんが日時の決め直しを持ちかけます`);
+  } catch (e) { toast(e.message); }
+}
+function renderMeetSettings() {
+  const st = S.settings;
+  $('stMeet').checked = !!st.meetFeature; $('stMeetOn').checked = st.meetOn !== false;
+  const off = st.meetOffChars || [];
+  const list = (S.chars || []).filter((c) => !c.uraOnly);
+  $('stMeetChars').innerHTML = list.map((c) => `<label class="chk"><input type="checkbox" data-meetc="${esc(c.id)}" ${off.includes(c.id) ? '' : 'checked'}> ${esc(c.name)}</label>`).join('') || '<div class="hint">キャラがいません</div>';
+  $('stMeetChars').querySelectorAll('[data-meetc]').forEach((i) => i.onchange = saveMeetSettings);
+  const dis = !st.meetFeature;
+  $('stMeetOn').disabled = dis; $('stMeetChars').querySelectorAll('input').forEach((i) => { i.disabled = dis; });
+}
+async function saveMeetSettings() {
+  const meetOffChars = [...$('stMeetChars').querySelectorAll('[data-meetc]')].filter((i) => !i.checked).map((i) => i.dataset.meetc);
+  try {
+    const r = await api('POST', '/settings', { settings: { meetFeature: $('stMeet').checked, meetOn: $('stMeetOn').checked, meetOffChars } });
+    S.settings = r.settings; renderMeetSettings(); toast('会う約束の設定を保存しました');
+  } catch (e) { toast(e.message); renderMeetSettings(); }
+}
+$('stMeet').onchange = $('stMeetOn').onchange = saveMeetSettings;
 
 // ------------------------------------------------ 起動
 (async function start() {

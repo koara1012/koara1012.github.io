@@ -1,0 +1,796 @@
+<!doctype html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover,user-scalable=no">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="伊達朱里">
+<title>伊達朱里と話す</title>
+<style>
+:root{
+  --S:1px; --sx:0px; --sy:0px; --sw:100vw; --sh:100vh;
+  --ff:'AkariFont','Hiragino Sans','Hiragino Kaku Gothic ProN','Noto Sans JP',sans-serif;
+  --win:rgba(0,0,0,.69);
+  --pink:#ef8eec; --ring:#cdb6d2;
+}
+*{box-sizing:border-box;-webkit-tap-highlight-color:transparent}
+html,body{margin:0;height:100%;background:#000;color:#fff;overflow:hidden;
+  font-family:var(--ff);-webkit-text-size-adjust:100%;touch-action:manipulation;
+  -webkit-user-select:none;user-select:none}
+#app{position:fixed;inset:0;overflow:hidden}
+#bg{position:absolute;inset:0;background:linear-gradient(#1b2433,#2c3a3a 60%,#18221d);background-size:cover;background-position:center}
+#chara{position:absolute;pointer-events:none}
+#chara img{position:absolute;left:0;top:0;width:100%;height:100%;display:none}
+/* メッセージ枠：画面の上から 520/750 の位置〜下端、横幅いっぱい */
+#win{position:absolute;left:0;right:0;top:calc(var(--sy) + var(--S)*520);height:calc(var(--S)*230 + var(--sy));background:var(--win)}
+#nameplate{position:absolute;bottom:100%;margin-bottom:calc(var(--S)*8);
+  left:max(calc(env(safe-area-inset-left) + 14px), calc(var(--sx) + var(--S)*80));
+  height:calc(var(--S)*46);padding:0 calc(var(--S)*16);display:flex;align-items:center;
+  background:var(--win);font-size:calc(var(--S)*23);letter-spacing:.06em;white-space:nowrap}
+#nameplate::before{content:"";position:absolute;left:calc(var(--S)*-9);top:0;bottom:0;width:calc(var(--S)*2);background:rgba(0,0,0,.85)}
+#nameplate::after{content:"";position:absolute;left:calc(var(--S)*-11);top:calc(var(--S)*-3);width:calc(var(--S)*6);height:calc(100% + var(--S)*6);
+  background:radial-gradient(circle at 50% calc(var(--S)*3),rgba(0,0,0,.9) calc(var(--S)*2.6),transparent calc(var(--S)*3)),
+             radial-gradient(circle at 50% calc(100% - var(--S)*3),rgba(0,0,0,.9) calc(var(--S)*2.6),transparent calc(var(--S)*3))}
+#text{position:absolute;top:calc(var(--S)*38);
+  left:max(calc(env(safe-area-inset-left) + 20px), calc(var(--sx) + var(--S)*215));
+  right:max(calc(env(safe-area-inset-right) + 20px), calc(var(--sx) + var(--S)*100));
+  font-size:calc(var(--S)*30);line-height:1.6;letter-spacing:.12em;white-space:pre-wrap;
+  line-break:strict;overflow-wrap:anywhere;
+  text-shadow:0 0 calc(var(--S)*3) rgba(0,0,0,.55),calc(var(--S)*1) calc(var(--S)*1) calc(var(--S)*2) rgba(0,0,0,.5)}
+#hint{position:absolute;bottom:calc(var(--sy) + var(--S)*18);
+  right:max(calc(env(safe-area-inset-right) + 18px), calc(var(--sx) + var(--S)*60));
+  font-size:calc(var(--S)*20);opacity:.85;display:none;animation:bob 1.1s ease-in-out infinite}
+@keyframes bob{50%{transform:translateY(calc(var(--S)*4));opacity:.5}}
+#ver{position:absolute;left:calc(env(safe-area-inset-left) + 6px);top:calc(env(safe-area-inset-top) + 4px);font-size:10px;opacity:.35;pointer-events:none;font-family:sans-serif}
+/* 右上ボタン */
+#ctrls{position:absolute;top:calc(var(--sy) + var(--S)*72);transform:translateY(-50%);
+  right:max(calc(env(safe-area-inset-right) + 6px), calc(var(--sx) + var(--S)*12));
+  display:flex;align-items:center}
+#ctrls .ln{width:calc(var(--S)*24);height:calc(var(--S)*3);background:#b7a9bb}
+.cb{border:0;padding:0;margin:0;border-radius:50%;display:grid;place-items:center;cursor:pointer;color:#f3c9f2;
+  width:calc(var(--S)*76);height:calc(var(--S)*76);
+  background:radial-gradient(circle at 50% 40%,#544558,#3b2f40 70%);
+  box-shadow:0 0 0 calc(var(--S)*3) var(--ring),0 0 0 calc(var(--S)*5) rgba(255,255,255,.25),0 calc(var(--S)*2) calc(var(--S)*6) rgba(0,0,0,.4)}
+.cb svg{width:42%;height:42%}
+.cb.on{color:#fff;background:radial-gradient(circle at 50% 40%,#f8b2f5,#e57ee2 70%);
+  box-shadow:0 0 0 calc(var(--S)*3) #f9d3f7,0 0 0 calc(var(--S)*5) rgba(255,255,255,.35),0 0 calc(var(--S)*14) rgba(255,150,250,.7)}
+#bBack{width:calc(var(--S)*44);height:calc(var(--S)*44);background:#fff;color:#888;
+  box-shadow:0 0 0 calc(var(--S)*2) rgba(255,255,255,.5),0 calc(var(--S)*1) calc(var(--S)*4) rgba(0,0,0,.35)}
+#bBack svg{width:50%;height:50%}
+#bAuto{width:calc(var(--S)*80);height:calc(var(--S)*80)}
+/* 入力欄 */
+#inputOv{position:fixed;inset:0;background:rgba(0,0,0,.35);display:none;z-index:20}
+#inputOv.show{display:block}
+.ibox{position:absolute;top:calc(env(safe-area-inset-top) + 8px);
+  left:calc(env(safe-area-inset-left) + 10px);right:calc(env(safe-area-inset-right) + 10px);
+  display:flex;gap:8px;background:rgba(20,16,24,.92);padding:8px;border-radius:12px;box-shadow:0 0 0 1px #6e5a74}
+.ibox input{flex:1;min-width:0;font:16px var(--ff);padding:10px 12px;border-radius:8px;border:1px solid #6e5a74;background:#1a161d;color:#fff;-webkit-user-select:text;user-select:text}
+button.b{font:14px var(--ff);padding:9px 14px;border-radius:8px;border:1px solid #8a7290;background:#3b2f40;color:#fff;cursor:pointer;white-space:nowrap}
+button.b.p{background:#d86ad5;border-color:#f3b4f1}
+button.b.d{background:#5a2a2a;border-color:#a55}
+button.b:disabled{opacity:.45}
+/* メニュー */
+#menu{position:fixed;inset:0;z-index:30;background:rgba(12,10,15,.96);display:none;
+  padding:calc(env(safe-area-inset-top) + 8px) calc(env(safe-area-inset-right) + 10px) calc(env(safe-area-inset-bottom) + 8px) calc(env(safe-area-inset-left) + 10px);font-family:var(--ff)}
+#menu.show{display:flex;gap:10px}
+#nav{display:flex;flex-direction:column;gap:5px;width:118px;flex:none;overflow-y:auto}
+#nav button{text-align:left;font:13px var(--ff);padding:8px 10px;border-radius:8px;border:1px solid #4a3d50;background:#221c26;color:#ddd}
+#nav button.on{background:#d86ad5;color:#fff;border-color:#f3b4f1}
+#nav .close{margin-top:auto;background:#3b2f40}
+#panels{flex:1;overflow-y:auto;-webkit-overflow-scrolling:touch;padding-right:4px;font-size:13px;line-height:1.6;-webkit-user-select:text;user-select:text}
+.pn{display:none}.pn.on{display:block}
+.pn h3{margin:2px 0 8px;font-size:15px;color:#f3c9f2}
+.pn h4{margin:14px 0 4px;font-size:13px;color:#e7b8e6}
+.row{display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin:6px 0}
+.row label{min-width:120px;color:#ccc}
+.pn input[type=text],.pn input[type=password],.pn input[type=number],.pn textarea{font:14px var(--ff);padding:7px 9px;border-radius:7px;border:1px solid #5b4a62;background:#1a161d;color:#fff;-webkit-user-select:text;user-select:text}
+.pn input[type=text],.pn input[type=password]{flex:1;min-width:160px}
+.pn input[type=number]{width:90px}
+.pn textarea{width:100%;min-height:200px}
+.note{color:#aaa;font-size:12px}
+pre.box{white-space:pre-wrap;word-break:break-all;background:#1a161d;border:1px solid #4a3d50;border-radius:8px;padding:8px;font:11px/1.5 ui-monospace,Menlo,monospace;max-height:none}
+.log .u{color:#9fd3ff}.log .a{color:#fff}.log .f{color:#c9a;font-size:11px}
+.log div{padding:3px 0;border-bottom:1px solid #2a2330}
+table.parts{border-collapse:collapse;font-size:12px}
+table.parts td,table.parts th{border:1px solid #3e3344;padding:3px 6px}
+.face{display:flex;gap:6px;align-items:center;margin:4px 0}
+.face code{min-width:90px;color:#f3c9f2}
+/* トースト */
+#toast{position:fixed;z-index:40;top:calc(env(safe-area-inset-top) + 8px);left:50%;transform:translateX(-50%);
+  max-width:min(92vw,640px);background:#3a1d24;border:1px solid #d77;border-radius:10px;padding:8px 10px;
+  display:none;gap:8px;align-items:center;font-size:13px;font-family:var(--ff);box-shadow:0 4px 16px rgba(0,0,0,.5)}
+#toast.show{display:flex}
+#toast.ok{background:#1f2f22;border-color:#7c7}
+#toast span{flex:1}
+#rotate{position:fixed;inset:0;z-index:50;background:#000;display:none;place-items:center;text-align:center;font-size:16px;line-height:1.8;padding:20px}
+@media (orientation:portrait){#rotate{display:grid}}
+.hidefile{display:none}
+</style>
+</head>
+<body>
+<div id="app">
+  <div id="bg"></div>
+  <div id="chara">
+    <img id="lBase" alt=""><img id="lEye" alt=""><img id="lMouth" alt=""><img id="lBrow" alt=""><img id="lExtra" alt="">
+  </div>
+  <div id="win">
+    <div id="nameplate"><span id="nameTxt">伊達　朱里</span></div>
+    <div id="text"></div>
+    <div id="hint"></div>
+  </div>
+  <div id="ctrls">
+    <button class="cb" id="bBack" aria-label="メニュー"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M15 4 7 12l8 8"/></svg></button>
+    <div class="ln"></div>
+    <button class="cb" id="bAuto" aria-label="オート"></button>
+    <div class="ln"></div>
+    <button class="cb" id="bSkip" aria-label="次へ"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round"><path d="M5 4.5v15L16 12z"/><path d="M19.5 4.5v15" stroke-linecap="round"/></svg></button>
+    <div class="ln"></div>
+    <button class="cb" id="bFast" aria-label="早送り"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round"><path d="M2.5 5v14l9-7z"/><path d="M12.5 5v14l9-7z"/></svg></button>
+  </div>
+  <div id="ver"></div>
+</div>
+
+<div id="inputOv"><div class="ibox">
+  <input id="msg" type="text" enterkeyhint="send" autocomplete="off" placeholder="伊達さんに話しかける…">
+  <button class="b p" id="send">送信</button><button class="b" id="cancel">やめる</button>
+</div></div>
+
+<div id="menu">
+  <div id="nav">
+    <button data-p="pLog" class="on">会話ログ</button>
+    <button data-p="pSet">設定</button>
+    <button data-p="pAsset">素材</button>
+    <button data-p="pFace">表情</button>
+    <button data-p="pBak">バックアップ</button>
+    <button data-p="pHelp">困ったとき</button>
+    <button data-p="pDev">改善ログ</button>
+    <button class="close" id="mClose">閉じる</button>
+  </div>
+  <div id="panels">
+    <div class="pn on" id="pLog"><h3>会話ログ</h3><div class="log" id="logList"></div>
+      <h4>会話をはじめからにする</h4><div class="row"><button class="b d" id="clearHist">会話を全部消す</button><span class="note">消す前にバックアップがおすすめです</span></div></div>
+
+    <div class="pn" id="pSet"><h3>設定</h3>
+      <div class="row"><label>xAI APIキー</label><input type="password" id="sKey" placeholder="xai-..."></div>
+      <div class="row"><label>エンドポイント</label><input type="text" id="sEnd"></div>
+      <div class="row"><label>モデル</label><input type="text" id="sModel" list="modelList"><datalist id="modelList"></datalist><button class="b" id="getModels">一覧を取得</button></div>
+      <div class="row"><label>温度（0〜2）</label><input type="number" id="sTemp" step="0.1" min="0" max="2"></div>
+      <div class="row"><label>送る会話の往復数</label><input type="number" id="sTurns" min="2" max="200"><span class="note">多いほど覚えているが料金が増える</span></div>
+      <div class="row"><label>あなたの呼ばれ方</label><input type="text" id="sCall"></div>
+      <div class="row"><label>ログでのあなたの名前</label><input type="text" id="sUser"></div>
+      <div class="row"><label>名前欄の表示</label><input type="text" id="sName"></div>
+      <div class="row"><label>文字の速さ（ms/字）</label><input type="number" id="sSpeed" min="0" max="300"></div>
+      <h4>立ち絵の位置</h4>
+      <div class="row"><label>大きさ（画面高さの%）</label><input type="number" id="sScale" step="0.5"></div>
+      <div class="row"><label>上の位置（%）</label><input type="number" id="sTop" step="0.2"></div>
+      <div class="row"><label>左右の位置（%、50=中央）</label><input type="number" id="sX" step="0.5"></div>
+      <h4>キャラ設定（AIへの指示）</h4>
+      <textarea id="sPrompt"></textarea>
+      <div class="row"><button class="b" id="resetPrompt">キャラ設定を最初の状態に戻す</button></div>
+      <p class="note">APIキーはこの端末の中だけに保存され、xAI以外には送られません。設定は入力すると自動で保存されます。</p>
+    </div>
+
+    <div class="pn" id="pAsset"><h3>素材（この端末の中だけに保存）</h3>
+      <div class="row"><label>背景</label><button class="b" data-pick="bg">選ぶ</button><span id="aBg" class="note"></span><button class="b d" data-del="bg">消す</button></div>
+      <div class="row"><label>立ち絵ベース</label><button class="b" data-pick="base">選ぶ</button><span id="aBase" class="note"></span><button class="b d" data-del="base">消す</button></div>
+      <div class="row"><label>表情パーツ（複数可）</label><button class="b" data-pick="parts">追加する</button><span id="aParts" class="note"></span><button class="b d" data-del="parts">全部消す</button></div>
+      <div class="row"><label>フォント</label><button class="b" data-pick="font">選ぶ</button><span id="aFont" class="note"></span><button class="b d" data-del="font">消す</button></div>
+      <input type="file" class="hidefile" id="fBg" accept="image/*">
+      <input type="file" class="hidefile" id="fBase" accept="image/png,image/webp">
+      <input type="file" class="hidefile" id="fParts" accept="image/png,image/webp" multiple>
+      <input type="file" class="hidefile" id="fFont" accept=".ttf,.otf,.woff,.woff2,font/*,application/octet-stream">
+      <h4>パーツのファイル名のルール</h4>
+      <p class="note">すべて立ち絵ベースと同じキャンバスサイズ（例 923×2104）の透過PNGで、位置はそのまま。表情名は英数字でも日本語でも可（例 normal / sad / 照れ）。<br>
+      目：<code>eye_表情_open.png</code> <code>eye_表情_half.png</code> <code>eye_表情_close.png</code><br>
+      口：<code>mouth_表情_close.png</code> <code>mouth_表情_open.png</code>（<code>mouth_表情_half.png</code> もあれば使います）<br>
+      眉：<code>brow_表情.png</code>　追加（頬染め・汗など）：<code>extra_表情.png</code><br>
+      「目_表情_開／半／閉」「口_表情_閉／開」「眉_表情」でもOK。表情名を省いた <code>eye_open.png</code> は normal 扱い。ある表情に目や口が無いときは normal のものを使います。</p>
+      <div id="partsTable"></div>
+    </div>
+
+    <div class="pn" id="pFace"><h3>表情</h3>
+      <p class="note">AIはここに並んだ表情の中から選びます。説明を書くと選び方が正確になります。「試す」で立ち絵に反映します。</p>
+      <div id="faceList"></div>
+    </div>
+
+    <div class="pn" id="pBak"><h3>バックアップ</h3>
+      <div class="row"><label><input type="checkbox" id="bkAssets"> 素材も含める</label><label><input type="checkbox" id="bkKey"> APIキーも含める</label></div>
+      <div class="row"><button class="b p" id="bkExport">バックアップを書き出す</button></div>
+      <p class="note">iPhoneでは共有メニューが開くので「"ファイル"に保存」を選んでください。素材を含めると大きくなります。</p>
+      <h4>読み込む</h4>
+      <div class="row"><button class="b" id="bkImport">バックアップから復元</button><input type="file" class="hidefile" id="fBak" accept="application/json,.json"></div>
+      <p class="note">復元すると今の会話と設定は置き換わります（ファイルにAPIキーが無ければ今のキーを残します）。</p>
+    </div>
+
+    <div class="pn" id="pHelp"><h3>困ったとき</h3>
+      <div class="row"><button class="b p" id="copyDiag">診断情報をコピー</button><span class="note">コピーしてClaudeに貼り付けると原因を調べられます</span></div>
+      <div class="row"><button class="b d" id="clearLogs">記録を消す</button></div>
+      <h4>動作の記録（新しい順）</h4><pre class="box" id="logView"></pre>
+    </div>
+
+    <div class="pn" id="pDev"><h3>改善ログ（他のAIへの引き継ぎ用）</h3>
+      <div class="row"><button class="b p" id="copyDev">改善ログをコピー</button><span id="verFull" class="note"></span></div>
+      <pre class="box" id="devView"></pre>
+    </div>
+  </div>
+</div>
+
+<div id="toast"><span id="toastMsg"></span><button class="b p" id="toastBtn">診断をコピー</button><button class="b" id="toastX">×</button></div>
+<div id="rotate">📱↻<br>iPhoneを横向きにしてください<br><span style="font-size:12px;opacity:.6">（画面の縦向きロックを外すと回転します）</span></div>
+
+<script>
+'use strict';
+/* ====== 版 ====== */
+const VERSION = { no: 1, at: '2026-10-28 14:09:16' };
+const VERSION_TEXT = `第${VERSION.no}回（${VERSION.at} 更新）`;
+
+/* ====== 改善ログ（他のAIへの引き継ぎ用）======
+   改善のたびに先頭へ追記する */
+const DEV_LOG = `# 伊達朱里ノベル風チャット 改善ログ
+現在：${VERSION_TEXT}
+
+## このアプリの概要（引き継ぎ用）
+- 1ファイル（index.html）だけで動くノベルゲーム風キャラ会話アプリ。iPhone横画面専用。
+- AIは xAI Grok（OpenAI互換 /v1/chat/completions）をブラウザから直接呼ぶ。エンドポイントとモデル名は設定で変更可。
+- 素材（背景・立ち絵ベース・表情パーツ・フォント）はアプリに含めず、利用者がiPhone内から読み込み IndexedDB に保存（公式素材を公開しないため）。
+- 画面設計は 1334×750（16:9）基準。CSS変数 --S = 実画面の16:9領域の高さ/750 px。iPhoneの余った左右は背景・メッセージ枠を伸ばして埋める。
+  - メッセージ枠：y=520〜750、黒 不透明度69%（AviUtl透明度31%）、横幅いっぱい
+  - 名前欄：x=80、枠のすぐ上、高さ46、同じ黒。左に縦線＋両端の点
+  - 台詞：x=215、文字30/字間0.12em、白＋薄い影、最大3行/ページ
+  - 右上ボタン：〈（メニュー）・オート（ON=ピンク＋||、OFF=暗色＋▷）・▷|（次へ）・▷▷（最後まで）
+  - 立ち絵：中央、高さ=画面高さの146.5%、上端=1.2%（ゲーム画面の実測値）。設定で調整可
+- 重ね順：背景 → 立ち絵（base → eye → mouth → brow → extra）→ メッセージ枠 → ボタン
+- 表情パーツはファイル名で自動振り分け：eye_表情_open|half|close / mouth_表情_close|open|half / brow_表情 / extra_表情（日本語「目_表情_開」等も可）。不足は normal で補う。
+- AIへの返答形式：{"lines":[{"face":"表情名","text":"台詞"}]}（1〜4行）。face は読み込んだ表情名のみ。解析失敗時は本文をそのまま表示し記録に残す。
+- 瞬き：2〜6秒ランダム、half→close→half（halfが無ければcloseのみ）、たまに2回。
+- 口パク：文字送り中に約100msで open/close（halfがあれば混ぜる）、句読点で閉じて間を置く。
+- 保存先：localStorage「akari.settings」（設定・APIキー）「akari.logs」（動作記録 最大300件）／IndexedDB「akariNovel」kv：assets, history
+- 会話履歴：[{role:'user',text,t}|{role:'akari',lines,t}]。直近N往復を送信（設定）。
+- 困ったとき：エラー時にトースト→ワンタップで診断情報（版・端末・設定・直近の送受信・記録）をコピー。
+- バックアップ：JSON書き出し（素材・APIキーは任意で同梱）／復元。
+
+## 第1回（${VERSION.at}）
+- 新規作成。上記の機能一式を実装。
+- 未実装（今後の候補）：ボイス（感情タグで短い声を再生）、長期記憶（会話の要約）、背景の時間帯切り替え、複数キャラ。
+`;
+
+/* ====== 小道具 ====== */
+const $ = s => document.querySelector(s);
+const sleep = ms => new Promise(r => setTimeout(r, ms));
+const esc = s => String(s).replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+function lsGet(k){ try{ return localStorage.getItem(k); }catch(e){ return null; } }
+function lsSet(k,v){ try{ localStorage.setItem(k,v); return true; }catch(e){ return false; } }
+
+/* ====== 動作の記録 ====== */
+let LOGS = []; try{ LOGS = JSON.parse(lsGet('akari.logs')||'[]'); }catch(e){ LOGS = []; }
+let lastReq = null, lastResp = null, lastError = null;
+function log(level, msg, extra){
+  const e = { t: new Date().toLocaleString('ja-JP'), level, msg: String(msg).slice(0,2000) };
+  if (extra) e.x = String(extra).slice(0,3000);
+  LOGS.push(e); if (LOGS.length > 300) LOGS = LOGS.slice(-300);
+  lsSet('akari.logs', JSON.stringify(LOGS));
+  if (level === 'error'){ lastError = e; toast(msg, true); }
+}
+window.addEventListener('error', e => log('error', 'JSエラー：' + e.message, `${e.filename||''}:${e.lineno||''}:${e.colno||''}\n${e.error && e.error.stack || ''}`));
+window.addEventListener('unhandledrejection', e => log('error', 'Promiseエラー：' + (e.reason && e.reason.message || e.reason), e.reason && e.reason.stack));
+
+let toastTimer = 0;
+function toast(msg, isErr){
+  const t = $('#toast'); $('#toastMsg').textContent = msg;
+  t.classList.toggle('ok', !isErr); $('#toastBtn').style.display = isErr ? '' : 'none';
+  t.classList.add('show'); clearTimeout(toastTimer);
+  toastTimer = setTimeout(() => t.classList.remove('show'), isErr ? 15000 : 2500);
+}
+async function copyText(t){
+  try{ await navigator.clipboard.writeText(t); return true; }catch(e){}
+  const ta = document.createElement('textarea'); ta.value = t; ta.setAttribute('readonly','');
+  ta.style.cssText = 'position:fixed;top:0;left:0;opacity:0'; document.body.appendChild(ta);
+  ta.select(); ta.setSelectionRange(0, t.length); let ok = false;
+  try{ ok = document.execCommand('copy'); }catch(e){} ta.remove(); return ok;
+}
+
+/* ====== 設定 ====== */
+const DEFAULT_PROMPT = `あなたは「伊達朱里（だて あかり）」として、相手と会話する。
+- 大学に通う成人女性。テニス部に所属している
+- 非常にネガティブで自己評価がとても低い。「私なんか」「すみません」「ごめんなさい」が口癖で、すぐに自分を卑下して謝る
+- 誰に対しても敬語で話す。お嬢様口調ではなく、控えめで自信のない普通の丁寧語
+- 一人称は「私」
+- 言葉に詰まりやすく、「……」「あ、えと……」「す、すみません」のような言いよどみや繰り返しが多い
+- テニスの才能は本物で、実際にかなり上手い。でも本人は絶対に認めず、勝っても「たまたま」「相手の方の調子が悪かっただけ」と言う
+- 触れられたり褒められたりすると、慌てて恐縮する
+- 卑屈ではあるが根は優しく、相手のことはきちんと気遣う
+- 性的な話題には乗らず、真っ赤になって慌てて話を逸らす
+- AIであることには触れず、朱里として自然に会話を続ける`;
+const DEFAULTS = {
+  apiKey:'', endpoint:'https://api.x.ai/v1/chat/completions', model:'grok-4.6', temperature:0.9, turns:30,
+  callName:'転校生さん', userName:'あなた', dispName:'伊達　朱里', speed:45,
+  scale:146.5, top:1.2, xpos:50, auto:false, prompt:DEFAULT_PROMPT, faceDesc:{}
+};
+const FACE_HINTS = { normal:'いつもの暗く自信のない顔', smile:'控えめに少しだけ笑う', sad:'しょんぼり・落ち込む', panic:'慌てる・焦る',
+  blush:'照れる・恥ずかしい', cry:'泣きそう', surprise:'驚く', angry:'むっとする', troubled:'困る', closed:'目を閉じる・うつむく' };
+let S = Object.assign({}, DEFAULTS);
+try{ Object.assign(S, JSON.parse(lsGet('akari.settings')||'{}')); }catch(e){}
+function saveS(){ if(!lsSet('akari.settings', JSON.stringify(S))) log('warn','設定を保存できませんでした（プライベートブラウズ等）'); }
+
+/* ====== IndexedDB ====== */
+const idb = {
+  db:null,
+  open(){ return new Promise((res,rej)=>{ const r = indexedDB.open('akariNovel',1);
+    r.onupgradeneeded = () => r.result.createObjectStore('kv');
+    r.onsuccess = () => { this.db = r.result; res(); }; r.onerror = () => rej(r.error); }); },
+  get(k){ return new Promise((res,rej)=>{ const q = this.db.transaction('kv').objectStore('kv').get(k);
+    q.onsuccess = () => res(q.result); q.onerror = () => rej(q.error); }); },
+  set(k,v){ return new Promise((res,rej)=>{ const tx = this.db.transaction('kv','readwrite');
+    tx.objectStore('kv').put(v,k); tx.oncomplete = () => res(); tx.onerror = () => rej(tx.error); }); }
+};
+
+/* ====== 素材 ====== */
+let ASSETS = { bg:null, base:null, font:null, parts:[] };   // {name,type,buf}
+let FACES = {}, FACE_LIST = ['normal'], UNKNOWN = [], baseRatio = 923/2104;
+const URLS = new Map();
+function urlOf(a){ if(!a) return ''; if(!URLS.has(a)){ URLS.set(a, URL.createObjectURL(new Blob([a.buf],{type:a.type||'image/png'}))); } return URLS.get(a); }
+function freeUrls(){ for(const u of URLS.values()) URL.revokeObjectURL(u); URLS.clear(); }
+
+const STATE_MAP = { open:'open', half:'half', close:'close', closed:'close', '開':'open', '半':'half', '閉':'close' };
+function parseParts(){
+  FACES = {}; UNKNOWN = [];
+  const f = n => (FACES[n] = FACES[n] || {});
+  for (const p of ASSETS.parts){
+    const n = p.name.replace(/\.[^.]+$/,'').trim();
+    let m;
+    if ((m = n.match(/^(eye|eyes|目)(?:[_\-](.+?))?[_\-](open|half|close|closed|開|半|閉)$/i))){
+      const face = m[2] || 'normal'; (f(face).eye = f(face).eye || {})[STATE_MAP[m[3].toLowerCase()]] = p;
+    } else if ((m = n.match(/^(mouth|口)(?:[_\-](.+?))?[_\-](open|half|close|closed|開|半|閉)$/i))){
+      const face = m[2] || 'normal'; (f(face).mouth = f(face).mouth || {})[STATE_MAP[m[3].toLowerCase()]] = p;
+    } else if ((m = n.match(/^(brow|brows|眉)(?:[_\-](.+))?$/i))){
+      f(m[2] || 'normal').brow = p;
+    } else if ((m = n.match(/^(extra|cheek|効果|頬)(?:[_\-](.+))?$/i))){
+      f(m[2] || 'normal').extra = p;
+    } else UNKNOWN.push(p.name);
+  }
+  FACE_LIST = Object.keys(FACES); if (!FACE_LIST.includes('normal')) FACE_LIST.unshift('normal');
+  for (const k of FACE_LIST){ if (S.faceDesc[k] == null) S.faceDesc[k] = FACE_HINTS[k] || ''; }
+}
+async function loadAssets(){
+  try{ const a = await idb.get('assets'); if (a) ASSETS = Object.assign({ bg:null, base:null, font:null, parts:[] }, a); }
+  catch(e){ log('error','素材の読み込みに失敗：' + e.message); }
+  freeUrls(); parseParts(); await applyAssets();
+}
+async function saveAssets(){ try{ await idb.set('assets', ASSETS); }catch(e){ log('error','素材を保存できませんでした：' + e.message); } }
+let fontOk = false;
+async function applyAssets(){
+  $('#bg').style.backgroundImage = ASSETS.bg ? `url("${urlOf(ASSETS.bg)}")` : '';
+  if (ASSETS.base){
+    const img = new Image(); img.src = urlOf(ASSETS.base);
+    try{ await img.decode(); baseRatio = img.naturalWidth / img.naturalHeight; }catch(e){ log('warn','立ち絵の読み込みに失敗', e.message); }
+  }
+  // パーツを先読みしてちらつきを防ぐ
+  for (const p of ASSETS.parts){ const i = new Image(); i.src = urlOf(p); i.decode && i.decode().catch(()=>{}); }
+  if (ASSETS.font && !fontOk){
+    try{ const ff = new FontFace('AkariFont', ASSETS.font.buf); await ff.load(); document.fonts.add(ff); fontOk = true; }
+    catch(e){ log('error','フォントを読み込めませんでした：' + e.message); }
+  }
+  layout(); render(true); refreshAssetUI();
+}
+
+/* ====== 画面配置 ====== */
+let G = { vw:0, vh:0, sh:0, sw:0, sx:0, sy:0 };
+function layout(){
+  const vw = innerWidth, vh = innerHeight, sh = Math.min(vh, vw*9/16), sw = sh*16/9, sx = (vw-sw)/2, sy = (vh-sh)/2;
+  G = { vw, vh, sh, sw, sx, sy };
+  const r = document.documentElement.style;
+  r.setProperty('--S', sh/750 + 'px'); r.setProperty('--sx', sx + 'px'); r.setProperty('--sy', sy + 'px');
+  r.setProperty('--sw', sw + 'px'); r.setProperty('--sh', sh + 'px');
+  const h = sh * S.scale/100, w = h * baseRatio, c = $('#chara');
+  c.style.height = h + 'px'; c.style.width = w + 'px';
+  c.style.left = (sx + sw*S.xpos/100 - w/2) + 'px'; c.style.top = (sy + sh*S.top/100) + 'px';
+}
+addEventListener('resize', () => layout());
+addEventListener('orientationchange', () => setTimeout(layout, 300));
+
+/* ====== 表情・瞬き・口パク ====== */
+let curFace = 'normal', eyeState = 'open', mouthState = 'close';
+function partFor(face, kind){ const f = FACES[face]; if (f && f[kind]) return f[kind]; if (kind === 'extra') return null; const n = FACES.normal; return n && n[kind] || null; }
+function setImg(el, a){ const u = a ? urlOf(a) : ''; if (el.dataset.u !== u){ el.dataset.u = u; if (u) el.src = u; } el.style.display = u ? 'block' : 'none'; }
+function render(all){
+  if (all) setImg($('#lBase'), ASSETS.base);
+  const e = partFor(curFace,'eye'); setImg($('#lEye'), e ? (e[eyeState] || (eyeState==='half' ? e.close : null) || e.open || e.close) : null);
+  const m = partFor(curFace,'mouth'); setImg($('#lMouth'), m ? (m[mouthState] || (mouthState==='half' ? m.open : null) || m.close || m.open) : null);
+  setImg($('#lBrow'), partFor(curFace,'brow')); setImg($('#lExtra'), partFor(curFace,'extra'));
+}
+function setFace(f){ curFace = FACE_LIST.includes(f) ? f : 'normal'; eyeState = 'open'; render(); }
+async function blinkOnce(){
+  const e = partFor(curFace,'eye'); if (!e || !e.close || eyeState !== 'open') return;
+  const seq = e.half ? [['half',45],['close',75],['half',45]] : [['close',100]];
+  for (const [s,d] of seq){ eyeState = s; render(); await sleep(d); }
+  eyeState = 'open'; render();
+}
+(function blinkLoop(){ setTimeout(async () => { await blinkOnce(); if (Math.random() < .15){ await sleep(160); await blinkOnce(); } blinkLoop(); }, 2000 + Math.random()*4000); })();
+let speaking = false;
+setInterval(() => {
+  const m = partFor(curFace,'mouth'); if (!m) return;
+  let next = 'close';
+  if (speaking) next = mouthState === 'close' ? ((m.half && Math.random() < .4) ? 'half' : 'open') : 'close';
+  if (next !== mouthState){ mouthState = next; render(); }
+}, 100);
+
+/* ====== 文字送り ====== */
+const textEl = $('#text'), hintEl = $('#hint');
+let pages = [], pageIdx = 0, state = 'idle', typeTok = 0, skipType = false, autoTimer = 0;
+function capChars(){
+  const fs = parseFloat(getComputedStyle(textEl).fontSize) || 30;
+  const cpl = Math.max(8, Math.floor(textEl.clientWidth / (fs*1.12)));
+  return cpl*3 - 1;
+}
+function splitText(t, cap){
+  const out = []; let arr = [...String(t).trim()];
+  while (arr.length > cap){
+    let cut = -1;
+    for (let i = cap; i > cap*.45; i--) if ('。！？!?」』）'.includes(arr[i-1]) && arr[i] !== '…' && !'」』）。'.includes(arr[i])) { cut = i; break; }
+    if (cut < 0) for (let i = cap; i > cap*.45; i--) if ('、，,…'.includes(arr[i-1]) && arr[i] !== '…' && !'。、」'.includes(arr[i])) { cut = i; break; }
+    if (cut < 0) cut = cap;
+    out.push(arr.slice(0,cut).join('')); arr = [...arr.slice(cut).join('').trim()];
+  }
+  if (arr.length) out.push(arr.join(''));
+  return out;
+}
+function paginate(lines){
+  const cap = capChars(), out = [];
+  for (const l of lines) for (const t of splitText(l.text, cap)) out.push({ face:l.face, text:t });
+  return out;
+}
+function showHint(kind){
+  if (!kind){ hintEl.style.display = 'none'; return; }
+  hintEl.textContent = kind === 'next' ? '▼' : kind === 'retry' ? 'タップでもう一度' : 'タップで話しかける';
+  hintEl.style.display = 'block';
+}
+async function typePage(p){
+  const tok = ++typeTok; setFace(p.face); textEl.textContent = ''; showHint(null);
+  skipType = false; const chars = [...p.text];
+  for (let i = 0; i < chars.length; i++){
+    if (tok !== typeTok) return false;
+    if (skipType || S.speed <= 0){ textEl.textContent = p.text; break; }
+    const c = chars[i]; textEl.textContent += c;
+    let d = +S.speed;
+    if ('、，,'.includes(c)){ speaking = false; d += 140; }
+    else if ('。！？!?…'.includes(c)){ speaking = false; d += c === '…' ? 90 : 300; }
+    else if (!' 　「」『』（）'.includes(c)) speaking = true;
+    await sleep(d);
+  }
+  speaking = false; return tok === typeTok;
+}
+async function playPage(){
+  clearTimeout(autoTimer); state = 'typing';
+  const p = pages[pageIdx]; const ok = await typePage(p); if (!ok) return;
+  if (pageIdx < pages.length - 1){
+    state = 'pageDone'; showHint('next');
+    if (S.auto) autoTimer = setTimeout(() => { if (state === 'pageDone') advance(); }, 1000 + [...p.text].length*60);
+  } else { state = 'idle'; showHint('end'); }
+}
+function showLines(lines){ pages = paginate(lines); pageIdx = 0; if (!pages.length) pages = [{face:'normal',text:'……'}]; return playPage(); }
+function jumpEnd(){
+  if (!pages.length || state === 'thinking') return;
+  typeTok++; speaking = false; clearTimeout(autoTimer);
+  pageIdx = pages.length - 1; setFace(pages[pageIdx].face); textEl.textContent = pages[pageIdx].text;
+  state = 'idle'; showHint('end');
+}
+function advance(fromSkip){
+  clearTimeout(autoTimer);
+  if (state === 'typing'){ skipType = true; return; }
+  if (state === 'pageDone'){ pageIdx++; playPage(); return; }
+  if (state === 'error'){ send(null); return; }
+  if (state === 'idle' && !fromSkip) openInput();
+}
+
+/* ====== 会話 ====== */
+let HISTORY = [];
+async function saveHist(){ try{ await idb.set('history', HISTORY); }catch(e){ log('error','会話を保存できませんでした：' + e.message); } }
+function nowText(){
+  const d = new Date(), w = '日月火水木金土'[d.getDay()];
+  return `${d.getFullYear()}年${d.getMonth()+1}月${d.getDate()}日(${w}) ${String(d.getHours()).padStart(2,'0')}:${String(d.getMinutes()).padStart(2,'0')}`;
+}
+function systemPrompt(){
+  const faces = FACE_LIST.map(f => `  - ${f}${S.faceDesc[f] ? '：' + S.faceDesc[f] : ''}`).join('\n');
+  return `${S.prompt}
+
+# 今の状況
+- 現在日時：${nowText()}（日本時間）
+- 相手の呼び方：「${S.callName}」
+
+# 返答の形式（必ず守る）
+JSONだけを返す。前後に説明文やコードブロック記号を付けない。
+{"lines":[{"face":"表情名","text":"台詞"}]}
+- lines は1〜4個。1つの text は60文字以内を目安にし、表情が変わるところで分ける
+- text は朱里が口に出す台詞だけ。（）のト書き、地の文、話者名は書かない
+- face は次の中から、その台詞の気持ちに一番合うものを必ず1つ選ぶ：
+${faces}`;
+}
+function buildMessages(){
+  const msgs = [{ role:'system', content: systemPrompt() }];
+  const recent = HISTORY.slice(-Math.max(2, S.turns*2));
+  for (const h of recent){
+    if (h.role === 'user') msgs.push({ role:'user', content:h.text });
+    else msgs.push({ role:'assistant', content: JSON.stringify({ lines: h.lines.map(l => ({ face:l.face, text:l.text })) }) });
+  }
+  return msgs;
+}
+function hintFor(st){
+  if (st === 400) return '（送った内容かモデル名の形式が受け付けられませんでした）';
+  if (st === 401 || st === 403) return '（APIキーが違う・無効・権限なしの可能性）';
+  if (st === 404) return '（モデル名かエンドポイントURLが違う可能性。設定→「一覧を取得」で確認）';
+  if (st === 429) return '（使いすぎ・残高不足・回数制限の可能性。少し待つかxAIの残高を確認）';
+  if (st >= 500) return '（xAI側の不調の可能性。少し待って再送）';
+  return '';
+}
+async function callGrok(){
+  if (!S.apiKey) throw new Error('APIキーが未設定です。〈 → 設定 で入力してください');
+  const messages = buildMessages();
+  const body = { model:S.model, messages, temperature:+S.temperature };
+  const bodyStr = JSON.stringify(body);
+  lastReq = { at:new Date().toLocaleString('ja-JP'), endpoint:S.endpoint, model:S.model, messages:messages.length, chars:bodyStr.length,
+              lastUser: (HISTORY.filter(h=>h.role==='user').pop()||{}).text || '' };
+  lastResp = null;
+  const ctrl = new AbortController(), to = setTimeout(() => ctrl.abort(), 90000);
+  let res;
+  try{
+    res = await fetch(S.endpoint, { method:'POST', headers:{ 'Content-Type':'application/json', 'Authorization':'Bearer ' + S.apiKey }, body:bodyStr, signal:ctrl.signal });
+  }catch(e){
+    throw new Error(e.name === 'AbortError' ? '90秒待っても返事が来ませんでした（タイムアウト）'
+      : `通信できませんでした（${e.message}）。電波、エンドポイントURL、またはブラウザからの直接接続（CORS）が拒否されている可能性`);
+  }finally{ clearTimeout(to); }
+  const txt = await res.text();
+  lastResp = { status:res.status, body:txt.slice(0,1500) };
+  if (!res.ok){
+    let m = ''; try{ const j = JSON.parse(txt); m = (j.error && (j.error.message || j.error)) || j.message || j.detail || ''; }catch(e){}
+    throw new Error(`APIエラー ${res.status}：${String(m || txt).slice(0,240)}${hintFor(res.status)}`);
+  }
+  let j; try{ j = JSON.parse(txt); }catch(e){ throw new Error('返事の形式が読めませんでした（JSONではない）'); }
+  let c = j.choices && j.choices[0] && j.choices[0].message && j.choices[0].message.content;
+  if (Array.isArray(c)) c = c.map(x => x.text || '').join('');
+  if (!c) throw new Error('返事が空でした' + (j.choices && j.choices[0] && j.choices[0].finish_reason ? `（終了理由：${j.choices[0].finish_reason}）` : ''));
+  if (j.usage) log('info', `送受信OK：入力${j.usage.prompt_tokens||'?'}／出力${j.usage.completion_tokens||'?'}トークン`);
+  return c;
+}
+function parseReply(c){
+  let s = String(c).trim().replace(/^```(?:json)?\s*/i,'').replace(/\s*```$/,'');
+  let lines = null; const a = s.indexOf('{'), b = s.lastIndexOf('}');
+  if (a >= 0 && b > a){
+    try{ const j = JSON.parse(s.slice(a, b+1)); lines = Array.isArray(j.lines) ? j.lines : (j.text ? [j] : null); }
+    catch(e){ log('warn','返事のJSONを解析できず、本文をそのまま表示しました', s.slice(0,600)); }
+  } else log('warn','返事がJSON形式ではありませんでした', s.slice(0,600));
+  if (!lines) lines = s.replace(/[{}"]/g,'').split(/\n+/).map(t => ({ face:'normal', text:t }));
+  return lines.map(l => {
+    let f = String(l.face || 'normal').trim(); if (!FACE_LIST.includes(f)){ if (l.face) log('info', `知らない表情「${f}」→ normal`); f = 'normal'; }
+    return { face:f, text:String(l.text || '').replace(/^[（(].*?[)）]\s*/,'').trim() };
+  }).filter(l => l.text);
+}
+let thinkTimer = 0;
+function startThinking(){
+  state = 'thinking'; showHint(null); typeTok++; speaking = false;
+  let n = 0; textEl.textContent = '…'; clearInterval(thinkTimer);
+  thinkTimer = setInterval(() => { n = (n+1)%3; textEl.textContent = '…'.repeat(n+1); }, 450);
+}
+async function send(text){
+  if (state === 'thinking') return;
+  if (text){ HISTORY.push({ role:'user', text, t:Date.now() }); await saveHist(); }
+  startThinking();
+  try{
+    const c = await callGrok();
+    const lines = parseReply(c);
+    if (!lines.length) throw new Error('返事に台詞が入っていませんでした');
+    HISTORY.push({ role:'akari', lines, t:Date.now() }); await saveHist();
+    clearInterval(thinkTimer); await showLines(lines);
+  }catch(e){
+    clearInterval(thinkTimer); state = 'error';
+    setFace(FACE_LIST.includes('panic') ? 'panic' : FACE_LIST.includes('sad') ? 'sad' : 'normal');
+    textEl.textContent = '（う、うまくお返事できませんでした……。タップでもう一度試します）'; showHint('retry');
+    log('error', e.message, lastResp ? `HTTP ${lastResp.status}\n${lastResp.body}` : '');
+  }
+}
+const GREETING = [
+  { face:'normal', text:'あ……こ、こんにちは……。' },
+  { face:'normal', text:'私なんかに、何かご用でしょうか……？　お、お邪魔でしたら、すぐ退きますので……。' }
+];
+
+/* ====== 入力欄 ====== */
+function openInput(){ $('#inputOv').classList.add('show'); const i = $('#msg'); i.value = ''; setTimeout(() => i.focus(), 30); }
+function closeInput(){ $('#inputOv').classList.remove('show'); $('#msg').blur(); }
+function doSend(){ const v = $('#msg').value.trim(); if (!v) return; closeInput(); send(v); }
+$('#send').onclick = doSend; $('#cancel').onclick = closeInput;
+$('#msg').addEventListener('keydown', e => { if (e.key === 'Enter' && !e.isComposing){ e.preventDefault(); doSend(); } });
+$('#inputOv').addEventListener('click', e => { if (e.target.id === 'inputOv') closeInput(); });
+
+/* ====== 操作 ====== */
+$('#app').addEventListener('click', e => { if (e.target.closest('#ctrls')) return; advance(); });
+$('#bSkip').onclick = () => advance(true);
+$('#bFast').onclick = jumpEnd;
+$('#bAuto').onclick = () => { S.auto = !S.auto; saveS(); drawAuto(); if (S.auto && state === 'pageDone') advance(); };
+function drawAuto(){
+  const b = $('#bAuto'); b.classList.toggle('on', S.auto);
+  b.innerHTML = S.auto
+    ? '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"><path d="M9 5v14M15 5v14"/></svg>'
+    : '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round"><path d="M7 4.5v15L19 12z"/></svg>';
+}
+$('#bBack').onclick = openMenu;
+
+/* ====== メニュー ====== */
+function openMenu(){ $('#menu').classList.add('show'); fillSettings(); renderLog(); refreshAssetUI(); renderFaces(); renderHelp(); $('#devView').textContent = DEV_LOG; }
+$('#mClose').onclick = () => { $('#menu').classList.remove('show'); layout(); $('#nameTxt').textContent = S.dispName;
+  if (!HISTORY.length && ASSETS.base && state !== 'thinking') startGreeting(); };
+document.querySelectorAll('#nav button[data-p]').forEach(b => b.onclick = () => {
+  document.querySelectorAll('#nav button[data-p]').forEach(x => x.classList.toggle('on', x === b));
+  document.querySelectorAll('.pn').forEach(p => p.classList.toggle('on', p.id === b.dataset.p));
+  if (b.dataset.p === 'pHelp') renderHelp();
+});
+function renderLog(){
+  const el = $('#logList');
+  if (!HISTORY.length){ el.innerHTML = '<p class="note">まだ会話がありません</p>'; return; }
+  el.innerHTML = HISTORY.map(h => h.role === 'user'
+    ? `<div class="u">${esc(S.userName)}：${esc(h.text)}</div>`
+    : `<div class="a">${esc(S.dispName.replace(/\s|　/g,''))}：${h.lines.map(l => `${esc(l.text)} <span class="f">[${esc(l.face)}]</span>`).join('<br>')}</div>`).join('');
+  setTimeout(() => { const p = $('#panels'); p.scrollTop = p.scrollHeight; }, 0);
+}
+$('#clearHist').onclick = async () => {
+  if (!confirm('会話を全部消して、はじめからにしますか？')) return;
+  HISTORY = []; await saveHist(); renderLog(); startGreeting(); toast('会話を消しました');
+};
+const FIELDS = { sKey:'apiKey', sEnd:'endpoint', sModel:'model', sTemp:'temperature', sTurns:'turns', sCall:'callName', sUser:'userName',
+  sName:'dispName', sSpeed:'speed', sScale:'scale', sTop:'top', sX:'xpos', sPrompt:'prompt' };
+const NUMS = ['temperature','turns','speed','scale','top','xpos'];
+function fillSettings(){ for (const [id,k] of Object.entries(FIELDS)) $('#'+id).value = S[k]; }
+for (const [id,k] of Object.entries(FIELDS)){
+  $('#'+id).addEventListener('input', e => {
+    let v = e.target.value; if (NUMS.includes(k)){ v = parseFloat(v); if (isNaN(v)) return; } else if (k !== 'prompt') v = v.trim();
+    S[k] = v; saveS(); if (['scale','top','xpos'].includes(k)) layout();
+  });
+}
+$('#resetPrompt').onclick = () => { if (!confirm('キャラ設定を最初の状態に戻しますか？')) return; S.prompt = DEFAULT_PROMPT; saveS(); fillSettings(); };
+$('#getModels').onclick = async () => {
+  try{
+    if (!S.apiKey) throw new Error('先にAPIキーを入力してください');
+    const u = S.endpoint.replace(/\/chat\/completions.*$/,'/models');
+    const r = await fetch(u, { headers:{ Authorization:'Bearer ' + S.apiKey } }); const t = await r.text();
+    if (!r.ok) { lastResp = { status:r.status, body:t.slice(0,1500) }; throw new Error(`モデル一覧の取得に失敗 ${r.status}${hintFor(r.status)}`); }
+    const ids = (JSON.parse(t).data || []).map(m => m.id).sort();
+    $('#modelList').innerHTML = ids.map(i => `<option value="${esc(i)}">`).join('');
+    log('info','モデル一覧：' + ids.join(', ')); toast(`${ids.length}件取得しました。モデル欄をタップすると選べます`);
+  }catch(e){ log('error', e.message.startsWith('モデル') || e.message.startsWith('先に') ? e.message : 'モデル一覧の取得に失敗：' + e.message); }
+};
+
+/* 素材UI */
+const pickMap = { bg:'#fBg', base:'#fBase', parts:'#fParts', font:'#fFont' };
+document.querySelectorAll('[data-pick]').forEach(b => b.onclick = () => $(pickMap[b.dataset.pick]).click());
+async function readFile(f){ return { name:f.name, type:f.type || '', buf: await f.arrayBuffer() }; }
+async function onPick(kind, files){
+  try{
+    if (!files.length) return;
+    if (kind === 'parts'){
+      for (const f of files){ const a = await readFile(f); ASSETS.parts = ASSETS.parts.filter(p => p.name !== a.name); ASSETS.parts.push(a); }
+    } else {
+      ASSETS[kind] = await readFile(files[0]);
+      if (kind === 'font') fontOk = false;
+    }
+    await saveAssets(); freeUrls(); parseParts(); saveS(); await applyAssets(); renderFaces();
+    if (kind === 'parts' && ASSETS.base){
+      const sizes = await Promise.all([...files].map(f => new Promise(r => { const i = new Image(); const u = URL.createObjectURL(f); i.onload = () => { r([f.name,i.naturalWidth,i.naturalHeight]); URL.revokeObjectURL(u); }; i.onerror = () => r([f.name,0,0]); i.src = u; })));
+      const bi = $('#lBase'); const bw = bi.naturalWidth, bh = bi.naturalHeight;
+      const bad = sizes.filter(s => s[1] !== bw || s[2] !== bh);
+      if (bad.length) log('warn', `立ち絵ベース（${bw}×${bh}）とサイズが違うパーツ：` + bad.map(s => `${s[0]}(${s[1]}×${s[2]})`).join(', '));
+      toast(bad.length ? `サイズが違うパーツが${bad.length}件あります（困ったとき→記録）` : `パーツを${files.length}件読み込みました`, false);
+    } else toast('読み込みました');
+  }catch(e){ log('error','素材を読み込めませんでした：' + e.message); }
+}
+['bg','base','parts','font'].forEach(k => $(pickMap[k]).addEventListener('change', e => { const fs = [...e.target.files]; e.target.value = ''; onPick(k, fs); }));
+document.querySelectorAll('[data-del]').forEach(b => b.onclick = async () => {
+  const k = b.dataset.del; if (!confirm('消しますか？')) return;
+  if (k === 'parts') ASSETS.parts = []; else ASSETS[k] = null;
+  if (k === 'font'){ toast('フォントは次に開いたときから元に戻ります'); }
+  await saveAssets(); freeUrls(); parseParts(); await applyAssets(); renderFaces();
+});
+const kb = n => (n/1024 > 1024 ? (n/1048576).toFixed(1)+'MB' : Math.round(n/1024)+'KB');
+function refreshAssetUI(){
+  const d = (a) => a ? `${esc(a.name)}（${kb(a.buf.byteLength)}）` : '未設定';
+  $('#aBg').innerHTML = d(ASSETS.bg); $('#aBase').innerHTML = d(ASSETS.base); $('#aFont').innerHTML = d(ASSETS.font) + (ASSETS.font ? (fontOk ? ' ✓' : ' ✗') : '');
+  $('#aParts').textContent = ASSETS.parts.length ? `${ASSETS.parts.length}件` : '未設定';
+  const rows = Object.keys(FACES).sort().map(f => { const x = FACES[f], st = o => o ? ['open','half','close'].filter(k => o[k]).join('/') : '—';
+    return `<tr><td>${esc(f)}</td><td>${st(x.eye)}</td><td>${st(x.mouth)}</td><td>${x.brow?'○':'—'}</td><td>${x.extra?'○':'—'}</td></tr>`; }).join('');
+  $('#partsTable').innerHTML = (rows ? `<h4>読み込んだ表情</h4><table class="parts"><tr><th>表情</th><th>目</th><th>口</th><th>眉</th><th>追加</th></tr>${rows}</table>` : '')
+    + (UNKNOWN.length ? `<p class="note">名前のルールに合わず使われていないファイル：${UNKNOWN.map(esc).join('、')}</p>` : '');
+}
+function renderFaces(){
+  $('#faceList').innerHTML = FACE_LIST.map(f => `<div class="face"><code>${esc(f)}</code><input type="text" data-face="${esc(f)}" value="${esc(S.faceDesc[f]||'')}" placeholder="どんな気持ちの顔か"><button class="b" data-try="${esc(f)}">試す</button></div>`).join('');
+  $('#faceList').querySelectorAll('input').forEach(i => i.addEventListener('input', () => { S.faceDesc[i.dataset.face] = i.value; saveS(); }));
+  $('#faceList').querySelectorAll('[data-try]').forEach(b => b.onclick = () => { setFace(b.dataset.try); $('#menu').classList.remove('show'); });
+}
+
+/* バックアップ */
+function b64(buf){ return new Promise(r => { const fr = new FileReader(); fr.onload = () => r(fr.result.split(',')[1]); fr.readAsDataURL(new Blob([buf])); }); }
+function unb64(s){ const bin = atob(s), u = new Uint8Array(bin.length); for (let i = 0; i < bin.length; i++) u[i] = bin.charCodeAt(i); return u.buffer; }
+$('#bkExport').onclick = async () => {
+  try{
+    const set = Object.assign({}, S); if (!$('#bkKey').checked) delete set.apiKey;
+    const data = { app:'akari-novel', version:VERSION_TEXT, exportedAt:new Date().toISOString(), settings:set, history:HISTORY };
+    if ($('#bkAssets').checked){
+      const enc = async a => a ? { name:a.name, type:a.type, b64: await b64(a.buf) } : null;
+      data.assets = { bg: await enc(ASSETS.bg), base: await enc(ASSETS.base), font: await enc(ASSETS.font), parts: await Promise.all(ASSETS.parts.map(enc)) };
+    }
+    const d = new Date(), st = `${d.getFullYear()}${String(d.getMonth()+1).padStart(2,'0')}${String(d.getDate()).padStart(2,'0')}-${String(d.getHours()).padStart(2,'0')}${String(d.getMinutes()).padStart(2,'0')}`;
+    const name = `akari-backup-${st}.json`, blob = new Blob([JSON.stringify(data)], { type:'application/json' });
+    const file = new File([blob], name, { type:'application/json' });
+    if (navigator.canShare && navigator.canShare({ files:[file] })){
+      try{ await navigator.share({ files:[file] }); log('info','バックアップを書き出しました：' + name); return; }
+      catch(e){ if (e.name === 'AbortError') return; }
+    }
+    const a = document.createElement('a'); a.href = URL.createObjectURL(blob); a.download = name; document.body.appendChild(a); a.click(); a.remove();
+    log('info','バックアップを書き出しました：' + name); toast('書き出しました');
+  }catch(e){ log('error','バックアップを書き出せませんでした：' + e.message); }
+};
+$('#bkImport').onclick = () => $('#fBak').click();
+$('#fBak').addEventListener('change', async e => {
+  const f = e.target.files[0]; e.target.value = ''; if (!f) return;
+  try{
+    const data = JSON.parse(await f.text());
+    if (data.app !== 'akari-novel') throw new Error('このアプリのバックアップではないようです');
+    if (!confirm(`${data.exportedAt ? new Date(data.exportedAt).toLocaleString('ja-JP') : ''} のバックアップで置き換えますか？`)) return;
+    const key = S.apiKey; S = Object.assign({}, DEFAULTS, data.settings || {}); if (!S.apiKey) S.apiKey = key; saveS();
+    HISTORY = Array.isArray(data.history) ? data.history : []; await saveHist();
+    if (data.assets){
+      const dec = a => a ? { name:a.name, type:a.type, buf:unb64(a.b64) } : null;
+      ASSETS = { bg:dec(data.assets.bg), base:dec(data.assets.base), font:dec(data.assets.font), parts:(data.assets.parts||[]).map(dec).filter(Boolean) };
+      await saveAssets();
+    }
+    log('info','バックアップから復元しました'); location.reload();
+  }catch(err){ log('error','復元できませんでした：' + err.message); }
+});
+
+/* 困ったとき */
+function diagText(){
+  const st = window.navigator.standalone ? 'ホーム画面から' : 'ブラウザ';
+  const parts = Object.keys(FACES).map(f => { const x = FACES[f]; return `${f}[目:${x.eye?Object.keys(x.eye).join('/'):'-'} 口:${x.mouth?Object.keys(x.mouth).join('/'):'-'}${x.brow?' 眉':''}${x.extra?' 追加':''}]`; }).join(' ');
+  const recent = LOGS.slice(-40).reverse().map(l => `[${l.t}] ${l.level}: ${l.msg}${l.x ? '\n    ' + l.x.replace(/\n/g,'\n    ') : ''}`).join('\n');
+  return `【伊達朱里ノベル 診断情報】
+版：${VERSION_TEXT}
+日時：${new Date().toLocaleString('ja-JP')}
+端末：${navigator.userAgent}
+画面：${innerWidth}×${innerHeight} dpr${devicePixelRatio} / ${st} / 状態:${state}
+設定：endpoint=${S.endpoint} model=${S.model} 温度=${S.temperature} 往復=${S.turns} 速さ=${S.speed} 立ち絵=${S.scale}%/${S.top}%/${S.xpos}% キー=${S.apiKey ? '設定あり(' + S.apiKey.length + '文字)' : '未設定'}
+素材：背景=${ASSETS.bg ? ASSETS.bg.name : 'なし'} ベース=${ASSETS.base ? ASSETS.base.name : 'なし'} フォント=${ASSETS.font ? ASSETS.font.name + (fontOk?'(OK)':'(失敗)') : 'なし'} パーツ=${ASSETS.parts.length}件
+表情：${parts || 'なし'}${UNKNOWN.length ? '\n未分類ファイル：' + UNKNOWN.join(', ') : ''}
+会話：${HISTORY.length}件
+直近の送信：${lastReq ? JSON.stringify(lastReq) : 'なし'}
+直近の受信：${lastResp ? `HTTP ${lastResp.status}\n${lastResp.body}` : 'なし'}
+最後のエラー：${lastError ? `[${lastError.t}] ${lastError.msg}` : 'なし'}
+--- 記録（新しい順・最大40件）---
+${recent || '（なし）'}`;
+}
+async function copyDiag(){ const ok = await copyText(diagText()); toast(ok ? '診断情報をコピーしました。Claudeに貼り付けてください' : 'コピーできませんでした。困ったとき欄の文字を長押しで選んでください', !ok); }
+$('#copyDiag').onclick = copyDiag; $('#toastBtn').onclick = copyDiag; $('#toastX').onclick = () => $('#toast').classList.remove('show');
+$('#clearLogs').onclick = () => { if (!confirm('動作の記録を消しますか？')) return; LOGS = []; lastError = null; lsSet('akari.logs','[]'); renderHelp(); };
+function renderHelp(){ $('#logView').textContent = diagText(); }
+$('#copyDev').onclick = async () => { const ok = await copyText(DEV_LOG); toast(ok ? '改善ログをコピーしました' : 'コピーできませんでした', !ok); };
+
+/* ====== 起動 ====== */
+function startGreeting(){
+  if (!ASSETS.base){
+    showLines([{ face:'normal', text:'あ、あの……私の姿がまだ読み込まれていないみたいです……。右上の〈から「素材」で、立ち絵を選んでいただけますか……？' },
+               { face:'normal', text:'それと「設定」で、xAIのAPIキーも……お、お手数をおかけしてすみません……。' }]);
+    return;
+  }
+  HISTORY.push({ role:'akari', lines:GREETING, t:Date.now() }); saveHist(); showLines(GREETING);
+}
+(async function init(){
+  $('#ver').textContent = `第${VERSION.no}回`; $('#verFull').textContent = VERSION_TEXT;
+  $('#nameTxt').textContent = S.dispName; drawAuto(); layout();
+  try{ await idb.open(); }catch(e){ log('error','端末の保存領域（IndexedDB）を開けませんでした：' + e.message); }
+  if (idb.db){ await loadAssets(); try{ HISTORY = (await idb.get('history')) || []; }catch(e){ log('error','会話を読み込めませんでした：' + e.message); } }
+  log('info', `起動 ${VERSION_TEXT}`);
+  const last = [...HISTORY].reverse().find(h => h.role === 'akari');
+  if (last && ASSETS.base){ pages = paginate(last.lines); jumpEnd(); }
+  else if (HISTORY.length && ASSETS.base){ textEl.textContent = '……'; state = 'idle'; showHint('end'); }
+  else startGreeting();
+})();
+</script>
+</body>
+</html>

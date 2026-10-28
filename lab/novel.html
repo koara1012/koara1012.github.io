@@ -150,6 +150,7 @@ pre.box{white-space:pre-wrap;word-break:break-all;background:#1a161d;border:1px 
 <div id="menu">
   <div id="nav">
     <button id="toLine" style="background:#06c755;border-color:#5fe39a;color:#fff;font-weight:700;white-space:nowrap">‹ LINE風へ</button>
+    <button id="endMeet" hidden style="background:#e9893a;border-color:#f6c08d;color:#fff;font-weight:700;white-space:nowrap">会うのを終える</button>
     <button data-p="pRoom" class="on">トーク</button>
     <button data-p="pChar">キャラ</button>
     <button data-p="pLog">会話ログ</button>
@@ -243,13 +244,18 @@ pre.box{white-space:pre-wrap;word-break:break-all;background:#1a161d;border:1px 
 <script>
 'use strict';
 /* ====== 版 ====== */
-const VERSION = { no: 4, at: '2026-10-28 20:00:00' };
+const VERSION = { no: 5, at: '2026-10-28 21:00:00' };
 const VERSION_TEXT = `試作・段階${VERSION.no}（${VERSION.at} 更新・本番 akari.html 第6回がもと）`;
 
 /* ====== 改善ログ（他のAIへの引き継ぎ用）======
    改善のたびに「## 第〜回」を先頭側へ追記し、概要も最新に保つ */
 const DEV_LOG = `# 朱里ノベル 統合の試作（lab/novel.html） 改善ログ
 ※ 本番 akari.html 第6回をもとにした試作。保存先は本番と分けている（localStorage lab.settings / lab.logs、IndexedDB akariLab）。
+## 試作・段階5（2026-10-28 21:00:00）
+- 表トーク（会う場面）：kind 'omote'、target＝LINE風のキャラid。novel.html?from=line&meet=<id>（LINE風の帯［会いに行く］・通知のタップ）で開く。無ければ自動で作る（立ち絵のキャラが「LINE風のキャラ」とつながっていなければ案内）。
+- 会話はサーバー（第39版）：POST /meet/start（会えた場面から始める）・/meet/say・/meet/end（まとめて表の記憶へ）。AIは LINE風の表と同じ。メニューに［会うのを終える］。編集・書き出しは出さない。
+- 表情は「表」で使うものをサーバーに登録（POST /faces kind:'omote'）。
+
 ## 試作・段階4（2026-10-28 20:00:00）
 - 裏トークのナレーション（名前欄なし）の文字を少し薄い色（#d6cfe3）に（ユーザーが「色だけ変える」を選んだ）。#text.narr、showName('') で付け外し。
 
@@ -469,11 +475,13 @@ async function pushFaces(){
   const done = new Set();
   for (const c of CHARS){
     if (!c.lineId || done.has(c.lineId)) continue; done.add(c.lineId);
-    const faces = usableFaces(c, 'ura').map(n => { const f = faceObj(c, n); return { name:n, desc:(f && f.desc) || '' }; });
-    const sig = JSON.stringify(faces);
-    if (facesSent[c.lineId] === sig) continue;
-    try{ await srv('POST', '/faces', { charId:c.lineId, faces }); facesSent[c.lineId] = sig; }
-    catch(e){ log('warn', `表情をLINE風のサーバーに登録できませんでした（${c.name}）：` + e.message); return; }
+    for (const kind of ['ura', 'omote']){   // 裏トーク用・表（会う場面）用
+      const faces = usableFaces(c, kind).map(n => { const f = faceObj(c, n); return { name:n, desc:(f && f.desc) || '' }; });
+      const sig = JSON.stringify(faces), key = c.lineId + '|' + kind;
+      if (facesSent[key] === sig) continue;
+      try{ await srv('POST', '/faces', { charId:c.lineId, kind, faces }); facesSent[key] = sig; }
+      catch(e){ log('warn', `表情をLINE風のサーバーに登録できませんでした（${c.name}）：` + e.message); return; }
+    }
   }
 }
 async function saveRooms(){ try{ await idb.set('rooms', ROOMS); }catch(e){ log('error','トークを保存できませんでした：' + e.message); } }
@@ -891,6 +899,7 @@ function startThinking(){
 async function send(text){
   if (state === 'thinking' || !ROOM) return;
   if (ROOM.kind === 'ura') return sendUra(text);
+  if (ROOM.kind === 'omote') return sendMeet(text);
   const room = ROOM;
   if (text){ HIST.push({ role:'user', text, t:Date.now() }); await saveHist(); }
   startThinking();
@@ -1007,6 +1016,66 @@ async function sendUra(text){
   }
 }
 
+/* ====== 表トーク（LINE風の表で約束して、実際に会う場面）。会話はサーバー（kv meetlog:）・AIは LINE風の表と同じ ====== */
+function meetToHist(log, room){
+  const out = []; const who0 = room.members[0]; const ch = charById(who0);
+  for (const m of log){
+    if (m.who === 'me'){ out.push({ role:'user', text:m.text, t:0 }); continue; }
+    const line = m.who === 'narr' ? { who:'', face:'', text:m.text } : { who:who0, face: ch && m.face && usableFaces(ch, 'omote').includes(m.face) ? m.face : (ch ? defaultFace(ch) : ''), text:m.text };
+    const last = out[out.length-1];
+    if (last && last.role === 'chars') last.lines.push(line); else out.push({ role:'chars', lines:[line], t:0 });
+  }
+  return out;
+}
+async function openMeet(room){
+  try{
+    const r = await srv('POST', '/meet/start', { charId:room.target });
+    const n = (r.lines || []).length, lg = r.log || [];
+    HIST = meetToHist(lg.slice(0, lg.length - n), room);
+    room.place = (r.appt && r.appt.place) || ''; room.updated = Date.now(); saveRooms();
+    return n ? meetToHist(r.lines, room).flatMap(h => h.lines || []) : null;
+  }catch(e){ HIST = []; log('error', '会う場面を始められませんでした：' + e.message, lastResp ? `HTTP ${lastResp.status}\n${lastResp.body}` : ''); toast('会う場面を始められませんでした。〈 →「困ったとき」で診断をコピーできます', true, 6000); return null; }
+}
+async function sendMeet(text){
+  const room = ROOM;
+  if (text) HIST.push({ role:'user', text, t:Date.now() });
+  startThinking();
+  try{
+    const r = await srv('POST', '/meet/say', { charId:room.target, text:text || '' });
+    if (room !== ROOM) return;
+    const lines = meetToHist(r.lines || [], room).flatMap(h => h.lines || []);
+    if (!lines.length) throw new Error('返事がありませんでした');
+    HIST.push({ role:'chars', lines, t:Date.now() });
+    const l = lines[lines.length-1]; room.last = { who:l.who, text:l.text }; room.updated = Date.now(); await saveRooms();
+    clearInterval(thinkTimer); await showLines(lines);
+  }catch(e){
+    clearInterval(thinkTimer); if (room !== ROOM) return; state = 'error';
+    textEl.textContent = '（うまくお返事できませんでした……。タップでもう一度試します）'; showHint('retry');
+    log('error', e.message, lastResp ? `HTTP ${lastResp.status}\n${lastResp.body}` : '');
+  }
+}
+async function meetRoomFor(cid, lineP){
+  const hit = ROOMS.find(r => r.kind === 'omote' && r.target === cid);
+  if (hit) return hit.id;
+  if (lineP) await lineP;
+  const c = novelOfLine(cid);
+  if (!c){
+    const lc = LINE.chars.find(x => x.id === cid);
+    toast(`立ち絵のキャラがまだつながっていません。〈 →「キャラ」で ${lc ? lc.name : '相手'} の「LINE風のキャラ」を選んでから、もう一度［会いに行く］を押してください`, true, 9000);
+    return null;
+  }
+  const lc = LINE.chars.find(x => x.id === cid);
+  const r = { id:uid(), name:'表：' + ((lc && lc.name) || c.name), members:[c.id], kind:'omote', target:cid, updated:Date.now(), last:null };
+  ROOMS.push(r); await saveRooms(); log('info', `表トーク（会う場面）を作りました：${r.name}`);
+  return r.id;
+}
+$('#endMeet').onclick = async () => {
+  if (!ROOM || ROOM.kind !== 'omote') return;
+  if (!confirm('会うのを終えますか？（会った内容がまとめられて、LINE風のトークでも覚えていてくれます）')) return;
+  try{ await srv('POST', '/meet/end', { charId:ROOM.target }); toast('会うのを終えました'); setTimeout(() => { location.href = 'index.html?chat=' + encodeURIComponent(ROOM.target); }, 900); }
+  catch(e){ toast('終えられませんでした：' + e.message, true, 6000); log('error', e.message); }
+};
+
 /* ====== LINE風のトーク画面から来たとき：その裏トークを探す（無ければ作る） ====== */
 async function uraRoomFor(target, lineP){
   const hit = ROOMS.find(r => r.kind === 'ura' && r.target === target);
@@ -1033,15 +1102,19 @@ async function openRoom(id){
   previewChar = null;
   ROOM = ROOMS.find(r => r.id === id) || null; S.room = ROOM ? ROOM.id : null; saveS();
   HIST = [];
+  let fresh = null;
   if (ROOM && ROOM.kind === 'ura'){ textEl.textContent = '（LINE風アプリから会話を読み込んでいます…）'; await openUra(ROOM); }
+  else if (ROOM && ROOM.kind === 'omote'){ textEl.textContent = '（待ち合わせ場所に向かっています…）'; fresh = await openMeet(ROOM); }
   else if (ROOM){ try{ HIST = (await idb.get('hist:' + ROOM.id)) || []; }catch(e){ log('error','会話を読み込めませんでした：' + e.message); } }
   clearInterval(thinkTimer); typeTok++; speaking = false; pages = [];
   await buildStage();
   $('#msg').placeholder = ROOM ? `${ROOM.name}に話しかける…` : '話しかける…';
+  $('#endMeet').hidden = !(ROOM && ROOM.kind === 'omote');
   if (!ROOM){ showName(null); $('#nameplate').classList.add('hide'); textEl.textContent = CHARS.length ? '（右上の〈 →「トーク」で、話すトークを選んでください）' : '（右上の〈 →「キャラ」でキャラを作ってください）'; state = 'idle'; showHint(null); return; }
   const noBase = STAGE.filter(s => !s.c.base).map(s => s.c.name);
   const last = [...HIST].reverse().find(h => h.role === 'chars');
-  if (last){ pages = paginate(last.lines); pageIdx = pages.length - 1; showStatic(pages[pageIdx]); }
+  if (fresh && fresh.length){ HIST.push({ role:'chars', lines:fresh, t:Date.now() }); await showLines(fresh); }   // 会えた場面（表）は動かして見せる
+  else if (last){ pages = paginate(last.lines); pageIdx = pages.length - 1; showStatic(pages[pageIdx]); }
   else { showName(null); $('#nameplate').classList.add('hide'); textEl.textContent = noBase.length ? `（${noBase.join('、')}の立ち絵がまだありません。右上の〈 →「キャラ」で入れてください）` : '（タップして話しかけてください）'; state = 'idle'; showHint('end'); }
 }
 
@@ -1084,6 +1157,7 @@ document.querySelectorAll('#nav button[data-p]').forEach(b => b.onclick = () => 
 $('#toLine').onclick = () => {   // 試作：LINE風アプリ（lab/index.html）へ。裏トークならその相手の裏を開く
   let q = '';
   if (ROOM && ROOM.kind === 'ura' && ROOM.target) q = '?chat=' + encodeURIComponent(ROOM.target.replace(/#ura$/,'')) + '&w=ura';
+  else if (ROOM && ROOM.kind === 'omote' && ROOM.target) q = '?chat=' + encodeURIComponent(ROOM.target);
   else if (QS.get('back')) q = '?chat=' + encodeURIComponent(QS.get('back'));
   location.href = 'index.html' + q;
 };
@@ -1096,9 +1170,9 @@ function renderRooms(){
   $('#roomList').innerHTML = list.length ? list.map(r => {
     const mem = r.members.map(id => (charById(id) || {}).name || '？').join('・');
     const last = r.last ? `${esc(((charById(r.last.who) || {}).name || '').replace(/[\s　]/g,''))}：${esc(r.last.text)}` : '（まだ会話がありません）';
-    return `<div class="it ${ROOM && ROOM.id === r.id ? 'cur' : ''}"><div class="main"><div class="t">${esc(r.name)} <span class="note">${r.kind === 'ura' ? '裏・LINE風と共有 ' : ''}${r.members.length > 1 ? 'グループ ' : ''}${esc(mem)}・${r.kind === 'ura' ? 'LINE風のAI' : provName(provOf(r))}</span></div><div class="sub">${last}</div></div>
+    return `<div class="it ${ROOM && ROOM.id === r.id ? 'cur' : ''}"><div class="main"><div class="t">${esc(r.name)} <span class="note">${r.kind === 'ura' ? '裏・LINE風と共有 ' : r.kind === 'omote' ? '表・会う場面 ' : ''}${r.members.length > 1 ? 'グループ ' : ''}${esc(mem)}・${r.kind === 'ura' || r.kind === 'omote' ? 'LINE風のAI' : provName(provOf(r))}</span></div><div class="sub">${last}</div></div>
       <span class="note">${fmtTime(r.updated)}</span>
-      <button class="b p s" data-ropen="${r.id}">開く</button><button class="b s" data-redit="${r.id}">編集</button><button class="b s" data-rexp="${r.id}">書き出す</button><button class="b d s" data-rdel="${r.id}">削除</button></div>`;
+      <button class="b p s" data-ropen="${r.id}">開く</button>${r.kind === 'omote' ? '' : `<button class="b s" data-redit="${r.id}">編集</button><button class="b s" data-rexp="${r.id}">書き出す</button>`}<button class="b d s" data-rdel="${r.id}">削除</button></div>`;
   }).join('') : '<p class="note">トークがありません。「＋トークを作る」から作ってください。</p>';
   $('#roomList').querySelectorAll('[data-ropen]').forEach(b => b.onclick = async () => { $('#menu').classList.remove('show'); menuDirty = false; await openRoom(b.dataset.ropen); });
   $('#roomList').querySelectorAll('[data-redit]').forEach(b => b.onclick = () => roomForm(b.dataset.redit));
@@ -1209,7 +1283,7 @@ function renderCharEditor(c){
   $('#ceCall').addEventListener('input', e => { c.callName = e.target.value.trim(); saveCharsSoon(); });
   $('#ceLine').addEventListener('change', e => {
     const old = c.lineId; c.lineId = e.target.value || undefined; saveCharsSoon();
-    if (old && old !== c.lineId && !CHARS.some(x => x.lineId === old)){ delete facesSent[old]; srv('POST', '/faces', { charId:old, faces:[] }).catch(() => {}); } // つなぐのをやめたら、サーバーの表情も消す
+    if (old && old !== c.lineId && !CHARS.some(x => x.lineId === old)){ for (const kind of ['ura', 'omote']){ delete facesSent[old + '|' + kind]; srv('POST', '/faces', { charId:old, kind, faces:[] }).catch(() => {}); } } // つなぐのをやめたら、サーバーの表情も消す
   });
   if (!LINE.ok && S.srvUrl) loadLine(false).then(() => { if (editChar === c.id && $('#ceLine')) renderCharEditor(c); }).catch(() => {});
   $('#cePrompt').addEventListener('input', e => { c.prompt = e.target.value; saveCharsSoon(); });
@@ -1497,12 +1571,13 @@ let envBad = false, persistState = '未確認';
   }
   for (const id of allRecIds()) await loadRec(id);
   try{ uraFaceCache = (await idb.get('uraFaces')) || {}; }catch(e){}
-  const wantUra = QS.get('ura');
+  const wantUra = QS.get('ura'), wantMeet = QS.get('meet');
   if (QS.toString()) history.replaceState(null, '', location.pathname);
   let lineP = S.srvUrl ? loadLine(false).then(() => pushFaces()).catch(e => { log('warn', e.message); }) : null;
   await applyGlobal();
   let startId = S.room && ROOMS.some(r => r.id === S.room) ? S.room : (ROOMS[0] && ROOMS[0].id);
   if (wantUra){ const id = await uraRoomFor(wantUra, lineP); if (id) startId = id; }
+  if (wantMeet){ const id = await meetRoomFor(wantMeet, lineP); if (id) startId = id; }
   await openRoom(startId);
   const empty = !CHARS.some(c => c.base) && !GLOBAL.bg;
   if (isStandalone && empty) setTimeout(() => toast('ホーム画面のアプリは、Safariとは保存場所が別です。Safariで「バックアップ」→書き出し、ここで「バックアップから復元」すると引っ越せます', false, 14000), 900);

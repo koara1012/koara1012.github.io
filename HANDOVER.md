@@ -1,6 +1,6 @@
 # トーク（キャラチャット）引き継ぎメモ
 
-最終更新：第38版（2026-10-28 裏の返事に立ち絵の表情）
+最終更新：第39版（2026-10-28 会う約束（試作））
 
 iPhoneのホーム画面に置いて使う、キャラクターとのLINE風チャットアプリ（PWA）です。
 このメモは、次に作業する人（または Claude）が、ここだけ読めば全体をつかめるように書いています。
@@ -54,6 +54,7 @@ iPhone（PWA）  ──HTTPS──▶  Cloudflare Worker「chara-chat」 ──�
 - `runDueReplies`：予定に合わせて後回しにした返事（kv `reply:`）を送る
 - `runDueProactive`：時間をずらした話しかけ（kv `proj:`）を送る
 - `runDuePostscripts`：追伸・不在着信のあとの言葉（kv `ps:`）を送る
+- `runAppointments`：会う約束（試作・設定 `meetFeature` がオンのときだけ）。20分前「そろそろ待ち合わせ」・時刻に「〇〇さんが待っています」の二段の通知（タップでノベル画面 `lab/novel.html?meet=<id>`。Web Push は `url`、Bark は `url`）。モードがオフのまま時刻を過ぎたら延期、通知して2時間来なければ「来なかった」、会っている状態が6時間続いたら自動で終える
 - `runDisasters`：地震・速報（P2P地震情報）。ほかの災害の確認は間をあけて行う
 - `backupStep`：月2回の自動バックアップと、復元の続き（R2 があるときだけ）
 - `tick` も毎分動きます。ただし、1人ずつ見ると13分（`TICK_MIN`）に1回の見回りです。キャラごとに、13分の中の担当の分が均等にずらしてあります（`tickDue`）。何人も同じ瞬間に動かないようにするためです。担当の子だけ、次のことを判定します。
@@ -88,7 +89,8 @@ iPhone（PWA）  ──HTTPS──▶  Cloudflare Worker「chara-chat」 ──�
 - 予約：`reply:` `replygo:` `proj:` `projLast` `ps:`
 - スタンプ：`usleep:` `ulater:`
 - キャラの性質：`rhythm:`（生活リズム・毎週の習慣）、`jealous:`、`meet:<日付>`（キャラ同士の約束）
-- 立ち絵の表情：`faces:<キャラid>` = [{ name, desc }]（ノベル画面が `POST /faces` で登録。2つ以上のときだけ。画像は持たない）
+- 立ち絵の表情：`faces:<キャラid>`（裏用）・`facesO:<キャラid>`（表＝会う場面用） = [{ name, desc }]（ノベル画面が `POST /faces` で登録。2つ以上のときだけ。画像は持たない）
+- 会う約束（試作）：`appt:<キャラid>` = { date, time, place, at, status（set／postponed／replan／meeting／done／missed）, n1, n2, metAt, doneAt, summary }、`meetlog:<キャラid>`（会っている場面の会話。終えたら消す）。キャラ同士の `meet:<日付>` とは別物
 - ニュース：`newsKw:` `news:` `newsUsed:`
 - AIのクレジット切れ：`aiAlert:gemini` `aiAlert:grok`（料金まわりのエラーで作られ、次に呼び出しが成功すると消える）
 - 天気・災害：`weather` `forecast` `air` `dis:state` `disjob:`
@@ -101,7 +103,8 @@ iPhone（PWA）  ──HTTPS──▶  Cloudflare Worker「chara-chat」 ──�
 - TL：`GET /tl`、`POST /tl/post`（写真可） `/tl/comment` `/tl/like` `/tl/delete` `/tl/clear`
 - くらし：`GET /life`、`POST /memory/delete`、`GET/POST /world`、`GET /disaster`、`POST /outage`
 - 写真：`GET /img`、`POST /img/replace`（キャラの写真のPNGをJPEGに差し替え）
-- 立ち絵の表情（ノベル画面から）：`POST /faces` { charId, faces:[{name, desc}] }（1つ以下なら消す）
+- 立ち絵の表情（ノベル画面から）：`POST /faces` { charId, kind:'ura'|'omote', faces:[{name, desc}] }（1つ以下なら消す）
+- 会う約束（試作）：`GET /meet?charId=`、`POST /meet/start`（会えた場面から始める）・`/meet/say`・`/meet/end`（まとめを `memories` の fact に）、`POST /appt` { action:'cancel'|'replan' }。`/sync` に `appts`
 - バックアップ：`GET /export`、`/backup/*`（status・check・step・now・cancel・restore・upload・download）
 - 通知：`GET /vapid`、`POST /subscribe`、`POST /test-push`、`POST /test-bark`、`GET /bark/status`
 - テスト用：`POST /poke`、`POST /tl/poke`、`POST /disaster/test`
@@ -162,6 +165,7 @@ node --no-warnings tests/run-all.mjs t_group     # 名前で絞る
 - ノベル風アプリ（`akari.html`）との連携：LINEで会う約束→ノベル画面で会う→まとめを記憶に戻す。試作中（`lab/index.html` が本番 `chat/index.html` 第37版のコピー。保存は `lab.*`、通知なし）。**`chat/index.html` を直したら、試作版にも同じ直しが要るか確かめる**。詳しくは `AKARI_HANDOVER.md` §9
 
 ## 9. 更新履歴（新しい順）
+- **第39版**：会う約束（試作・設定 `meetFeature`、既定オフ）。表の返事を作るとき、ユーザーが話した直後なら `meet_status/date/time/place` も答えてもらい `appt:` に記録（`callOmoteRich` の `opt.meet`）。表のプロンプトに約束の状態（約束あり・忙しくて保留・延期で決め直し・来なかった・会っている・会った内容）を足す（`apptContext`）。会う約束モードは全員（`meetOn`）とキャラごと（`meetOffChars`）。オンに戻すと延期中の約束を `replan` に。二段の通知（`runAppointments`）。会う場面（ノベル画面の表トーク）の返事は表のAIで、トークの最近の会話・くらしを渡す（`meetReply`）。終えたら要約を記憶に（`meetEnd`）。`chat/sw.js` は通知の `url` を開く。画面は `lab/index.html`（帯・設定）と `lab/novel.html`（表トーク）だけ。テスト `t_meet`
 - **第38版**：裏の返事に立ち絵の表情（ノベル画面用）。ノベル画面が `POST /faces` で表情の名前・説明を登録したキャラだけ、裏の返事（1人・グループ）でAIにセリフの先頭へ《表情名》を付けてもらい、保存時に外して `messages.face` に入れる（`/sync`・`/reply` で返す。次の会話ではAIに《》付きで渡す）。表情が無いキャラ・表は今までどおり。LINE風の画面には出ない。テスト `t_faces`
 - **第37版**：手動バックアップの欄に「最後に手動で保存した日時」を表示（保存し終えたときにサーバーへ記録）
 - **第36版**：見回りをキャラごとに13分の中でずらす（投稿・スタンプ・もらいそびれた返事が重なりにくく）。TLの反応は毎分実行

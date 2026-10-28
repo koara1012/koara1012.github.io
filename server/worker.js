@@ -14,7 +14,7 @@
 //    ・Cron トリガー  * * * * *  （毎分。実際に動くのは13分おき）
 // =====================================================================
 
-const VERSION = '第36版（2026-10-28 03:10:00 更新・キャラごとに見回りの時刻をずらす）';
+const VERSION = '第37版（2026-10-28 17:10:00 更新・手動バックアップの最終保存日時）';
 const DEFAULT_MODEL = 'gemini-flash-latest';
 const DEFAULT_GROK_MODEL = 'grok-4.7';                 // X（Twitter）の Grok と同じ最新世代
 const FALLBACK_GROK_MODEL = 'grok-4-fast-non-reasoning'; // 上が使えないときの予備
@@ -434,6 +434,11 @@ async function route(key, url, body, env, ctx) {
     // ---- バックアップ（自動・確認・戻す）
     case 'GET /backup/status': return json(await bkView(env));
     case 'GET /backup/check': return json(await bkIntegrity(env)); // 手動の書き出しのあとの確かめ
+    case 'POST /backup/manual': { // 手動のバックアップをiPhoneに保存し終えた（最後に保存した日時を覚えておく。bk: なのでバックアップ自体には入らない）
+      const v = { at: Date.now(), photos: !!body.photos, bytes: Math.max(0, num(body.bytes, 0)), messages: Math.max(0, num(body.messages, 0)) };
+      await kvSet(env, 'bk:manual', v);
+      return json({ ok: true, manual: v });
+    }
     case 'POST /backup/step': { await backupStep(env, {}); return json(await bkView(env)); } // アプリを開いているあいだは早めに進める
     case 'POST /backup/now': { // 今の期間（1日用／15日用）の分を今すぐ取る。force=true なら減っていても保存
       needR2(env);
@@ -2180,7 +2185,7 @@ async function bkDownload(env, gen, withImages, label) {
 }
 async function bkView(env) { // 設定画面用
   const st = await bkStatus(env);
-  const out = { r2: !!env.BACKUP, last: st.last || null, restoreResult: st.restore || null, slots: {}, job: null, restore: null, lock: !!(await kvGet(env, 'bk:lock', 0)), cycle: null };
+  const out = { r2: !!env.BACKUP, last: st.last || null, restoreResult: st.restore || null, slots: {}, job: null, restore: null, lock: !!(await kvGet(env, 'bk:lock', 0)), cycle: null, manual: await kvGet(env, 'bk:manual', null) };
   if (!env.BACKUP) return out;
   const slots = await bkSlots(env);
   for (const k of Object.keys(BK_SLOT_NAME)) if (slots[k]) { const { gen, ...rest } = slots[k]; out.slots[k] = { ...rest, name: BK_SLOT_NAME[k] }; }

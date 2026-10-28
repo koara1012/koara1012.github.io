@@ -1682,6 +1682,8 @@ async function generateAndStore(env, c, d, hist, lastRead, world = 'omote') {
     if (m) return { sender: 'narr', text: takeFace(m[1].trim(), uraFaces).text.trim() };
     if (!ura) return { sender: 'char', text: t };
     const f = takeFace(t, uraFaces);
+    const m2 = uraFaces && f.text.match(/^\s*[＊*]+\s*([\s\S]*)$/); // 《》のあとに＊が来たら、ナレーションとして扱う
+    if (m2) return { sender: 'narr', text: m2[1].trim() };
     return { sender: 'char', text: f.text.trim().replace(/^「([\s\S]*)」$/, '$1'), ...(f.face ? { face: f.face } : {}) };
   }).filter((x) => x.text);
   // スタンプ（表）：ユーザーの最後のメッセージに付ける

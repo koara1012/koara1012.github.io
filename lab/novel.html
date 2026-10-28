@@ -1202,7 +1202,10 @@ function renderCharEditor(c){
   $('#ceBack').onclick = () => { editChar = null; renderChars(); };
   $('#ceName').addEventListener('input', e => { c.name = e.target.value.trim() || '名無し'; saveCharsSoon(); menuDirty = true; });
   $('#ceCall').addEventListener('input', e => { c.callName = e.target.value.trim(); saveCharsSoon(); });
-  $('#ceLine').addEventListener('change', e => { c.lineId = e.target.value || undefined; saveCharsSoon(); });
+  $('#ceLine').addEventListener('change', e => {
+    const old = c.lineId; c.lineId = e.target.value || undefined; saveCharsSoon();
+    if (old && old !== c.lineId && !CHARS.some(x => x.lineId === old)){ delete facesSent[old]; srv('POST', '/faces', { charId:old, faces:[] }).catch(() => {}); } // つなぐのをやめたら、サーバーの表情も消す
+  });
   if (!LINE.ok && S.srvUrl) loadLine(false).then(() => { if (editChar === c.id && $('#ceLine')) renderCharEditor(c); }).catch(() => {});
   $('#cePrompt').addEventListener('input', e => { c.prompt = e.target.value; saveCharsSoon(); });
   bindNum('ceScale','scale'); bindNum('ceTop','top'); bindNum('ceX','xoff');
@@ -1212,12 +1215,12 @@ function renderCharEditor(c){
     checkSizes(c);
   });
   $('#ceAddFace').onclick = async () => {
-    const n = $('#ceNewFace').value.trim(); if (!n){ toast('表情の名前を入れてください', true, 3000); return; }
+    const n = $('#ceNewFace').value.replace(/[《》]/g,'').trim(); if (!n){ toast('表情の名前を入れてください', true, 3000); return; }
     if (c.faces.some(f => f.name === n)){ toast('同じ名前の表情があります', true, 3000); return; }
     c.faces.push({ id:uid(), name:n, desc:'', eye:{}, mouth:{} }); await saveChars(); menuDirty = true; renderCharEditor(c);
   };
   area.querySelectorAll('[data-fname]').forEach(i => i.addEventListener('change', () => {
-    const f = c.faces.find(x => x.id === i.dataset.fname), n = i.value.trim();
+    const f = c.faces.find(x => x.id === i.dataset.fname), n = i.value.replace(/[《》]/g,'').trim();
     if (!n || c.faces.some(x => x !== f && x.name === n)){ toast('名前が空か、ほかの表情と同じです', true, 3000); i.value = f.name; return; }
     f.name = n; saveCharsSoon(); menuDirty = true;
   }));

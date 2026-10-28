@@ -249,13 +249,17 @@ pre.box{white-space:pre-wrap;word-break:break-all;background:#1a161d;border:1px 
 <script>
 'use strict';
 /* ====== 版 ====== */
-const VERSION = { no: 7, at: '2026-10-28 22:40:00' };
+const VERSION = { no: 8, at: '2026-10-28 23:55:00' };
 const VERSION_TEXT = `${/\/lab\//.test(location.pathname) ? '試作・' : ''}統合 第${VERSION.no}回（${VERSION.at} 更新・akari.html 第6回がもと）`;
 
 /* ====== 改善ログ（他のAIへの引き継ぎ用）======
    改善のたびに「## 第〜回」を先頭側へ追記し、概要も最新に保つ */
 const DEV_LOG = `# 朱里ノベル 統合の試作（lab/novel.html） 改善ログ
 ※ 本番 akari.html 第6回をもとにした試作。保存先は本番と分けている（localStorage lab.settings / lab.logs、IndexedDB akariLab）。
+## 統合 第8回（2026-10-28 23:55:00）
+- 表情の口の枠の並びを「開き→半開き→閉じ」に（表示だけ。保存の形は同じ）。
+- 表情の［試す］で、短い台詞（TRY_LINE）を話させて口パクも確かめられるように。口の「開き」が無い表情はそう表示。
+
 ## 統合 第7回（2026-10-28 22:40:00）
 - 起動したとき、前回の表トーク（会う場面）は自動で開かない（開くと会いに行くことになるため。復元直後に会う場面が始まっていた）。
 - 復元の途中経過を記録とトーストに出す（ファイル名・サイズ・やめた・復元中）。ホーム画面のアプリで「復元できない」と言われたときの手がかりに。
@@ -1271,7 +1275,8 @@ function renderChars(){
 let pickCb = null;
 $('#fImg').addEventListener('change', async e => { const f = e.target.files[0]; e.target.value = ''; if (f && pickCb){ const cb = pickCb; pickCb = null; try{ await cb(f); }catch(err){ log('error','画像を読み込めませんでした：' + err.message); } } });
 function pickImage(cb){ pickCb = cb; $('#fImg').click(); }
-const SLOTS = { eye:[['open','開き'],['half','半目'],['close','閉じ']], mouth:[['close','閉じ'],['half','半開き'],['open','開き']] };
+const TRY_LINE = 'あ、あの……こんにちは。えっと、今日もよろしくお願いします。';
+const SLOTS = { eye:[['open','開き'],['half','半目'],['close','閉じ']], mouth:[['open','開き'],['half','半開き'],['close','閉じ']] };   // 表示の順（ユーザーの希望で 開き→半開き→閉じ）
 function tileHtml(fid, kind, key, label, id){
   return `<div class="sg"><div class="tile ${id ? 'full' : ''}" data-slot="${fid}|${kind}|${key}">${id ? `<img data-th="${id}" alt="">` : '＋'}${id ? `<span class="x" data-clr="${fid}|${kind}|${key}">×</span>` : ''}</div>${label}</div>`;
 }
@@ -1344,7 +1349,13 @@ function renderCharEditor(c){
     $('#menu').classList.remove('show'); menuDirty = false;
     if (!(ROOM && ROOM.members.includes(c.id))) previewChar = c.id;
     await buildStage(); const st = STAGE.find(s => s.c.id === c.id); setFace(st, f.name);
-    if (previewChar){ showName(c.id); textEl.textContent = `（表情「${f.name}」のお試し中。タップで戻ります）`; state = 'idle'; showHint(null); }
+    // 口の動きも見られるように、短い台詞を話させる（瞬きはいつもどおり自動）
+    await sleep(500);
+    const hasMouth = f.mouth && f.mouth.open;
+    await typePage({ who:c.id, face:f.name, text:TRY_LINE });
+    state = 'idle';
+    textEl.textContent = TRY_LINE + `\n（表情「${f.name}」のお試し${hasMouth ? '' : '・口の「開き」が無いので口パクしません'}${previewChar ? '。タップで戻ります' : ''}）`;
+    showHint(null);
   });
   area.querySelectorAll('[data-fup]').forEach(b => b.onclick = async () => {
     const i = c.faces.findIndex(x => x.id === b.dataset.fup); if (i > 0){ [c.faces[i-1], c.faces[i]] = [c.faces[i], c.faces[i-1]]; await saveChars(); renderCharEditor(c); }

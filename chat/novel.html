@@ -118,10 +118,15 @@ pre.box{white-space:pre-wrap;word-break:break-all;background:#1a161d;border:1px 
 #toast span{flex:1}
 #rotate{position:fixed;inset:0;z-index:50;background:#000;display:none;place-items:center;text-align:center;font-size:16px;line-height:1.8;padding:20px}
 @media (orientation:portrait){#rotate{display:grid}}
+/* 縦向きロックのまま横で使う：画面ぜんぶ（#rotwrap）を90°回して表示する。fixed の要素も #rotwrap の中で並ぶ */
+body.rotmode #rotate{display:none!important}
+body.rotmode #rotwrap{position:fixed;left:0;top:0;width:var(--RW);height:var(--RH);transform-origin:0 0;overflow:hidden}
+body.rotmode #rotwrap{transform:var(--RT)}
 .hidefile{display:none}
 </style>
 </head>
 <body>
+<div id="rotwrap">
 <div id="app">
   <div id="bg"></div>
   <div id="charas"></div>
@@ -200,6 +205,8 @@ pre.box{white-space:pre-wrap;word-break:break-all;background:#1a161d;border:1px 
       <div class="row"><label>疑似半目</label><label><input type="checkbox" id="sBlinkFade"> 半目が無い表情は、開きと閉じを溶け合わせて半目の代わりにする</label></div>
       <div class="row"><label>半目の時間（ms）</label><input type="number" id="sBlinkHalf" min="10" max="200" step="5"><label>閉じている時間（ms）</label><input type="number" id="sBlinkClose" min="30" max="400" step="5"><label>溶け合わせの濃さ（%）</label><input type="number" id="sBlinkAlpha" min="10" max="90" step="5"></div>
       <div class="row"><button class="b" id="blinkTest">今いるキャラを瞬きさせる</button><button class="b" id="blinkSlow">ゆっくり瞬き（10倍・確認用）</button></div>
+      <h4>画面の向き</h4>
+      <div class="row"><label>縦向きロックのとき</label><select id="sRot"><option value="">回さない（横向きにしてと案内）</option><option value="cw">90°回して表示（カメラを左にして持つ）</option><option value="ccw">90°回して表示（カメラを右にして持つ）</option></select><span class="note">寝ながら使うとき用。iPhoneの縦向きロックをかけたまま、横画面として使えます</span></div>
       <h4>BGM</h4>
       <div class="row"><label>BGM</label><label><input type="checkbox" id="sBgmOn"> 流す（ループ）</label><label>音量（%）</label><input type="number" id="sBgmVol" min="0" max="100" step="5"></div>
       <h4>タップ音</h4>
@@ -248,18 +255,28 @@ pre.box{white-space:pre-wrap;word-break:break-all;background:#1a161d;border:1px 
 <input type="file" class="hidefile" id="fBak" accept="application/json,.json">
 
 <div id="toast"><span id="toastMsg"></span><button class="b p" id="toastBtn">診断をコピー</button><button class="b" id="toastX">×</button></div>
-<div id="rotate">📱↻<br>iPhoneを横向きにしてください<br><span style="font-size:12px;opacity:.6">（画面の縦向きロックを外すと回転します）</span></div>
+</div>
+<div id="rotate">📱↻<br>iPhoneを横向きにしてください<br><span style="font-size:12px;opacity:.6">（画面の縦向きロックを外すと回転します）</span>
+  <div style="margin-top:22px;font-size:14px">縦向きロックのまま横で使う（寝ながら向け）</div>
+  <div style="display:flex;gap:10px;justify-content:center;margin-top:10px;flex-wrap:wrap">
+    <button class="b p" data-rot="cw">📷 カメラを左にして持つ</button><button class="b p" data-rot="ccw">カメラを右にして持つ 📷</button>
+  </div>
+  <span style="font-size:12px;opacity:.6">（あとで「設定」→「画面の向き」で変えられます）</span>
+</div>
 
 <script>
 'use strict';
 /* ====== 版 ====== */
-const VERSION = { no: 9, at: '2026-10-29 01:20:00' };
+const VERSION = { no: 10, at: '2026-10-29 04:20:00' };
 const VERSION_TEXT = `${/\/lab\//.test(location.pathname) ? '試作・' : ''}統合 第${VERSION.no}回（${VERSION.at} 更新・akari.html 第6回がもと）`;
 
 /* ====== 改善ログ（他のAIへの引き継ぎ用）======
    改善のたびに「## 第〜回」を先頭側へ追記し、概要も最新に保つ */
 const DEV_LOG = `# 朱里ノベル 統合の試作（lab/novel.html） 改善ログ
 ※ 本番 akari.html 第6回をもとにした試作。保存先は本番と分けている（localStorage lab.settings / lab.logs、IndexedDB akariLab）。
+## 統合 第10回（2026-10-29 04:20:00）
+- 縦向きロックのまま横で使う（寝ながら向け。iPhoneのWebアプリは画面の向きを固定できないため）：S.rotMode = 'cw'（カメラを左にして持つ）／'ccw'（右）。画面が縦長のとき、画面ぜんぶ（#rotwrap）を90°回して表示し、幅と高さを入れ替えて layout する（applyRot）。fixed の要素は回した #rotwrap の中で並ぶ。縦向きのお知らせ画面にボタン、設定に「画面の向き」。
+
 ## 統合 第9回（2026-10-29 01:20:00）
 - BGM（ループ）：素材に「BGM」（GLOBAL.bgm。音楽ファイルを1つ、端末の中に保存。リポジトリには入れない）。<audio loop> で流し、音量は Web Audio の GainNode（iPhone は audio.volume が効かない）。設定に「流す」（bgmOn）と音量（bgmVol、既定40%）。iPhone は画面に一度さわってから鳴る。画面を離れたら止め、戻ったら再開。手動バックアップの素材に入る。
 
@@ -417,7 +434,7 @@ const AKARI_PROMPT = `あなたは「伊達朱里（だて あかり）」とし
 - 性的な話題には乗らず、真っ赤になって慌てて話を逸らす
 - AIであることには触れず、朱里として自然に会話を続ける`;
 const GDEF = { apiKey:'', endpoint:'https://api.x.ai/v1/chat/completions', model:'grok-4.6', temperature:0.9, turns:30,
-  userName:'あなた', srvUrl:'', srvToken:'', uraFaceAI:true, aiProvider:'grok', geminiKey:'', geminiModel:'gemini-flash-latest', speed:45, auto:false, seOn:true, seVol:80, bgmOn:true, bgmVol:40, room:null, seErrName:'', blinkFade:true, blinkHalfMs:45, blinkCloseMs:90, blinkAlpha:50 };
+  userName:'あなた', srvUrl:'', srvToken:'', uraFaceAI:true, aiProvider:'grok', geminiKey:'', geminiModel:'gemini-flash-latest', speed:45, auto:false, seOn:true, seVol:80, rotMode:'', bgmOn:true, bgmVol:40, room:null, seErrName:'', blinkFade:true, blinkHalfMs:45, blinkCloseMs:90, blinkAlpha:50 };
 let S = Object.assign({}, GDEF);
 try{ Object.assign(S, JSON.parse(lsGet(K.settings)||'{}')); }catch(e){}
 function saveS(){ if(!lsSet(K.settings, JSON.stringify(S))) log('warn','設定を保存できませんでした（プライベートブラウズ等）'); syncLineCfg(true); scheduleNovelSync(); }
@@ -657,8 +674,19 @@ const BACK_POS = [36, 64, 8, 92];          // 後ろの列（前の列のすき�
 const BACK_SCALE = 0.82, BACK_TOP = 2.5;   // 後ろの列：少し小さく・少し下に
 const MAX_MEMBERS = 7;                     // 前3人＋後ろ4人
 let STAGE = [], previewChar = null, spokeAt = 0;
+// 縦向きロックのまま横で使うとき（S.rotMode が cw／ccw で、画面が縦長）は、幅と高さを入れ替えて考え、#rotwrap を回す
+function applyRot(){
+  const iw = innerWidth, ih = innerHeight, on = !!S.rotMode && ih > iw;
+  const b = document.body, r = document.documentElement.style;
+  b.classList.toggle('rotmode', on);
+  if (on){
+    r.setProperty('--RW', ih + 'px'); r.setProperty('--RH', iw + 'px');
+    r.setProperty('--RT', S.rotMode === 'ccw' ? `translateY(${ih}px) rotate(-90deg)` : `translateX(${iw}px) rotate(90deg)`);
+  }
+  return on ? { vw:ih, vh:iw } : { vw:iw, vh:ih };
+}
 function layout(){
-  const vw = innerWidth, vh = innerHeight, sh = Math.min(vh, vw*9/16), sw = sh*16/9, sx = (vw-sw)/2, sy = (vh-sh)/2;
+  const { vw, vh } = applyRot(), sh = Math.min(vh, vw*9/16), sw = sh*16/9, sx = (vw-sw)/2, sy = (vh-sh)/2;
   G = { vw, vh, sh, sw, sx, sy };
   const r = document.documentElement.style;
   r.setProperty('--S', sh/750 + 'px'); r.setProperty('--sx', sx + 'px'); r.setProperty('--sy', sy + 'px');
@@ -674,6 +702,7 @@ function layout(){
   });
 }
 addEventListener('resize', () => layout());
+document.querySelectorAll('[data-rot]').forEach(b => b.onclick = () => { S.rotMode = b.dataset.rot; saveS(); layout(); toast('横画面として表示します。戻すときは〈 →「設定」→「画面の向き」', false, 5000); });
 addEventListener('orientationchange', () => setTimeout(layout, 300));
 function stageMembers(){ if (previewChar){ const c = charById(previewChar); return c ? [c] : []; } return ROOM ? ROOM.members.map(charById).filter(Boolean) : []; }
 async function buildStage(){
@@ -1429,7 +1458,7 @@ $('#clearHist').onclick = async () => {
 /* --- 設定 --- */
 const FIELDS = { sSrv:'srvUrl', sTok:'srvToken', sProv:'aiProvider', sGKey:'geminiKey', sGModel:'geminiModel', sKey:'apiKey', sEnd:'endpoint', sModel:'model', sTemp:'temperature', sTurns:'turns', sUser:'userName', sSpeed:'speed', sSeVol:'seVol', sBgmVol:'bgmVol', sBlinkHalf:'blinkHalfMs', sBlinkClose:'blinkCloseMs', sBlinkAlpha:'blinkAlpha' };
 const NUMS = ['temperature','turns','speed','seVol','bgmVol','blinkHalfMs','blinkCloseMs','blinkAlpha'];
-function fillSettings(){ for (const [id,k] of Object.entries(FIELDS)) $('#'+id).value = S[k]; $('#sSeOn').checked = !!S.seOn; $('#sBgmOn').checked = S.bgmOn !== false; $('#sBlinkFade').checked = !!S.blinkFade; $('#sUraFace').checked = !!S.uraFaceAI; }
+function fillSettings(){ for (const [id,k] of Object.entries(FIELDS)) $('#'+id).value = S[k]; $('#sSeOn').checked = !!S.seOn; $('#sRot').value = S.rotMode || ''; $('#sBgmOn').checked = S.bgmOn !== false; $('#sBlinkFade').checked = !!S.blinkFade; $('#sUraFace').checked = !!S.uraFaceAI; }
 $('#sUraFace').addEventListener('change', e => { S.uraFaceAI = e.target.checked; saveS(); });
 $('#sBlinkFade').addEventListener('change', e => { S.blinkFade = e.target.checked; saveS(); });
 async function blinkNow(slow){
@@ -1443,6 +1472,7 @@ for (const [id,k] of Object.entries(FIELDS)){
   $('#'+id).addEventListener('input', e => { let v = e.target.value; if (NUMS.includes(k)){ v = parseFloat(v); if (isNaN(v)) return; } else v = v.trim(); S[k] = v; saveS(); });
 }
 $('#sSeOn').addEventListener('change', e => { S.seOn = e.target.checked; saveS(); });
+$('#sRot').addEventListener('change', e => { S.rotMode = e.target.value; saveS(); layout(); });
 $('#sBgmOn').addEventListener('change', e => { S.bgmOn = e.target.checked; saveS(); bgmSync(); });
 $('#sBgmVol').addEventListener('input', () => bgmSync());
 $('#getGModels').onclick = async () => {

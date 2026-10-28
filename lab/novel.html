@@ -148,6 +148,7 @@ pre.box{white-space:pre-wrap;word-break:break-all;background:#1a161d;border:1px 
 
 <div id="menu">
   <div id="nav">
+    <button id="toLine" style="background:#06c755;border-color:#5fe39a;color:#fff;font-weight:700;white-space:nowrap">‹ LINE風へ</button>
     <button data-p="pRoom" class="on">トーク</button>
     <button data-p="pChar">キャラ</button>
     <button data-p="pLog">会話ログ</button>
@@ -160,7 +161,7 @@ pre.box{white-space:pre-wrap;word-break:break-all;background:#1a161d;border:1px 
   </div>
   <div id="panels">
     <div class="pn on" id="pRoom"><h3>トーク</h3>
-      <div class="row"><button class="b p" id="roomNew">＋トークを作る</button><span class="note">1〜3人を選んで、個別トーク・グループトークを作れます</span></div>
+      <div class="row"><button class="b p" id="roomNew">＋トークを作る</button><span class="note">最大7人を選んで、個別トーク・グループトークを作れます</span></div>
       <div id="roomEdit"></div>
       <div class="list" id="roomList"></div>
     </div>
@@ -241,13 +242,20 @@ pre.box{white-space:pre-wrap;word-break:break-all;background:#1a161d;border:1px 
 <script>
 'use strict';
 /* ====== 版 ====== */
-const VERSION = { no: 1, at: '2026-10-28 17:22:26' };
+const VERSION = { no: 2, at: '2026-10-28 19:10:00' };
 const VERSION_TEXT = `試作・段階${VERSION.no}（${VERSION.at} 更新・本番 akari.html 第6回がもと）`;
 
 /* ====== 改善ログ（他のAIへの引き継ぎ用）======
    改善のたびに「## 第〜回」を先頭側へ追記し、概要も最新に保つ */
 const DEV_LOG = `# 朱里ノベル 統合の試作（lab/novel.html） 改善ログ
 ※ 本番 akari.html 第6回をもとにした試作。保存先は本番と分けている（localStorage lab.settings / lab.logs、IndexedDB akariLab）。
+## 試作・段階2（2026-10-28 19:10:00）
+- LINE風アプリの試作版 lab/index.html（本番 chat/ のコピー）と1つのアプリに。保存の名前に「lab.」を付けて本番の chat.* には書き込まない。通知（サービスワーカー）は登録しない。
+- サーバーURL・合言葉は lab.chat.cfg を共有（どちらで変えても同じ）。最初だけ本番の chat.cfg から読み写す。
+- LINE風のトーク画面の［立ち絵］→ novel.html?from=line&ura=<キャラ#ura|grp-…#ura>：その裏トークを開く（無ければ自動で作る。つないだキャラがいなければ案内）。表は ?back=<id> でノベル画面を開くだけ（表のノベルは段階3）。
+- メニューの先頭に「‹ LINE風へ」（裏トークならそのトークの裏へ戻る）。
+- トーク作成の説明を「最大7人」に。
+
 ## 試作・段階1
 - LINE風アプリのサーバーとつなぐ設定（URL・合言葉）。キャラごとに「LINE風のキャラ」とつなぐ。
 - 裏トーク：LINE風アプリの裏（キャラ#ura・グループ）と会話を共有。読み込みは GET /sync、送信は POST /send → POST /reply（サーバーは変えていない）。ナレーションは名前欄なし。表情は端末のAIキーで小さく選ぶ（任意・uraFaces に保存）。
@@ -270,7 +278,7 @@ const DEV_LOG = `# 朱里ノベル 統合の試作（lab/novel.html） 改善ロ
   - 枠が空なら、その状態はベースのまま。half が空なら2枚で動く。目の close が無ければ瞬きしない。口の open/half が無ければ口パクしない。
   - 既定の表情は「通常」という名前のもの、無ければ一番上。AIが知らない表情名を返したら既定にする。表情が1つも無ければ「通常」（ベースのみ）。
   - 眉・頬染めの枠はユーザーの希望で無し。ファイル名での自動振り分けもユーザーの希望で廃止（1枚ずつ枠に入れる）。枠には目・口の部分を自動で切り抜いた見本を表示。
-- トーク（ROOMS）：LINEの個チャ／グループのように、メンバー1〜3人（並び順=左→右）ごとの会話。同じメンバーでも複数作れる。会話は完全に別々（記憶を共有しない）。続きから再開。
+- トーク（ROOMS）：LINEの個チャ／グループのように、メンバー最大7人（並び順=左→右）ごとの会話。同じメンバーでも複数作れる。会話は完全に別々（記憶を共有しない）。続きから再開。
   - 立ち位置：1人=50%、2人=30%/70%、3人=22%/50%/78%（＋キャラごとの左右ずれ）。話していない人も暗くしない（ユーザーの希望）。
   - 4〜7人：前の列3人＋後ろの列（36%/64%/8%/92%、大きさ×0.82、2.5%下）。後ろの人が話すと、前の列でいちばん長く黙っている人と入れ替わる（0.35秒で移動）。
   - 口パクは話している人だけ。瞬きは全員が別々のタイミング。
@@ -367,7 +375,17 @@ const GDEF = { apiKey:'', endpoint:'https://api.x.ai/v1/chat/completions', model
   userName:'あなた', srvUrl:'', srvToken:'', uraFaceAI:true, aiProvider:'grok', geminiKey:'', geminiModel:'gemini-flash-latest', speed:45, auto:false, seOn:true, seVol:80, room:null, seErrName:'', blinkFade:true, blinkHalfMs:45, blinkCloseMs:90, blinkAlpha:50 };
 let S = Object.assign({}, GDEF);
 try{ Object.assign(S, JSON.parse(lsGet('lab.settings')||'{}')); }catch(e){}
-function saveS(){ if(!lsSet('lab.settings', JSON.stringify(S))) log('warn','設定を保存できませんでした（プライベートブラウズ等）'); }
+function saveS(){ if(!lsSet('lab.settings', JSON.stringify(S))) log('warn','設定を保存できませんでした（プライベートブラウズ等）'); syncLineCfg(true); }
+/* LINE風アプリ（lab/index.html）とサーバーURL・合言葉を共有：lab.chat.cfg（{url, token}） */
+function syncLineCfg(write){
+  let c = null; try{ c = JSON.parse(lsGet('lab.chat.cfg') || 'null'); }catch(e){}
+  if (write){ if (S.srvUrl && (!c || c.url !== S.srvUrl || (c.token || '') !== (S.srvToken || ''))) lsSet('lab.chat.cfg', JSON.stringify(Object.assign({}, c || {}, { url:S.srvUrl, token:S.srvToken || '' }))); return; }
+  if (c && c.url){ S.srvUrl = c.url; S.srvToken = c.token || ''; }
+  else if (S.srvUrl) syncLineCfg(true);
+}
+syncLineCfg(false);
+const QS = new URLSearchParams(location.search);
+const FROM_LINE = QS.get('from') === 'line';
 
 /* ====== IndexedDB ====== */
 const idb = {
@@ -955,6 +973,27 @@ async function sendUra(text){
   }
 }
 
+/* ====== LINE風のトーク画面から来たとき：その裏トークを探す（無ければ作る） ====== */
+async function uraRoomFor(target, lineP){
+  const hit = ROOMS.find(r => r.kind === 'ura' && r.target === target);
+  if (hit) return hit.id;
+  if (lineP) await lineP;
+  if (!LINE.ok){ toast('LINE風アプリのサーバーにつながらないので、裏トークを開けませんでした（設定のURL・合言葉を確認）', true, 7000); return null; }
+  const ms = uraMembers(target);
+  const miss = ms.filter(x => !x.c).map(x => lineName(LINE.chars.find(c => c.id === x.lid)));
+  if (!ms.length || miss.length){
+    toast(`立ち絵のキャラがまだつながっていません。〈 →「キャラ」で ${miss.join('、') || '相手'} の「LINE風のキャラ」を選んでから、もう一度［立ち絵］を押してください`, true, 9000);
+    return null;
+  }
+  const base = target.replace(/#ura$/,'');
+  const g = base.startsWith('grp-') ? LINE.groups.find(x => x.id === base) : null;
+  const name = '裏：' + (g ? g.name : lineName(LINE.chars.find(c => c.id === base)));
+  const r = { id:uid(), name, members:ms.map(x => x.c.id).slice(0, MAX_MEMBERS), kind:'ura', target, updated:Date.now(), last:null };
+  ROOMS.push(r); await saveRooms();
+  log('info', `裏トークを自動で作りました：${name}`);
+  return r.id;
+}
+
 /* ====== トークを開く ====== */
 async function openRoom(id){
   previewChar = null;
@@ -1008,6 +1047,12 @@ function openMenu(p){ $('#menu').classList.add('show'); showPanel(p || curPanel)
 let menuDirty = false;
 $('#mClose').onclick = async () => { $('#menu').classList.remove('show'); if (menuDirty){ menuDirty = false; await openRoom(ROOM && ROOM.id); } else layout(); };
 document.querySelectorAll('#nav button[data-p]').forEach(b => b.onclick = () => showPanel(b.dataset.p));
+$('#toLine').onclick = () => {   // 試作：LINE風アプリ（lab/index.html）へ。裏トークならその相手の裏を開く
+  let q = '';
+  if (ROOM && ROOM.kind === 'ura' && ROOM.target) q = '?chat=' + encodeURIComponent(ROOM.target.replace(/#ura$/,'')) + '&w=ura';
+  else if (QS.get('back')) q = '?chat=' + encodeURIComponent(QS.get('back'));
+  location.href = 'index.html' + q;
+};
 
 /* --- トーク --- */
 function fmtTime(t){ if (!t) return ''; const d = new Date(t), n = new Date();
@@ -1409,9 +1454,13 @@ let envBad = false, persistState = '未確認';
   }
   for (const id of allRecIds()) await loadRec(id);
   try{ uraFaceCache = (await idb.get('uraFaces')) || {}; }catch(e){}
-  if (S.srvUrl) loadLine(false).catch(e => log('warn', e.message));
+  const wantUra = QS.get('ura');
+  if (QS.toString()) history.replaceState(null, '', location.pathname);
+  let lineP = S.srvUrl ? loadLine(false).catch(e => { log('warn', e.message); }) : null;
   await applyGlobal();
-  await openRoom(S.room && ROOMS.some(r => r.id === S.room) ? S.room : (ROOMS[0] && ROOMS[0].id));
+  let startId = S.room && ROOMS.some(r => r.id === S.room) ? S.room : (ROOMS[0] && ROOMS[0].id);
+  if (wantUra){ const id = await uraRoomFor(wantUra, lineP); if (id) startId = id; }
+  await openRoom(startId);
   const empty = !CHARS.some(c => c.base) && !GLOBAL.bg;
   if (isStandalone && empty) setTimeout(() => toast('ホーム画面のアプリは、Safariとは保存場所が別です。Safariで「バックアップ」→書き出し、ここで「バックアップから復元」すると引っ越せます', false, 14000), 900);
 })();

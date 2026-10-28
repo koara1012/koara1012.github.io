@@ -9,6 +9,8 @@
 - シークレット（APP_TOKEN・GEMINI_API_KEY・XAI_API_KEY・BARK_DEVICE_KEY・BARK_ENC_KEY）は Cloudflare にだけ置きます。GitHub には絶対に書きません。
 
 ## 伊達朱里ノベル風チャット（`akari.html`）
+- まず `AKARI_HANDOVER.md`（引き継ぎメモ）を読んでください。
+- **機能を変えたら、同じコミットで `AKARI_HANDOVER.md` も更新してください**（先頭の「最終更新」、§10 の更新履歴、変わった節）。ユーザーからの依頼です。
 - 1ファイルだけのアプリ。公開URLは https://koara1012.github.io/akari.html 。`index.html`（セリフ起こし）・`voice.html` とは別アプリなので上書きしないこと。
 - 改善のたびに、ファイル内の `VERSION`（第〜回・日時 時分秒）を上げ、`DEV_LOG`（他のAIへの引き継ぎ用の改善ログ）の先頭に「第〜回」の変更点を追記します。
 - 立ち絵・背景・表情パーツ・フォント・タップ音などのゲーム素材は、利用者がiPhoneから読み込んで端末内に保存する方式です。素材ファイルをリポジトリに入れないでください。

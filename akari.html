@@ -23,7 +23,8 @@ html,body{margin:0;height:100%;background:#000;color:#fff;overflow:hidden;
 #app{position:fixed;inset:0;overflow:hidden}
 #bg{position:absolute;inset:0;background:linear-gradient(#1b2433,#2c3a3a 60%,#18221d);background-size:cover;background-position:center}
 #charas{position:absolute;inset:0;pointer-events:none;z-index:1}
-.chara{position:absolute}
+.chara{position:absolute;transition:left .35s ease,top .35s ease,width .35s ease,height .35s ease}
+.chara.noanim{transition:none}
 .chara img{position:absolute;left:0;top:0;width:100%;height:100%;display:none}
 #win{position:absolute;z-index:2;left:0;right:0;top:calc(var(--sy) + var(--S)*520);height:calc(var(--S)*230 + var(--sy));background:var(--win)}
 #nameplate{position:absolute;bottom:100%;margin-bottom:calc(var(--S)*8);
@@ -225,7 +226,7 @@ pre.box{white-space:pre-wrap;word-break:break-all;background:#1a161d;border:1px 
 <script>
 'use strict';
 /* ====== 版 ====== */
-const VERSION = { no: 4, at: '2026-10-28 15:55:27' };
+const VERSION = { no: 5, at: '2026-10-28 16:34:58' };
 const VERSION_TEXT = `第${VERSION.no}回（${VERSION.at} 更新）`;
 
 /* ====== 改善ログ（他のAIへの引き継ぎ用）======
@@ -250,6 +251,7 @@ const DEV_LOG = `# 伊達朱里ノベル風チャット 改善ログ
   - 眉・頬染めの枠はユーザーの希望で無し。ファイル名での自動振り分けもユーザーの希望で廃止（1枚ずつ枠に入れる）。枠には目・口の部分を自動で切り抜いた見本を表示。
 - トーク（ROOMS）：LINEの個チャ／グループのように、メンバー1〜3人（並び順=左→右）ごとの会話。同じメンバーでも複数作れる。会話は完全に別々（記憶を共有しない）。続きから再開。
   - 立ち位置：1人=50%、2人=30%/70%、3人=22%/50%/78%（＋キャラごとの左右ずれ）。話していない人も暗くしない（ユーザーの希望）。
+  - 4〜7人：前の列3人＋後ろの列（36%/64%/8%/92%、大きさ×0.82、2.5%下）。後ろの人が話すと、前の列でいちばん長く黙っている人と入れ替わる（0.35秒で移動）。
   - 口パクは話している人だけ。瞬きは全員が別々のタイミング。
 - AIへの返答形式：1人 {"lines":[{"face","text"}]}（1〜4行）／複数 {"lines":[{"who","face","text"}]}（1〜6行）。who は名前で照合（空白無視・部分一致）。
 - 瞬き：2〜6秒ランダム、half→close→half、たまに2回。半目が無い表情は「疑似半目」（開きの上に閉じを不透明度blinkAlpha%で重ねる＝st.es 'fade'、レイヤー eye2）。設定 blinkFade / blinkHalfMs(45) / blinkCloseMs(90) / blinkAlpha(50)。ユーザーは全キャラ半目の素材を持っていない。口パク：文字送り中に約100msで切り替え、句読点で閉じる。
@@ -260,6 +262,10 @@ const DEV_LOG = `# 伊達朱里ノベル風チャット 改善ログ
   第1・2回の assets / history は起動時に自動でキャラ「伊達　朱里」とその個別トークへ引っ越し（normal→通常）。
 - 起動時に navigator.storage.persist() を要求。ホーム画面アプリはSafariと保存場所が別なので、空なら案内を出す。
 - 困ったとき：エラー時にトースト→ワンタップで診断情報をコピー。バックアップ：全部（画像・キー任意）／トーク1つ。第1・2回の形式も復元可。
+
+## 第5回（2026-10-28 16:34:58）
+- お試し：4人以上のトーク（最大7人）。前の列3人＋後ろの列に少し小さく並べ、後ろの人が話すと前の列の人と入れ替わる（ユーザーが選んだ案C）。
+- トークの作成画面を「前の列（3枠）」「後ろの列（4枠）」に。
 
 ## 第4回（2026-10-28 15:55:27）
 - お試し：疑似半目を追加（半目の素材が無い表情でも、開き→溶け合わせ→閉じ→溶け合わせ→開き でなめらかに瞬き）。
@@ -512,18 +518,24 @@ function playSE(){
 /* ====== 画面配置 ====== */
 let G = { vw:0, vh:0, sh:0, sw:0, sx:0, sy:0 };
 const POS = { 1:[50], 2:[30,70], 3:[22,50,78] };
-let STAGE = [], previewChar = null;
+const BACK_POS = [36, 64, 8, 92];          // 後ろの列（前の列のすき間→両端の順）
+const BACK_SCALE = 0.82, BACK_TOP = 2.5;   // 後ろの列：少し小さく・少し下に
+const MAX_MEMBERS = 7;                     // 前3人＋後ろ4人
+let STAGE = [], previewChar = null, spokeAt = 0;
 function layout(){
   const vw = innerWidth, vh = innerHeight, sh = Math.min(vh, vw*9/16), sw = sh*16/9, sx = (vw-sw)/2, sy = (vh-sh)/2;
   G = { vw, vh, sh, sw, sx, sy };
   const r = document.documentElement.style;
   r.setProperty('--S', sh/750 + 'px'); r.setProperty('--sx', sx + 'px'); r.setProperty('--sy', sy + 'px');
   r.setProperty('--sw', sw + 'px'); r.setProperty('--sh', sh + 'px');
-  const n = STAGE.length;
-  STAGE.forEach((st, i) => {
-    const c = st.c, d = c.base && DIMS.get(c.base), ratio = d ? d[0]/d[1] : 923/2104;
-    const h = sh * (+c.scale || 146.5)/100, w = h * ratio, cx = sx + sw * ((POS[n] || POS[3])[i] + (+c.xoff || 0))/100;
-    Object.assign(st.el.style, { height:h + 'px', width:w + 'px', left:(cx - w/2) + 'px', top:(sy + sh*(+c.top || 0)/100) + 'px', zIndex: (n === 3 && i === 1) ? 5 : i + 1 });
+  const nf = STAGE.filter(st => st.row === 'f').length;
+  STAGE.forEach(st => {
+    const c = st.c, d = c.base && DIMS.get(c.base), ratio = d ? d[0]/d[1] : 923/2104, back = st.row === 'b';
+    const h = sh * (+c.scale || 146.5)/100 * (back ? BACK_SCALE : 1), w = h * ratio;
+    const pos = back ? BACK_POS[st.slot] : (POS[nf] || POS[3])[st.slot];
+    const cx = sx + sw * (pos + (+c.xoff || 0))/100, top = sy + sh*((+c.top || 0) + (back ? BACK_TOP : 0))/100;
+    Object.assign(st.el.style, { height:h + 'px', width:w + 'px', left:(cx - w/2) + 'px', top:top + 'px',
+      zIndex: back ? 1 + st.slot : (nf === 3 && st.slot === 1) ? 15 : 10 + st.slot });
   });
 }
 addEventListener('resize', () => layout());
@@ -537,10 +549,12 @@ async function buildStage(){
   STAGE = ms.map(c => {
     const el = document.createElement('div'); el.className = 'chara';
     const mk = () => { const i = document.createElement('img'); i.alt = ''; el.appendChild(i); return i; };
-    const st = { c, el, base:mk(), eye:mk(), eye2:mk(), mouth:mk(), face:defaultFace(c), es:'open', ms:'close', dead:false };
-    box.appendChild(el); blinkLoop(st); return st;
+    const st = { c, el, base:mk(), eye:mk(), eye2:mk(), mouth:mk(), face:defaultFace(c), es:'open', ms:'close', dead:false, said:0 };
+    el.classList.add('noanim'); box.appendChild(el); blinkLoop(st); return st;
   });
+  STAGE.forEach((st, i) => { st.row = i < 3 ? 'f' : 'b'; st.slot = i < 3 ? i : i - 3; });
   layout(); STAGE.forEach(renderChar);
+  requestAnimationFrame(() => requestAnimationFrame(() => STAGE.forEach(st => st.el.classList.remove('noanim'))));
   const bad = ms.filter(c => c.base && !DIMS.get(c.base)).map(c => c.name);
   if (bad.length) log('error', `立ち絵を表示できませんでした：${bad.join('、')}` + envHint());
 }
@@ -610,8 +624,16 @@ function showHint(kind){
 }
 function stageOf(who){ return STAGE.find(s => s.c.id === who) || null; }
 function showName(who){ const c = charById(who) || (STAGE[0] && STAGE[0].c); $('#nameTxt').textContent = c ? c.name : ''; $('#nameplate').classList.toggle('hide', !c); }
+// 後ろの列の人が話すときは、前の列でいちばん長く黙っている人と入れ替わる
+function bringFront(st){
+  if (!st) return; st.said = ++spokeAt;
+  if (st.row !== 'b') return;
+  const out = STAGE.filter(x => x.row === 'f').sort((a,b) => a.said - b.said)[0]; if (!out) return;
+  [st.row, st.slot, out.row, out.slot] = [out.row, out.slot, st.row, st.slot];
+  layout();
+}
 async function typePage(p){
-  const tok = ++typeTok; const st = stageOf(p.who) || STAGE[0]; setFace(st, p.face); showName(p.who);
+  const tok = ++typeTok; const st = stageOf(p.who) || STAGE[0]; bringFront(st); setFace(st, p.face); showName(p.who);
   speaker = st; textEl.textContent = ''; showHint(null); skipType = false; const chars = [...p.text];
   for (let i = 0; i < chars.length; i++){
     if (tok !== typeTok) return false;
@@ -634,7 +656,7 @@ async function playPage(){
   } else { state = 'idle'; showHint('end'); }
 }
 function showLines(lines){ pages = paginate(lines); pageIdx = 0; if (!pages.length) return; return playPage(); }
-function showStatic(p){ typeTok++; speaking = false; clearTimeout(autoTimer); const st = stageOf(p.who) || STAGE[0]; setFace(st, p.face); showName(p.who); textEl.textContent = p.text; state = 'idle'; showHint('end'); }
+function showStatic(p){ typeTok++; speaking = false; clearTimeout(autoTimer); const st = stageOf(p.who) || STAGE[0]; bringFront(st); setFace(st, p.face); showName(p.who); textEl.textContent = p.text; state = 'idle'; showHint('end'); }
 function jumpEnd(){ if (!pages.length || state === 'thinking' || state === 'error') return; pageIdx = pages.length - 1; showStatic(pages[pageIdx]); }
 function advance(src){   // src: 'tap'（画面タップ）/'skip'（▷|）/'auto'（オート）
   clearTimeout(autoTimer);
@@ -685,7 +707,7 @@ ${faceListText(c)}`).join('\n\n')}
 ${rule}
 {"lines":[{"who":"話す人の名前","face":"表情名","text":"台詞"}]}
 - who は ${names.map(n => `「${n}」`).join('、')} のどれかをそのまま書く
-- lines は1〜6個。1つの text は60文字以内を目安にし、話す人や表情が変わるところで分ける
+- lines は1〜${ms.length > 3 ? 8 : 6}個。1つの text は60文字以内を目安にし、話す人や表情が変わるところで分ける
 - 全員が毎回話す必要はない。流れの中で自然な人が話す。キャラ同士で話してもよい
 - 相手（ユーザー）の台詞や行動は書かない。text は口に出す台詞だけで、（）のト書き・地の文・話者名は書かない
 - face は、その人の「使える表情」の中から必ず1つ選ぶ`;
@@ -866,12 +888,13 @@ function roomForm(id){
   const m = r ? r.members : [];
   $('#roomEdit').innerHTML = `<div class="card"><b>${r ? 'トークを編集' : '新しいトーク'}</b>
     <div class="row"><label>トーク名</label><input type="text" id="rfName" value="${esc(r ? r.name : '')}" placeholder="空ならメンバー名"></div>
-    <div class="row"><label>メンバー（左→右）</label><select id="rf0">${opt(m[0], false)}</select><select id="rf1">${opt(m[1], true)}</select><select id="rf2">${opt(m[2], true)}</select></div>
-    <p class="note">1人なら中央、2人なら左右、3人なら左・中央・右に並びます。同じメンバーで複数のトークを作れます。</p>
+    <div class="row"><label>前の列（左→右）</label>${[0,1,2].map(i => `<select class="rfm">${opt(m[i], i > 0)}</select>`).join('')}</div>
+    <div class="row"><label>後ろの列（4人目〜）</label>${[3,4,5,6].map(i => `<select class="rfm">${opt(m[i], true)}</select>`).join('')}</div>
+    <p class="note">1人なら中央、2人なら左右、3人なら左・中央・右。4人目からは後ろの列に少し小さく並び、後ろの人が話すと、前の列でいちばん長く黙っている人と入れ替わります（最大${MAX_MEMBERS}人）。同じメンバーで複数のトークを作れます。</p>
     <div class="row"><button class="b p" id="rfOk">${r ? '保存' : '作る'}</button><button class="b" id="rfNo">やめる</button></div></div>`;
   $('#rfNo').onclick = () => { $('#roomEdit').innerHTML = ''; };
   $('#rfOk').onclick = async () => {
-    const mem = [$('#rf0').value, $('#rf1').value, $('#rf2').value].filter(Boolean);
+    const mem = [...document.querySelectorAll('#roomEdit .rfm')].map(x => x.value).filter(Boolean);
     if (new Set(mem).size !== mem.length){ toast('同じキャラを2回選んでいます', true, 4000); return; }
     const name = $('#rfName').value.trim() || mem.map(x => charById(x).name.replace(/[\s　]/g,'')).join('・');
     if (r){ r.name = name; r.members = mem; if (ROOM === r) menuDirty = true; }

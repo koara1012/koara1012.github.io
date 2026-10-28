@@ -14,7 +14,7 @@
 //    ・Cron トリガー  * * * * *  （毎分。実際に動くのは13分おき）
 // =====================================================================
 
-const VERSION = '第38版（2026-10-28 19:37:00 更新・裏の返事に立ち絵の表情）';
+const VERSION = '第39版（2026-10-28 21:00:00 更新・会う約束（試作））';
 const DEFAULT_MODEL = 'gemini-flash-latest';
 const DEFAULT_GROK_MODEL = 'grok-4.7';                 // X（Twitter）の Grok と同じ最新世代
 const FALLBACK_GROK_MODEL = 'grok-4-fast-non-reasoning'; // 上が使えないときの予備
@@ -71,6 +71,7 @@ export default {
     ctx.waitUntil(runDueReplies(env).catch((e) => log(env, 'あとで返す返事: ' + e.message))); // 予約した返事は毎分確認（軽い）
     ctx.waitUntil(runDueProactive(env).catch((e) => log(env, '自動送信: ' + e.message))); // 時間をずらした話しかけ
     ctx.waitUntil(runDuePostscripts(env).catch((e) => log(env, '追伸: ' + e.message))); // 追伸・不在着信のあとの言葉
+    ctx.waitUntil(runAppointments(env).catch((e) => log(env, '会う約束: ' + e.message))); // 会う約束の通知（試作・使うときだけ）
     ctx.waitUntil(runDisasters(env, minute).catch((e) => log(env, '災害の確認: ' + e.message))); // 地震・速報は毎分、ほかは間をあけて確認
     // 見回りは毎分。キャラごとに13分の中で担当の分をずらして判定する（何人も同じ瞬間に動かないように）
     ctx.waitUntil(tick(env, minute).catch((e) => log(env, 'tick全体: ' + e.message)));
@@ -188,6 +189,7 @@ async function log(env, msg) {
 // 表のTLの通知（4項目を個別にオン／オフ）。裏のTLとトークは通知しない
 const NOTIFY_DEFAULT = { tlComment: true, tlLike: true, tlCharPost: true, tlReply: true };
 const DEFAULT_SETTINGS = {
+  meetFeature: false, meetOn: true, meetOffChars: [], // 会う約束（試作・既定はオフ）
   quietEnabled: true, quietStart: 1, quietEnd: 7, omoteProvider: 'gemini', uraProvider: 'grok', grokModel: '',
   meName: '', meNameUra: '', meIconVer: 0, meUraIconVer: 0, // あなたのTLでの名前（表・裏）とアイコンの版
   newsEnabled: true, // 表で話題を切り替えるとき、最近のニュースも話題にする
@@ -402,7 +404,10 @@ async function route(key, url, body, env, ctx) {
         const { results: ss } = await env.DB.prepare("SELECT char_id, json_extract(data,'$.statusMsg') AS m, json_extract(data,'$.statusEmoji') AS e FROM char_state").all();
         for (const r of ss) if (r.m || r.e) status[r.char_id] = { msg: r.m || '', emoji: r.e || '' };
       }
-      return json({ chars, groups: await loadGroups(env), aiAlerts: await aiAlerts(env), messages, more, reads, charRead, reactions, status, cost: await costSummary(env).catch(() => null), outage: dis && dis.outage ? dis.outage : null, retracted: rt.map((r) => r.id), settings: await getSettings(env), now: Date.now(), version: VERSION });
+      const { results: ap } = await env.DB.prepare("SELECT k,v FROM kv WHERE k >= 'appt:' AND k < 'appt;'").all();
+      const appts = {};
+      for (const r of ap) { try { appts[r.k.slice(5)] = JSON.parse(r.v); } catch (_) {} }
+      return json({ appts, chars, groups: await loadGroups(env), aiAlerts: await aiAlerts(env), messages, more, reads, charRead, reactions, status, cost: await costSummary(env).catch(() => null), outage: dis && dis.outage ? dis.outage : null, retracted: rt.map((r) => r.id), settings: await getSettings(env), now: Date.now(), version: VERSION });
     }
 
     // ---- 立ち絵の表情（ノベル画面から。裏の返事でAIが選ぶ候補。画像は受け取らない）
@@ -410,9 +415,48 @@ async function route(key, url, body, env, ctx) {
       const id = String(body.charId || '');
       if (!(await loadChars(env)).some((c) => c.id === id)) throw new HttpError(404, 'キャラが見つかりません');
       const faces = normFaces(body.faces);
-      if (faces.length > 1) await kvSet(env, 'faces:' + id, faces);
-      else await env.DB.prepare('DELETE FROM kv WHERE k=?').bind('faces:' + id).run(); // 1つ以下なら選ぶ必要がないので、今までどおり
+      const fk = faceKey(id, body.kind);
+      if (faces.length > 1) await kvSet(env, fk, faces);
+      else await env.DB.prepare('DELETE FROM kv WHERE k=?').bind(fk).run(); // 1つ以下なら選ぶ必要がないので、今までどおり
       return json({ ok: true, faces: faces.length > 1 ? faces : [] });
+    }
+
+    // ---- 表：ユーザーと会う約束（ノベル画面で会う場面）
+    case 'GET /meet': {
+      const c = await omoteChar(env, url.searchParams.get('charId'));
+      const st = await getSettings(env);
+      return json({ appt: await kvGet(env, 'appt:' + c.id, null), log: await kvGet(env, 'meetlog:' + c.id, []), on: meetOn(st, c), feature: !!st.meetFeature, name: c.name });
+    }
+    case 'POST /meet/start': { // 会いに行く（ノベル画面を開いたとき）。まだ何も話していなければ、会えた場面から始める
+      const c = await omoteChar(env, body.charId);
+      const now = Date.now();
+      let a = await kvGet(env, 'appt:' + c.id, null);
+      if (!a || ['done', 'missed'].includes(a.status)) a = { date: '', time: '', place: '', at: 0, created: now }; // 約束なしで会いに行くこともできる
+      if (a.status !== 'meeting') { a.status = 'meeting'; a.metAt = now; await kvSet(env, 'appt:' + c.id, a); }
+      let lines = [];
+      if (!(await kvGet(env, 'meetlog:' + c.id, [])).length) lines = await meetReply(env, c, true);
+      return json({ appt: a, lines, log: await kvGet(env, 'meetlog:' + c.id, []) });
+    }
+    case 'POST /meet/say': { // 会っている場面で話す（text が空なら、返事だけもう一度）
+      const c = await omoteChar(env, body.charId);
+      const text = String(body.text || '').trim().slice(0, 2000);
+      if (text) { const lg = await kvGet(env, 'meetlog:' + c.id, []); lg.push({ who: 'me', text }); await kvSet(env, 'meetlog:' + c.id, lg.slice(-MEET_LOG_MAX)); }
+      return json({ lines: await meetReply(env, c, false) });
+    }
+    case 'POST /meet/end': { // 会うのを終える：会った内容をまとめて、表の記憶へ
+      const c = await omoteChar(env, body.charId);
+      return json({ appt: await meetEnd(env, c, Date.now()) });
+    }
+    case 'POST /appt': { // トーク画面の帯から：取り消す・日時を決め直す
+      const c = await omoteChar(env, body.charId);
+      const a = await kvGet(env, 'appt:' + c.id, null);
+      if (body.action === 'cancel') {
+        await env.DB.prepare('DELETE FROM kv WHERE k=?').bind('appt:' + c.id).run();
+        if (a && a.status === 'meeting') await env.DB.prepare('DELETE FROM kv WHERE k=?').bind('meetlog:' + c.id).run();
+        return json({ appt: null });
+      }
+      if (body.action === 'replan' && a && ['set', 'postponed', 'missed'].includes(a.status)) { a.status = 'replan'; a.n1 = a.n2 = false; await kvSet(env, 'appt:' + c.id, a); }
+      return json({ appt: a });
     }
 
     // ---- 裏のグループ
@@ -614,7 +658,7 @@ async function route(key, url, body, env, ctx) {
       await noteUserDelete(env);
       await env.DB.batch([
         env.DB.prepare('DELETE FROM chars WHERE id=?').bind(id),
-        env.DB.prepare('DELETE FROM kv WHERE k IN (?,?,?,?,?,?)').bind('reply:' + id, 'rhythm:' + id, 'jealous:' + id, 'proj:' + id, 'ps:' + id, 'faces:' + id),
+        env.DB.prepare('DELETE FROM kv WHERE k IN (?,?,?,?,?,?,?,?,?)').bind('reply:' + id, 'rhythm:' + id, 'jealous:' + id, 'proj:' + id, 'ps:' + id, 'faces:' + id, 'facesO:' + id, 'appt:' + id, 'meetlog:' + id),
         env.DB.prepare('DELETE FROM messages WHERE char_id=? OR char_id=?').bind(id, id + URA),
         env.DB.prepare('DELETE FROM reads WHERE char_id=? OR char_id=?').bind(id, id + URA),
         env.DB.prepare('DELETE FROM ura_icons WHERE char_id=?').bind(id),
@@ -853,6 +897,17 @@ async function route(key, url, body, env, ctx) {
       if ('birthday' in s) v.birthday = /^\d{2}-\d{2}$/.test(String(s.birthday)) ? String(s.birthday) : '';
       if (s.notify && typeof s.notify === 'object') {
         for (const k of Object.keys(NOTIFY_DEFAULT)) if (k in s.notify) v.notify[k] = !!s.notify[k];
+      }
+      // 会う約束（試作）：使うか・会う約束モード（全員／キャラごと）。オンに戻した子に延期中の約束があれば、決め直しを持ちかける
+      const wasOn = (id) => v.meetFeature && v.meetOn !== false && !(v.meetOffChars || []).includes(id);
+      const before = (await loadChars(env)).filter((c) => wasOn(c.id)).map((c) => c.id);
+      if ('meetFeature' in s) v.meetFeature = !!s.meetFeature;
+      if ('meetOn' in s) v.meetOn = !!s.meetOn;
+      if (Array.isArray(s.meetOffChars)) v.meetOffChars = [...new Set(s.meetOffChars.map(String))].slice(0, 200);
+      for (const c of await loadChars(env)) {
+        if (before.includes(c.id) || !wasOn(c.id)) continue;
+        const a = await kvGet(env, 'appt:' + c.id, null);
+        if (a && a.status === 'postponed') { a.status = 'replan'; await kvSet(env, 'appt:' + c.id, a); }
       }
       await kvSet(env, 'settings', v);
       return json({ settings: v });
@@ -1309,8 +1364,9 @@ function normFaces(a) {
   }
   return out;
 }
-async function facesOf(env, id) {
-  const f = await kvGet(env, 'faces:' + id, null).catch(() => null);
+const faceKey = (id, kind) => (kind === 'omote' ? 'facesO:' : 'faces:') + id; // 裏用・表（会う場面）用
+async function facesOf(env, id, kind = 'ura') {
+  const f = await kvGet(env, faceKey(id, kind), null).catch(() => null);
   return Array.isArray(f) && f.length > 1 ? f : null;
 }
 const faceList = (faces) => faces.map((f) => `${f.name}${f.desc ? '（' + f.desc + '）' : ''}`).join('、');
@@ -1634,7 +1690,7 @@ async function generateAndStore(env, c, d, hist, lastRead, world = 'omote') {
       const dis = await kvGet(env, 'dis:state', null).catch(() => null);
       if (dis && dis.outage && dis.outage.on) c = { ...c, maxSplit: Math.min(c.maxSplit, 2) };
     }
-    const lifeInfo = await lifeContext(env, c, st, now).catch(() => '');
+    const lifeInfo = (await lifeContext(env, c, st, now).catch(() => '')) + (await apptContext(env, c, st, now).catch(() => ''));
     // ユーザーが送ったばかりの写真は、AIに見せる
     const lastCharIdx = hist.map((m) => m.sender).lastIndexOf('char');
     const newPhotos = hist.slice(lastCharIdx + 1).filter((m) => m.sender === 'me' && m.image).slice(-2);
@@ -1658,11 +1714,13 @@ async function generateAndStore(env, c, d, hist, lastRead, world = 'omote') {
       retract: st.lifeEnabled && !special && Math.random() < 0.05,
       quote: st.lifeEnabled && !special && d.mode === 'reply' ? quoteCandidates(hist) : null,
       ps: st.lifeEnabled && !special && d.mode !== 'call' && Math.random() < 0.12,
+      // 会う約束：ユーザーが話した直後の返事で、約束が決まった・変わった・取り消されたかも答えてもらう（使うとき・モードがオンのときだけ）
+      meet: meetOn(st, c) && !special && d.mode !== 'call' && hist.length && hist[hist.length - 1].sender === 'me' ? { cur: await kvGet(env, 'appt:' + c.id, null) } : null,
     };
     const wb = await worldBlock(env, c.prompt + '\n' + hist.slice(-20).map((m) => m.text).join('\n'));
     const system = wb + buildSystem(c, special ? { ...d } : d, hist, now, tlInfo, lifeInfo);
     const contents = buildContents(hist, 'omote', images);
-    if (opt.news || opt.photo || opt.edit || opt.typo || opt.retract || opt.react || opt.quote || opt.ps || special) {
+    if (opt.news || opt.photo || opt.edit || opt.typo || opt.retract || opt.react || opt.quote || opt.ps || opt.meet || special) {
       rich = await callOmoteRich(env, { ...c, maxSplit: special ? 2 : c.maxSplit }, d, system, contents, opt);
       texts = rich.texts;
       rich.srcImage = newPhotos.length ? images[newPhotos[newPhotos.length - 1].image] : null;
@@ -1713,6 +1771,8 @@ async function generateAndStore(env, c, d, hist, lastRead, world = 'omote') {
   const res = await env.DB.batch(items.map((x, i) =>
     env.DB.prepare('INSERT INTO messages (char_id,sender,text,at,image,alt,reply_to,face) VALUES (?,?,?,?,?,?,?,?)').bind(key, x.sender, x.text, t0 + i, x.image || null, x.alt || null, x.replyTo || null, x.face || null)));
   const out = items.map((x, i) => ({ id: res[i].meta.last_row_id, charId: key, sender: x.sender, text: x.text, at: t0 + i, ...(x.image ? { image: x.image, alt: x.alt } : {}), ...(x.replyTo ? { replyTo: x.replyTo } : {}), ...(x.face ? { face: x.face } : {}) }));
+  // 会う約束：決まった・変わった・取り消された
+  if (rich && rich.meet) await applyMeet(env, c, rich.meet, now).catch((e) => log(env, '会う約束: ' + e.message));
   // 追伸：数分後に、思い出したように一言
   if (rich && rich.postscript && !ura) await kvSet(env, 'ps:' + key, { texts: [rich.postscript], due: Date.now() + (2 + Math.random() * 5) * MIN, after: out[out.length - 1].id });
   // 送信取り消し（数分後に取り消す）
@@ -1814,6 +1874,169 @@ async function groupReply(env, g, hist, key) {
   const t0 = Date.now();
   const res = await env.DB.batch(out.map((x, i) => env.DB.prepare('INSERT INTO messages (char_id,sender,text,at,speaker,face) VALUES (?,?,?,?,?,?)').bind(key, x.sender, x.text, t0 + i, x.speaker || null, x.face || null)));
   return out.map((x, i) => ({ id: res[i].meta.last_row_id, charId: key, sender: x.sender, text: x.text, at: t0 + i, ...(x.speaker ? { speaker: x.speaker } : {}), ...(x.face ? { face: x.face } : {}) }));
+}
+
+// ================================================================ 表：ユーザーと会う約束（ノベル画面で会う場面）・第39版・試作
+// settings：meetFeature（使うか。既定オフ）、meetOn（会う約束モード・全員）、meetOffChars（モードをオフにしたキャラ）
+// kv appt:<キャラid> = { date, time, place, at, status, n1, n2, created, metAt, doneAt, summary }
+//   status：set（約束あり）／postponed（モードがオフのまま時刻を過ぎた＝日時未定）／replan（決め直しを持ちかける）
+//           meeting（会っている）／done（会った）／missed（通知が届いたのに行かなかった）
+// kv meetlog:<キャラid> = [{ who:'me'|'char'|'narr', text, face }]（会っている場面の会話。終えたら消す）
+const MEET_SOON = 20 * 60e3, MEET_MISS = 2 * 3600e3, MEET_LOG_MAX = 300;
+const MEET_URL = 'https://koara1012.github.io/lab/novel.html'; // 通知をタップしたら開くノベル画面（試作）
+const meetOn = (st, c) => !!(st.meetFeature && st.meetOn !== false && c && !c.uraOnly && !(st.meetOffChars || []).includes(c.id));
+const meetUrl = (id) => MEET_URL + '?from=line&meet=' + encodeURIComponent(id);
+async function omoteChar(env, id) {
+  const c = (await loadChars(env)).find((x) => x.id === String(id || ''));
+  if (!c || c.uraOnly) throw new HttpError(404, 'キャラが見つかりません');
+  return c;
+}
+function relTime(ms) {
+  if (ms <= 0) return 'もう時間になっている';
+  const h = ms / 3600e3;
+  return h < 1 ? `あと${Math.max(1, Math.round(ms / MIN))}分` : h < 24 ? `あと${Math.round(h)}時間ほど` : `あと${Math.round(h / 24)}日ほど`;
+}
+async function apptContext(env, c, st, now) {
+  if (!st.meetFeature || c.uraOnly) return '';
+  const a = await kvGet(env, 'appt:' + c.id, null);
+  const on = meetOn(st, c);
+  const lines = [];
+  if (!on) lines.push('- ユーザーは今とても忙しく、しばらく会う時間が取れない。会おうと誘ったり、会う約束を催促したりしない。相手を気遣う側に回る。');
+  if (a) {
+    const when = a.at ? fmtTime(a.at) : '日時未定', where = a.place || '場所未定';
+    if (a.status === 'set') lines.push(on ? `- ${when}に「${where}」でユーザーと会う約束をしている（${relTime(a.at - now)}）。日時や場所の話が変わったら、それに合わせる。` : `- ${when}に「${where}」で会う約束があるが、ユーザーが忙しいので保留にしている。`);
+    else if (a.status === 'postponed' || a.status === 'replan') lines.push(on ? `- 「${where}」で会う約束は延期になり、日時が決まっていない。${a.status === 'replan' ? '今回の返事で' : '自然なタイミングで'}、日時を決め直そうと持ちかける。` : `- 「${where}」で会う約束は延期になっている（催促しない）。`);
+    else if (a.status === 'missed' && now - a.at < 2 * 864e5) lines.push(`- ${when}に「${where}」で会う約束をしていたのに、ユーザーは来なかった。キャラクターらしく残念がったり、何かあったのかと心配したりする（責めすぎない）。`);
+    else if (a.status === 'meeting') lines.push(`- 今まさに${a.place ? `「${a.place}」で` : ''}ユーザーと実際に会っている最中。`);
+    else if (a.status === 'done' && now - (a.doneAt || 0) < 3 * 864e5) lines.push(`- ${fmtTime(a.metAt || a.doneAt)}ごろ、${a.place ? `「${a.place}」で` : ''}ユーザーと実際に会った。そのときの様子：${a.summary || '（いっしょに過ごした）'}`);
+  }
+  return lines.length ? '\n# ユーザーと実際に会うこと\n' + lines.join('\n') + '\n' : '';
+}
+// 返事と一緒に答えてもらった約束を記録する（決まった・変わった→上書き、取りやめ→消す）
+async function applyMeet(env, c, m, now) {
+  const k = 'appt:' + c.id;
+  const old = await kvGet(env, k, null);
+  if (m.status === 'cancel') {
+    if (old && ['set', 'postponed', 'replan'].includes(old.status)) await env.DB.prepare('DELETE FROM kv WHERE k=?').bind(k).run();
+    return null;
+  }
+  if (m.status !== 'set' || !/^\d{4}-\d{2}-\d{2}$/.test(m.date) || !/^\d{1,2}:\d{2}$/.test(m.time)) return null;
+  if (old && old.status === 'meeting') return old; // 会っている最中は変えない
+  const time = m.time.padStart(5, '0');
+  const at = Date.parse(`${m.date}T${time}:00+09:00`);
+  if (!Number.isFinite(at) || at < now - 10 * MIN || at > now + 90 * 864e5) return null;
+  const place = String(m.place || '').slice(0, 40) || (old && old.place) || '';
+  if (old && old.status === 'set' && old.at === at && old.place === place) return old;
+  const a = { date: m.date, time, place, at, status: 'set', n1: false, n2: false, created: now };
+  await kvSet(env, k, a);
+  return a;
+}
+// 毎分：そろそろ（20分前）・時間です（ちょうど）の二段の通知。モードがオフのまま時刻を過ぎたら延期、通知したのに2時間来なければ「来なかった」
+async function runAppointments(env) {
+  const st = await getSettings(env);
+  if (!st.meetFeature) return 0;
+  await ensureSchema(env);
+  const { results } = await env.DB.prepare("SELECT k,v FROM kv WHERE k >= 'appt:' AND k < 'appt;'").all();
+  if (!results.length) return 0;
+  const now = Date.now(), chars = await loadChars(env);
+  let n = 0;
+  for (const row of results) {
+    let a; try { a = JSON.parse(row.v); } catch (_) { continue; }
+    const c = chars.find((x) => x.id === row.k.slice(5));
+    if (!c || a.status !== 'set' || !a.at) continue;
+    let ch = false;
+    if (!meetOn(st, c)) { if (now >= a.at) { a.status = 'postponed'; ch = true; } }
+    else {
+      if (!a.n1 && now >= a.at - MEET_SOON && now < a.at) { a.n1 = true; ch = true; n++; await meetNotify(env, st, c, `そろそろ${c.name}さんとの待ち合わせです`, `${a.time}　${a.place}`); }
+      if (!a.n2 && now >= a.at) {
+        a.n1 = a.n2 = true; ch = true;
+        if (now < a.at + MEET_MISS) { n++; await meetNotify(env, st, c, `${c.name}さんが待っています`, `${a.place ? a.place + 'で' : ''}待っています。タップして会いに行く`); }
+      }
+      if (now >= a.at + MEET_MISS) { a.status = 'missed'; ch = true; }
+    }
+    if (ch) await kvSet(env, row.k, a);
+  }
+  return n;
+}
+async function meetNotify(env, st, c, title, body) {
+  const url = meetUrl(c.id);
+  if (st.notifyVia !== 'bark') await pushPayload(env, { title, body, charId: c.id, tag: 'meet-' + c.id, url }).catch((e) => log(env, '会う約束の通知: ' + e.message));
+  if (st.notifyVia !== 'web') await sendBark(env, st, { title, body, cid: c.id, group: c.name, url }).catch((e) => log(env, '会う約束の通知（Bark）: ' + e.message));
+}
+// 会っている場面（ノベル画面の表トーク）の返事。AIは表と同じ。トークの記憶・くらしを知っている
+function buildMeetSystem(c, a, lifeInfo, talk, faces, start) {
+  return `あなたは次のキャラクターになりきって、ユーザーと「実際に会っている場面」のロールプレイをしています。
+相手は、ふだんスマホのメッセージアプリ（トーク）でやり取りしている人です。約束をして、いま実際に会っています。トークでのやり取りや、これまでの記憶はそのまま覚えています。
+
+# キャラクター: ${c.name}
+${charPersona(c, 'omote')}
+${lifeInfo}
+# 最近のトーク（メッセージアプリでのやり取り。古い順）
+${talk || '（なし）'}
+
+# いまの場面
+${a && a.place ? `待ち合わせ場所「${a.place}」${a.at ? `（${fmtTime(a.at)}の約束）` : ''}で、ユーザーと会っている。` : 'ユーザーと会っている。'}
+
+# ルール
+- 返答は1〜4個の吹き出しに分ける。
+- 情景・動作・表情・しぐさの描写（ナレーション）は、先頭に「＊」を付けた別の吹き出しとして書く。三人称・現在形で1〜3文。毎回でなくてよい。
+- セリフの吹き出しには描写や（ ）書きを混ぜず、口にする言葉だけを書く。
+${faceRuleSingle(faces)}- ユーザーの発言のうち（ ）で書かれた部分は、ユーザーの行動や状況の描写として受け取る。
+- ユーザーの行動・発言・気持ちを勝手に決めて書かない。ユーザーが次にどうするかの余地を残す。
+- 自分がAIであることには触れない。
+- キャラクターが未成年の設定である場合、性的な内容や描写は一切しない。
+${start ? '\n# 今回\nユーザーが待ち合わせ場所に来たところ。会えた瞬間の場面から始める（ユーザーが次に話せる余地を残す）。\n' : ''}
+出力は {"messages": ["吹き出し1", "吹き出し2"]} の形のJSONのみ。`;
+}
+async function meetReply(env, c, start) {
+  const st = await getSettings(env), now = Date.now();
+  const a = await kvGet(env, 'appt:' + c.id, null);
+  const lg = await kvGet(env, 'meetlog:' + c.id, []);
+  const faces = await facesOf(env, c.id, 'omote');
+  const lifeInfo = await lifeContext(env, c, st, now).catch(() => '');
+  const talk = (await recent(env, c.id, 20)).filter((m) => !m.retracted && (m.text || m.image)).map((m) => `[${fmtTime(m.at)}] ${m.sender === 'me' ? 'ユーザー' : c.name}: ${m.text || '（写真）'}`).join('\n');
+  const turns = [];
+  for (const m of lg.slice(-60)) {
+    const role = m.who === 'me' ? 'user' : 'model';
+    const line = m.who === 'narr' ? '＊' + m.text : (m.who === 'char' && faces && m.face ? `《${m.face}》` : '') + m.text;
+    const t = turns[turns.length - 1];
+    if (t && t.role === role) t.parts[0].text += '\n' + line; else turns.push({ role, parts: [{ text: line }] });
+  }
+  if (!turns.length || turns[turns.length - 1].role !== 'user') turns.push({ role: 'user', parts: [{ text: start ? '（待ち合わせ場所に着いた）' : '（続けてください）' }] });
+  const wb = await worldBlock(env, c.prompt + '\n' + lg.slice(-20).map((m) => m.text).join('\n'));
+  const texts = (await callAI(env, 'omote', wb + buildMeetSystem(c, a, lifeInfo, talk, faces, start), turns, 6)).flatMap((t) => t.split(/\n(?=\s*[＊*])/));
+  const out = [];
+  for (const t of texts) {
+    const f = takeFace(String(t).trim(), faces);
+    const body = f.text.trim();
+    const n = body.match(/^[＊*]+\s*([\s\S]*)$/);
+    if (n) { if (n[1].trim()) out.push({ who: 'narr', text: n[1].trim() }); continue; }
+    const text = body.replace(/^「([\s\S]*)」$/, '$1');
+    if (text) out.push({ who: 'char', text, ...(f.face ? { face: f.face } : {}) });
+  }
+  if (!out.length) throw new Error('返答が空でした');
+  const now2 = await kvGet(env, 'meetlog:' + c.id, []);
+  await kvSet(env, 'meetlog:' + c.id, [...now2, ...out].slice(-MEET_LOG_MAX));
+  return out;
+}
+const MEET_SUM_SCHEMA = { type: 'object', properties: { summary: { type: 'string' } }, required: ['summary'], additionalProperties: false };
+async function meetEnd(env, c, now) {
+  const k = 'appt:' + c.id;
+  const a = (await kvGet(env, k, null)) || { place: '', at: 0, created: now };
+  const lg = await kvGet(env, 'meetlog:' + c.id, []);
+  let summary = '';
+  if (lg.some((m) => m.who === 'me')) {
+    const text = lg.slice(-80).map((m) => (m.who === 'me' ? 'ユーザー: ' : m.who === 'narr' ? '（描写）' : c.name + ': ') + trunc(m.text, 200)).join('\n');
+    try {
+      const r = await aiJson(env, 'omote', `あなたは、${c.name}とユーザーが実際に会ったときの出来事を、${c.name}があとでトークで思い出せるように、短くまとめる係です。何をして、どんな話をして、どんな雰囲気だったかを、2〜3文で具体的に書きます。`, text, MEET_SUM_SCHEMA, 'meet_summary');
+      summary = String((r && r.summary) || '').trim().slice(0, 300);
+    } catch (e) { await log(env, '会った内容のまとめ: ' + e.message); }
+  }
+  const done = { ...a, status: 'done', metAt: a.metAt || now, doneAt: now, summary };
+  await kvSet(env, k, done);
+  if (summary) await env.DB.prepare("INSERT INTO memories (char_id,kind,text,due,status,created,followed) VALUES (?, 'fact', ?, '', 'open', ?, 0)").bind(c.id, `${jstDay(now)}にユーザーと実際に会った${a.place ? `（${a.place}）` : ''}：${summary}`.slice(0, 200), now).run();
+  await env.DB.prepare('DELETE FROM kv WHERE k=?').bind('meetlog:' + c.id).run();
+  return done;
 }
 
 // 引用返信の候補：最近のユーザーのメッセージ（続けて2つ以上送られたときや、少し前の話があるとき）
@@ -4290,6 +4513,12 @@ async function callOmoteRich(env, c, d, system, contents, opt) {
 ${opt.quote.map((m, i) => `  ${i}：「${trunc(m.text, 60)}」`).join('\n')}`;
   }
   if (opt.ps) { props.postscript = { type: 'string' }; extra += '\n- postscript：送り終えて数分たってから、ふと思い出したように付け足す短い一言（「あ、そういえば…」「さっき言い忘れましたが」「＊追伸」など、キャラクターらしく）。付け足したいことが自然にあるときだけ。ふだんは ""。'; }
+  if (opt.meet) {
+    Object.assign(props, { meet_status: { type: 'string' }, meet_date: { type: 'string' }, meet_time: { type: 'string' }, meet_place: { type: 'string' } });
+    const cur = opt.meet.cur && ['set', 'postponed', 'replan'].includes(opt.meet.cur.status) ? opt.meet.cur : null;
+    extra += `\n- meet_status：ユーザーとキャラクターが「実際にどこかで会う」約束について。今回のやり取りで、会う日時と場所がはっきり決まった（または日時・場所が変わった）なら "set"、約束が取りやめになったなら "cancel"、それ以外は ""。「今度遊ぼう」のように日時が決まっていない話は "" のまま。${cur ? `いまの約束：${cur.at ? fmtTime(cur.at) : '日時未定'}「${cur.place || '場所未定'}」。` : 'いまの約束：なし。'}
+- meet_date／meet_time／meet_place："set" のときだけ、会う日（YYYY-MM-DD。今日は ${jstDay(Date.now())}（${jstParts(Date.now()).w}））・時刻（HH:MM、24時間）・場所（短く）。それ以外は ""。`;
+  }
   if (opt.typo) extra += '\n- 今回は、吹き出しのどれか1か所で、スマホらしい自然な打ち間違い（変換ミスなど）をして、次の吹き出しで「＊正しい言葉」と短く訂正する。キャラクターに合わなければしなくてよい。';
   if (opt.react) {
     props.stamp = { type: 'string' };
@@ -4315,6 +4544,7 @@ ${Object.keys(STAMPS).filter((k) => k !== '🏃').map((k) => `  ${k}：${STAMPS[
     retract: opt.retract ? Number(r && r.retract) : -1,
     quoteId: opt.quote && Number.isInteger(Number(r && r.quote)) && opt.quote[Number(r.quote)] ? opt.quote[Number(r.quote)].id : 0,
     postscript: opt.ps ? String((r && r.postscript) || '').trim().slice(0, 200) : '',
+    meet: opt.meet && r ? { status: String(r.meet_status || '').trim(), date: String(r.meet_date || '').trim(), time: String(r.meet_time || '').trim(), place: String(r.meet_place || '').trim() } : null,
   };
 }
 
@@ -4558,10 +4788,11 @@ async function barkEncrypt(keyStr, ivStr, plain) {
   let bin = ''; for (const b of ct) bin += String.fromCharCode(b);
   return btoa(bin);
 }
-async function sendBark(env, st, { title, body, cid, group }) {
+async function sendBark(env, st, { title, body, cid, group, url }) {
   if (!env.BARK_DEVICE_KEY) throw new Error('シークレット BARK_DEVICE_KEY が設定されていません');
   const p = { title: String(title || ''), body: String(body || ''), group: group || 'トーク', level: 'active' };
   if (st.barkSound) p.sound = st.barkSound;
+  if (url) p.url = url; // タップで開くページ（会う約束の通知）
   const icon = await barkIconUrl(env, cid).catch(() => '');
   if (icon) p.icon = icon;
   const server = (env.BARK_SERVER || BARK_SERVER).replace(/\/+$/, '');

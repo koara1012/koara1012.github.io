@@ -1,0 +1,1672 @@
+<!doctype html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover,user-scalable=no">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="朱里">
+<link rel="apple-touch-icon" href="../akari-icon.png">
+<link rel="icon" href="../akari-icon.png">
+<title>朱里ノベル</title>
+<style>
+:root{
+  --S:1px; --sx:0px; --sy:0px; --sw:100vw; --sh:100vh;
+  --ff:'AkariFont','Hiragino Sans','Hiragino Kaku Gothic ProN','Noto Sans JP',sans-serif;
+  --win:rgba(0,0,0,.69); --ring:#cdb6d2;
+}
+*{box-sizing:border-box;-webkit-tap-highlight-color:transparent}
+html,body{margin:0;height:100%;background:#000;color:#fff;overflow:hidden;
+  font-family:var(--ff);-webkit-text-size-adjust:100%;touch-action:manipulation;
+  -webkit-user-select:none;user-select:none}
+#app{position:fixed;inset:0;overflow:hidden}
+#bg{position:absolute;inset:0;background:linear-gradient(#1b2433,#2c3a3a 60%,#18221d);background-size:cover;background-position:center}
+#charas{position:absolute;inset:0;pointer-events:none;z-index:1}
+.chara{position:absolute;transition:left .35s ease,top .35s ease,width .35s ease,height .35s ease}
+.chara.noanim{transition:none}
+.chara img{position:absolute;left:0;top:0;width:100%;height:100%;display:none}
+#win{position:absolute;z-index:2;left:0;right:0;top:calc(var(--sy) + var(--S)*520);height:calc(var(--S)*230 + var(--sy));background:var(--win)}
+#nameplate{position:absolute;bottom:100%;margin-bottom:calc(var(--S)*8);
+  left:max(calc(env(safe-area-inset-left) + 14px), calc(var(--sx) + var(--S)*80));
+  height:calc(var(--S)*46);padding:0 calc(var(--S)*16);display:flex;align-items:center;
+  background:var(--win);font-size:calc(var(--S)*23);letter-spacing:.06em;white-space:nowrap}
+#nameplate.hide{display:none}
+#nameplate::before{content:"";position:absolute;left:calc(var(--S)*-9);top:0;bottom:0;width:calc(var(--S)*2);background:rgba(0,0,0,.85)}
+#nameplate::after{content:"";position:absolute;left:calc(var(--S)*-11);top:calc(var(--S)*-3);width:calc(var(--S)*6);height:calc(100% + var(--S)*6);
+  background:radial-gradient(circle at 50% calc(var(--S)*3),rgba(0,0,0,.9) calc(var(--S)*2.6),transparent calc(var(--S)*3)),
+             radial-gradient(circle at 50% calc(100% - var(--S)*3),rgba(0,0,0,.9) calc(var(--S)*2.6),transparent calc(var(--S)*3))}
+#text.narr{color:#d6cfe3}
+#text{position:absolute;top:calc(var(--S)*38);
+  left:max(calc(env(safe-area-inset-left) + 20px), calc(var(--sx) + var(--S)*215));
+  right:max(calc(env(safe-area-inset-right) + 20px), calc(var(--sx) + var(--S)*100));
+  font-size:calc(var(--S)*30);line-height:1.6;letter-spacing:.12em;white-space:pre-wrap;
+  line-break:strict;overflow-wrap:anywhere;
+  text-shadow:0 0 calc(var(--S)*3) rgba(0,0,0,.55),calc(var(--S)*1) calc(var(--S)*1) calc(var(--S)*2) rgba(0,0,0,.5)}
+#hint{position:absolute;bottom:calc(var(--sy) + var(--S)*18);
+  right:max(calc(env(safe-area-inset-right) + 18px), calc(var(--sx) + var(--S)*60));
+  font-size:calc(var(--S)*20);opacity:.85;display:none;animation:bob 1.1s ease-in-out infinite}
+@keyframes bob{50%{transform:translateY(calc(var(--S)*4));opacity:.5}}
+#ver{position:absolute;z-index:3;left:calc(env(safe-area-inset-left) + 6px);top:calc(env(safe-area-inset-top) + 4px);font-size:10px;opacity:.35;pointer-events:none;font-family:sans-serif}
+#ctrls{position:absolute;z-index:3;top:calc(var(--sy) + var(--S)*72);transform:translateY(-50%);
+  right:max(calc(env(safe-area-inset-right) + 6px), calc(var(--sx) + var(--S)*12));
+  display:flex;align-items:center}
+#ctrls .ln{width:calc(var(--S)*24);height:calc(var(--S)*3);background:#b7a9bb}
+.cb{border:0;padding:0;margin:0;border-radius:50%;display:grid;place-items:center;cursor:pointer;color:#f3c9f2;
+  width:calc(var(--S)*76);height:calc(var(--S)*76);
+  background:radial-gradient(circle at 50% 40%,#544558,#3b2f40 70%);
+  box-shadow:0 0 0 calc(var(--S)*3) var(--ring),0 0 0 calc(var(--S)*5) rgba(255,255,255,.25),0 calc(var(--S)*2) calc(var(--S)*6) rgba(0,0,0,.4)}
+.cb svg{width:42%;height:42%}
+.cb.on{color:#fff;background:radial-gradient(circle at 50% 40%,#f8b2f5,#e57ee2 70%);
+  box-shadow:0 0 0 calc(var(--S)*3) #f9d3f7,0 0 0 calc(var(--S)*5) rgba(255,255,255,.35),0 0 calc(var(--S)*14) rgba(255,150,250,.7)}
+#bBack{width:calc(var(--S)*44);height:calc(var(--S)*44);background:#fff;color:#888;
+  box-shadow:0 0 0 calc(var(--S)*2) rgba(255,255,255,.5),0 calc(var(--S)*1) calc(var(--S)*4) rgba(0,0,0,.35)}
+#bBack svg{width:50%;height:50%}
+#bAuto{width:calc(var(--S)*80);height:calc(var(--S)*80)}
+#inputOv{position:fixed;inset:0;background:rgba(0,0,0,.35);display:none;z-index:20}
+#inputOv.show{display:block}
+.ibox{position:absolute;top:calc(env(safe-area-inset-top) + 8px);
+  left:calc(env(safe-area-inset-left) + 10px);right:calc(env(safe-area-inset-right) + 10px);
+  display:flex;gap:8px;background:rgba(20,16,24,.92);padding:8px;border-radius:12px;box-shadow:0 0 0 1px #6e5a74}
+.ibox input{flex:1;min-width:0;font:16px var(--ff);padding:10px 12px;border-radius:8px;border:1px solid #6e5a74;background:#1a161d;color:#fff;-webkit-user-select:text;user-select:text}
+button.b{font:14px var(--ff);padding:8px 13px;border-radius:8px;border:1px solid #8a7290;background:#3b2f40;color:#fff;cursor:pointer;white-space:nowrap}
+button.b.p{background:#d86ad5;border-color:#f3b4f1}
+button.b.d{background:#5a2a2a;border-color:#a55}
+button.b.s{font-size:12px;padding:5px 9px}
+button.b:disabled{opacity:.45}
+#menu{position:fixed;inset:0;z-index:30;background:rgba(12,10,15,.97);display:none;
+  padding:calc(env(safe-area-inset-top) + 8px) calc(env(safe-area-inset-right) + 10px) calc(env(safe-area-inset-bottom) + 8px) calc(env(safe-area-inset-left) + 10px);font-family:var(--ff)}
+#menu.show{display:flex;gap:10px}
+#nav{display:flex;flex-direction:column;gap:5px;width:112px;flex:none;overflow-y:auto}
+#nav button{text-align:left;font:13px var(--ff);padding:7px 10px;border-radius:8px;border:1px solid #4a3d50;background:#221c26;color:#ddd}
+#nav button.on{background:#d86ad5;color:#fff;border-color:#f3b4f1}
+#nav .close{margin-top:auto;background:#3b2f40}
+#panels{flex:1;overflow-y:auto;-webkit-overflow-scrolling:touch;padding-right:4px;font-size:13px;line-height:1.6;-webkit-user-select:text;user-select:text}
+.pn{display:none}.pn.on{display:block}
+.pn h3{margin:2px 0 8px;font-size:15px;color:#f3c9f2}
+.pn h4{margin:14px 0 4px;font-size:13px;color:#e7b8e6}
+.row{display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin:6px 0}
+.row > label:first-child{min-width:120px;color:#ccc}
+.pn input[type=text],.pn input[type=password],.pn input[type=number],.pn textarea,.pn select{font:14px var(--ff);padding:7px 9px;border-radius:7px;border:1px solid #5b4a62;background:#1a161d;color:#fff;-webkit-user-select:text;user-select:text}
+.pn input[type=text],.pn input[type=password]{flex:1;min-width:150px}
+.pn input[type=number]{width:90px}
+.pn textarea{width:100%;min-height:180px}
+.note{color:#aaa;font-size:12px}
+pre.box{white-space:pre-wrap;word-break:break-all;background:#1a161d;border:1px solid #4a3d50;border-radius:8px;padding:8px;font:11px/1.5 ui-monospace,Menlo,monospace}
+.log .u{color:#9fd3ff}.log .f{color:#c9a;font-size:11px}
+.log div{padding:3px 0;border-bottom:1px solid #2a2330}
+.card{border:1px solid #4a3d50;border-radius:10px;padding:8px 10px;margin:8px 0;background:#18141b}
+.list .it{display:flex;gap:10px;align-items:center;padding:8px;border:1px solid #3a3040;border-radius:10px;margin:6px 0;background:#18141b}
+.list .it.cur{border-color:#e78ee5;background:#2a1f2e}
+.list .it .main{flex:1;min-width:0}
+.list .it .t{font-size:14px;color:#fff}
+.list .it .sub{font-size:12px;color:#aaa;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.thumbB{width:40px;height:64px;object-fit:contain;background:#0e0c10;border-radius:6px;flex:none}
+.slots{display:flex;gap:14px;flex-wrap:wrap;margin:6px 0}
+.sg{display:flex;flex-direction:column;align-items:center;gap:3px;font-size:11px;color:#bbb}
+.tile{width:64px;height:64px;border:1px dashed #6e5a74;border-radius:8px;display:grid;place-items:center;background:#0e0c10;position:relative;cursor:pointer;color:#888;font-size:22px}
+.tile.full{border-style:solid;border-color:#8a7290}
+.tile img{max-width:100%;max-height:100%;border-radius:6px}
+.tile .x{position:absolute;top:-8px;right:-8px;width:22px;height:22px;border-radius:50%;background:#5a2a2a;border:1px solid #a55;color:#fff;font-size:13px;line-height:20px;text-align:center}
+.grp{display:flex;gap:6px;align-items:flex-start;flex-wrap:wrap}
+.grp > b{min-width:28px;font-weight:normal;color:#e7b8e6;padding-top:22px}
+#toast{position:fixed;z-index:40;top:calc(env(safe-area-inset-top) + 8px);left:50%;transform:translateX(-50%);
+  max-width:min(92vw,640px);background:#3a1d24;border:1px solid #d77;border-radius:10px;padding:8px 10px;
+  display:none;gap:8px;align-items:center;font-size:13px;font-family:var(--ff);box-shadow:0 4px 16px rgba(0,0,0,.5)}
+#toast.show{display:flex}
+#toast.ok{background:#1f2f22;border-color:#7c7}
+#toast span{flex:1}
+#rotate{position:fixed;inset:0;z-index:50;background:#000;display:none;place-items:center;text-align:center;font-size:16px;line-height:1.8;padding:20px}
+@media (orientation:portrait){#rotate{display:grid}}
+.hidefile{display:none}
+</style>
+</head>
+<body>
+<div id="app">
+  <div id="bg"></div>
+  <div id="charas"></div>
+  <div id="win">
+    <div id="nameplate"><span id="nameTxt"></span></div>
+    <div id="text"></div>
+    <div id="hint"></div>
+  </div>
+  <div id="ctrls">
+    <button class="cb" id="bBack" aria-label="メニュー"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M15 4 7 12l8 8"/></svg></button>
+    <div class="ln"></div>
+    <button class="cb" id="bAuto" aria-label="オート"></button>
+    <div class="ln"></div>
+    <button class="cb" id="bSkip" aria-label="次へ"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round"><path d="M5 4.5v15L16 12z"/><path d="M19.5 4.5v15" stroke-linecap="round"/></svg></button>
+    <div class="ln"></div>
+    <button class="cb" id="bFast" aria-label="早送り"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round"><path d="M2.5 5v14l9-7z"/><path d="M12.5 5v14l9-7z"/></svg></button>
+  </div>
+  <div id="ver"></div>
+</div>
+
+<div id="inputOv"><div class="ibox">
+  <input id="msg" type="text" enterkeyhint="send" autocomplete="off" placeholder="話しかける…">
+  <button class="b p" id="send">送信</button><button class="b" id="cancel">やめる</button>
+</div></div>
+
+<div id="menu">
+  <div id="nav">
+    <button id="toLine" style="background:#06c755;border-color:#5fe39a;color:#fff;font-weight:700;white-space:nowrap">‹ LINE風へ</button>
+    <button id="endMeet" hidden style="background:#e9893a;border-color:#f6c08d;color:#fff;font-weight:700;white-space:nowrap">会うのを終える</button>
+    <button data-p="pRoom" class="on">トーク</button>
+    <button data-p="pChar">キャラ</button>
+    <button data-p="pLog">会話ログ</button>
+    <button data-p="pSet">設定</button>
+    <button data-p="pAsset">素材</button>
+    <button data-p="pBak">バックアップ</button>
+    <button data-p="pHelp">困ったとき</button>
+    <button data-p="pDev">改善ログ</button>
+    <button class="close" id="mClose">閉じる</button>
+  </div>
+  <div id="panels">
+    <div class="pn on" id="pRoom"><h3>トーク</h3>
+      <div class="row"><button class="b p" id="roomNew">＋トークを作る</button><span class="note">最大7人を選んで、個別トーク・グループトークを作れます</span></div>
+      <div id="roomEdit"></div>
+      <div class="list" id="roomList"></div>
+    </div>
+
+    <div class="pn" id="pChar"><h3>キャラ</h3><div id="charArea"></div></div>
+
+    <div class="pn" id="pLog"><h3>会話ログ</h3><p class="note" id="logRoom"></p><div class="log" id="logList"></div>
+      <h4>このトークをはじめからにする</h4><div class="row"><button class="b d" id="clearHist">このトークの会話を全部消す</button><span class="note">消す前にバックアップがおすすめです</span></div></div>
+
+    <div class="pn" id="pSet"><h3>設定（全キャラ共通）</h3>
+      <div class="card"><b>LINE風アプリとつなぐ（試作）</b>
+      <div class="row"><label>サーバーURL</label><input type="text" id="sSrv" placeholder="https://chara-chat.….workers.dev"></div>
+      <div class="row"><label>合言葉</label><input type="password" id="sTok" placeholder="LINE風アプリの設定と同じもの"></div>
+      <div class="row"><button class="b p" id="srvTest">つないでみる</button><span class="note" id="srvState"></span></div>
+      <div class="row"><label>裏トークの表情</label><label><input type="checkbox" id="sUraFace"> サーバーが表情を付けなかった返事だけ、下のAIのキーで選ぶ（少し料金がかかります。オフなら「通常」の顔）。ふだんは LINE風のサーバー（第38版〜）が返事と一緒に選びます</label></div>
+      <p class="note">LINE風アプリの「設定」にあるサーバーURLと合言葉を入れてください。この端末の中だけに保存されます。</p></div>
+      <div class="card"><b>本番のノベル画面からデータを写す</b>
+      <div class="row"><button class="b" id="copyProd">akari.html のキャラ・素材・トーク・設定を写す</button><button class="b" id="copyLab">試作（lab）のキャラ・素材・トーク・設定を写す</button></div>
+      <p class="note">Safariで開いているときだけ使えます（本番のデータは読むだけで、変えません）。ホーム画面から開いているときは、本番で「バックアップ」→書き出し、ここで復元してください。</p></div>
+      <div class="row"><label>AIの種類（共通）</label><select id="sProv"><option value="grok">Grok（xAI）</option><option value="gemini">Gemini（Google）</option></select><span class="note">トークごとにも変えられます（トーク→編集）</span></div>
+      <h4>Grok（xAI）</h4>
+      <div class="row"><label>xAI APIキー</label><input type="password" id="sKey" placeholder="xai-..."></div>
+      <div class="row"><label>エンドポイント</label><input type="text" id="sEnd"></div>
+      <div class="row"><label>モデル</label><input type="text" id="sModel" list="modelList"><datalist id="modelList"></datalist><button class="b" id="getModels">一覧を取得</button></div>
+      <h4>Gemini（Google）</h4>
+      <div class="row"><label>Gemini APIキー</label><input type="password" id="sGKey" placeholder="AIza..."></div>
+      <div class="row"><label>Geminiモデル</label><input type="text" id="sGModel" list="gModelList"><datalist id="gModelList"></datalist><button class="b" id="getGModels">一覧を取得</button></div>
+      <h4>共通</h4>
+      <div class="row"><label>温度（0〜2）</label><input type="number" id="sTemp" step="0.1" min="0" max="2"></div>
+      <div class="row"><label>送る会話の往復数</label><input type="number" id="sTurns" min="2" max="200"><span class="note">多いほど覚えているが料金が増える</span></div>
+      <div class="row"><label>ログでのあなたの名前</label><input type="text" id="sUser"></div>
+      <div class="row"><label>文字の速さ（ms/字）</label><input type="number" id="sSpeed" min="0" max="300"></div>
+      <h4>瞬き</h4>
+      <div class="row"><label>疑似半目</label><label><input type="checkbox" id="sBlinkFade"> 半目が無い表情は、開きと閉じを溶け合わせて半目の代わりにする</label></div>
+      <div class="row"><label>半目の時間（ms）</label><input type="number" id="sBlinkHalf" min="10" max="200" step="5"><label>閉じている時間（ms）</label><input type="number" id="sBlinkClose" min="30" max="400" step="5"><label>溶け合わせの濃さ（%）</label><input type="number" id="sBlinkAlpha" min="10" max="90" step="5"></div>
+      <div class="row"><button class="b" id="blinkTest">今いるキャラを瞬きさせる</button><button class="b" id="blinkSlow">ゆっくり瞬き（10倍・確認用）</button></div>
+      <h4>タップ音</h4>
+      <div class="row"><label>タップ音</label><label><input type="checkbox" id="sSeOn"> 鳴らす</label><label>音量（%）</label><input type="number" id="sSeVol" min="0" max="200" step="5"></div>
+      <p class="note">タップ音は画面タップでの文字送り・ページ送りのときだけ鳴ります。iPhoneの消音モード中は鳴らないことがあります。<br>キャラごとの名前・性格・立ち絵・表情は「キャラ」で設定します。APIキーはこの端末の中だけに保存され、xAI以外には送られません。</p>
+    </div>
+
+    <div class="pn" id="pAsset"><h3>素材（全キャラ共通・この端末の中だけに保存）</h3>
+      <div class="row"><label>背景</label><button class="b" data-gpick="bg">選ぶ</button><span id="aBg" class="note"></span><button class="b d s" data-gdel="bg">消す</button></div>
+      <div class="row"><label>フォント</label><button class="b" data-gpick="font">選ぶ</button><span id="aFont" class="note"></span><button class="b d s" data-gdel="font">消す</button></div>
+      <div class="row"><label>タップ音</label><button class="b" data-gpick="se">選ぶ</button><span id="aSe" class="note"></span><button class="b s" id="seTest">鳴らす</button><button class="b d s" data-gdel="se">消す</button></div>
+      <p class="note">タップ音は m4a・mp3・wav が使えます。動画ファイル（mov・mp4）からは音を取り出せません。前後の無音は自動で切り、音量も自動でそろえます。</p>
+    </div>
+
+    <div class="pn" id="pBak"><h3>バックアップ</h3>
+      <h4>手動で保存（iPhoneの「ファイル」へ）</h4>
+      <div class="row"><label><input type="checkbox" id="bkAssets" checked> 素材（画像・音・フォント）も含める</label><label><input type="checkbox" id="bkKey"> AIのキー・合言葉も含める</label></div>
+      <div class="row"><button class="b p" id="bkExport">全部を書き出す</button><span class="note" id="bkSaved"></span></div>
+      <p class="note" id="bkLast">最後に手動で保存：まだありません</p>
+      <p class="note">iPhoneでは共有メニューが開くので「"ファイル"に保存」を選んでください。トーク1つだけの書き出しは「トーク」の各トークから。</p>
+      <h4>自動バックアップ（会話・設定だけ。素材とAIのキーは入りません）</h4>
+      <div class="card" id="bkAuto">（LINE風アプリのサーバーにつなぐと使えます）</div>
+      <div class="row"><button class="b" id="bkSyncNow">今すぐサーバーに預ける</button><button class="b" id="bkFromSrv">サーバーに預けた会話・設定から戻す</button><button class="b" id="bkFromPrev" hidden>減る前のものから戻す</button></div>
+      <h4>読み込む</h4>
+      <div class="row"><button class="b" id="bkImport">バックアップから復元</button></div>
+      <p class="note">全部のバックアップは、今のデータと置き換わります（ファイルにAPIキーが無ければ今のキーを残します）。トーク1つのファイルは、新しいトークとして追加されます。第1回・第2回のバックアップも読み込めます。</p>
+    </div>
+
+    <div class="pn" id="pHelp"><h3>困ったとき</h3>
+      <div class="row"><button class="b p" id="copyDiag">診断情報をコピー</button><span class="note">コピーしてClaudeに貼り付けると原因を調べられます</span></div>
+      <div class="row"><button class="b d" id="clearLogs">記録を消す</button></div>
+      <h4>診断情報</h4><pre class="box" id="logView"></pre>
+    </div>
+
+    <div class="pn" id="pDev"><h3>改善ログ（他のAIへの引き継ぎ用）</h3>
+      <div class="row"><button class="b p" id="copyDev">改善ログをコピー</button><span id="verFull" class="note"></span></div>
+      <pre class="box" id="devView"></pre>
+    </div>
+  </div>
+</div>
+<input type="file" class="hidefile" id="fImg" accept="image/png,image/webp,image/jpeg">
+<input type="file" class="hidefile" id="fFont" accept=".ttf,.otf,.woff,.woff2,font/*,application/octet-stream">
+<input type="file" class="hidefile" id="fSe" accept="audio/*,.m4a,.mp3,.wav,.aac">
+<input type="file" class="hidefile" id="fBak" accept="application/json,.json">
+
+<div id="toast"><span id="toastMsg"></span><button class="b p" id="toastBtn">診断をコピー</button><button class="b" id="toastX">×</button></div>
+<div id="rotate">📱↻<br>iPhoneを横向きにしてください<br><span style="font-size:12px;opacity:.6">（画面の縦向きロックを外すと回転します）</span></div>
+
+<script>
+'use strict';
+/* ====== 版 ====== */
+const VERSION = { no: 6, at: '2026-10-28 22:30:00' };
+const VERSION_TEXT = `${/\/lab\//.test(location.pathname) ? '試作・' : ''}統合 第${VERSION.no}回（${VERSION.at} 更新・akari.html 第6回がもと）`;
+
+/* ====== 改善ログ（他のAIへの引き継ぎ用）======
+   改善のたびに「## 第〜回」を先頭側へ追記し、概要も最新に保つ */
+const DEV_LOG = `# 朱里ノベル 統合の試作（lab/novel.html） 改善ログ
+※ 本番 akari.html 第6回をもとにした試作。保存先は本番と分けている（localStorage lab.settings / lab.logs、IndexedDB akariLab）。
+## 統合 第6回（2026-10-28 22:30:00）
+- 置き場所で保存の名前を切り替える（IS_LAB・K）。/lab/：lab.settings・lab.logs・IndexedDB akariLab・lab.chat.cfg。/chat/（本番）：novel.settings・novel.logs・IndexedDB charaNovel・chat.cfg（LINE風アプリと同じ）。同じファイルを両方に置く。
+- 統合後のバックアップ：手動は「保存しました：ファイル名」「最後に手動で保存：日時（今日・素材あり・サイズ）」（サーバーにも POST /backup/novel-manual で記録）。素材は最初から含める（外せる）。「AIのキー・合言葉も含める」を外すと apiKey・geminiKey・srvToken を入れない（前は geminiKey が入っていた不具合を修正）。
+- 自動バックアップ：会話・設定（素材・キー・合言葉・URL は除く）を変えてから20秒後と画面を離れたときにサーバー（POST /novel/save → kv novel:data）へ預ける。LINE風アプリと一緒に R2 へ自動で保存される。R2 が未接続なら赤い注意。急に減ったら前のものを novel:prev に残し、「減る前のものから戻す」で戻せる。「サーバーに預けた会話・設定から戻す」（素材とキーは今のまま）。
+- 本番の場所では「試作（lab）のデータを写す」も使える（Safariのみ）。
+
+## 試作・段階5（2026-10-28 21:00:00）
+- 表トーク（会う場面）：kind 'omote'、target＝LINE風のキャラid。novel.html?from=line&meet=<id>（LINE風の帯［会いに行く］・通知のタップ）で開く。無ければ自動で作る（立ち絵のキャラが「LINE風のキャラ」とつながっていなければ案内）。
+- 会話はサーバー（第39版）：POST /meet/start（会えた場面から始める）・/meet/say・/meet/end（まとめて表の記憶へ）。AIは LINE風の表と同じ。メニューに［会うのを終える］。編集・書き出しは出さない。
+- 表情は「表」で使うものをサーバーに登録（POST /faces kind:'omote'）。
+
+## 試作・段階4（2026-10-28 20:00:00）
+- 裏トークのナレーション（名前欄なし）の文字を少し薄い色（#d6cfe3）に（ユーザーが「色だけ変える」を選んだ）。#text.narr、showName('') で付け外し。
+
+## 試作・段階3（2026-10-28 19:45:00）
+- 表情差分ごとに「使うトーク」（ふつう・裏・表）を選べる（f.off = {normal,ura,omote}、true＝使わない）。外した種類ではAIの候補から外し、返ってきたら既定の顔に。既定（「通常」）は外せない。usableFaces(c, kind)。
+- 裏トークの表情をサーバーで付ける（LINE風 第38版）：LINE風につないだキャラの、裏で使う表情の名前・説明を POST /faces で登録（キャラ保存の1.5秒後・起動時。画像は送らない）。サーバーの返事の face を使い、無いときだけ端末のAIキーで選ぶ（srvFace の行は選び直さない）。
+
+## 試作・段階2（2026-10-28 19:10:00）
+- LINE風アプリの試作版 lab/index.html（本番 chat/ のコピー）と1つのアプリに。保存の名前に「lab.」を付けて本番の chat.* には書き込まない。通知（サービスワーカー）は登録しない。
+- サーバーURL・合言葉は lab.chat.cfg を共有（どちらで変えても同じ）。最初だけ本番の chat.cfg から読み写す。
+- LINE風のトーク画面の［立ち絵］→ novel.html?from=line&ura=<キャラ#ura|grp-…#ura>：その裏トークを開く（無ければ自動で作る。つないだキャラがいなければ案内）。表は ?back=<id> でノベル画面を開くだけ（表のノベルは段階3）。
+- メニューの先頭に「‹ LINE風へ」（裏トークならそのトークの裏へ戻る）。
+- トーク作成の説明を「最大7人」に。
+
+## 試作・段階1
+- LINE風アプリのサーバーとつなぐ設定（URL・合言葉）。キャラごとに「LINE風のキャラ」とつなぐ。
+- 裏トーク：LINE風アプリの裏（キャラ#ura・グループ）と会話を共有。読み込みは GET /sync、送信は POST /send → POST /reply（サーバーは変えていない）。ナレーションは名前欄なし。表情は端末のAIキーで小さく選ぶ（任意・uraFaces に保存）。
+- 本番のノベル画面のデータを写す（Safariで同じ場所から開いたとき、読むだけ）。
+
+現在：${VERSION_TEXT}
+公開：https://koara1012.github.io/akari.html（リポジトリ koara1012/koara1012.github.io の akari.html。index.html・voice.html・chat/ は別アプリなので上書きしない）
+
+## このアプリの概要（引き継ぎ用）
+- 1ファイル（akari.html）だけで動くノベルゲーム風キャラ会話アプリ。iPhone横画面専用。アイコンは akari-icon.png（オリジナル絵）。
+- AIは xAI Grok（OpenAI互換 /v1/chat/completions）か Google Gemini（generateContent、既定 gemini-flash-latest＝LINE風アプリと同じ）をブラウザから直接呼ぶ。共通の設定 aiProvider と、トークごとの room.ai（空なら共通に従う）で切り替え。キーはどちらもiPhoneの中（ユーザーの決定）。
+- ゲーム素材（背景・立ち絵・表情・フォント・タップ音）はリポジトリに入れない。利用者がiPhone内から読み込み IndexedDB に保存。
+- 画面設計は 1334×750（16:9）基準。CSS変数 --S = 16:9領域の高さ/750 px。余った左右は背景・メッセージ枠を伸ばして埋める。
+  - メッセージ枠：y=520〜750、黒 不透明度69%（AviUtl透明度31%）、横幅いっぱい
+  - 名前欄：x=80、枠のすぐ上、高さ46、同じ黒。左に縦線＋両端の点。話している人の名前を表示
+  - 台詞：x=215、文字30/字間0.12em、白＋薄い影、最大3行/ページ
+  - 右上ボタン：〈（メニュー）・オート（ON=ピンク＋||、OFF=暗色＋▷）・▷|（次へ）・▷▷（最後まで）
+- キャラ（CHARS）：名前・キャラ設定（AIへの指示）・呼ばれ方・立ち絵ベース・大きさ（画面高さの%、既定146.5）・上位置（%、既定1.2）・左右ずれ（%）・表情リスト。
+- 表情：キャラごとに「名前・説明」と、目（open/half/close）・口（close/half/open）の枠に1枚ずつ画像。すべてベースと同じキャンバスの透過PNGで、ベースの上に重ねる。
+  - 枠が空なら、その状態はベースのまま。half が空なら2枚で動く。目の close が無ければ瞬きしない。口の open/half が無ければ口パクしない。
+  - 既定の表情は「通常」という名前のもの、無ければ一番上。AIが知らない表情名を返したら既定にする。表情が1つも無ければ「通常」（ベースのみ）。
+  - 眉・頬染めの枠はユーザーの希望で無し。ファイル名での自動振り分けもユーザーの希望で廃止（1枚ずつ枠に入れる）。枠には目・口の部分を自動で切り抜いた見本を表示。
+- トーク（ROOMS）：LINEの個チャ／グループのように、メンバー最大7人（並び順=左→右）ごとの会話。同じメンバーでも複数作れる。会話は完全に別々（記憶を共有しない）。続きから再開。
+  - 立ち位置：1人=50%、2人=30%/70%、3人=22%/50%/78%（＋キャラごとの左右ずれ）。話していない人も暗くしない（ユーザーの希望）。
+  - 4〜7人：前の列3人＋後ろの列（36%/64%/8%/92%、大きさ×0.82、2.5%下）。後ろの人が話すと、前の列でいちばん長く黙っている人と入れ替わる（0.35秒で移動）。
+  - 口パクは話している人だけ。瞬きは全員が別々のタイミング。
+- AIへの返答形式：1人 {"lines":[{"face","text"}]}（1〜4行）／複数 {"lines":[{"who","face","text"}]}（1〜6行）。who は名前で照合（空白無視・部分一致）。
+- 瞬き：2〜6秒ランダム、half→close→half、たまに2回。半目が無い表情は「疑似半目」（開きの上に閉じを不透明度blinkAlpha%で重ねる＝st.es 'fade'、レイヤー eye2）。設定 blinkFade / blinkHalfMs(45) / blinkCloseMs(90) / blinkAlpha(50)。ユーザーは全キャラ半目の素材を持っていない。口パク：文字送り中に約100msで切り替え、句読点で閉じる。
+- タップ音：GLOBAL.se。Web Audioでデコード→前後の無音カット・ピーク0.9に正規化。画面タップの文字送り・ページ送りの時だけ鳴る（▷|・オート・入力欄を開くタップ・メニューでは鳴らない）。iPhoneのSafariは mov からは音を取り出せない。
+- 画像表示：blob URL が使えない環境（Claudeアプリのプレビュー等）では自動で data URL に切り替え。表示できない画像はエラー通知。
+- 保存先：localStorage「akari.settings」（共通設定・APIキー・今のトーク）「akari.logs」（動作記録 最大300件）
+  IndexedDB「akariNovel」kv：global{bg,font,se=画像ID}, chars, rooms, hist:<トークID>, img:<ID>={name,type,buf}
+  第1・2回の assets / history は起動時に自動でキャラ「伊達　朱里」とその個別トークへ引っ越し（normal→通常）。
+- 起動時に navigator.storage.persist() を要求。ホーム画面アプリはSafariと保存場所が別なので、空なら案内を出す。
+- 困ったとき：エラー時にトースト→ワンタップで診断情報をコピー。バックアップ：全部（画像・キー任意）／トーク1つ。第1・2回の形式も復元可。
+
+## 第6回（2026-10-28 16:40:52）
+- AIを Grok と Gemini で切り替えられるように（設定で共通の種類、トークの編集でトークごと）。Gemini のキーとモデルを設定に追加・モデル一覧の取得。
+- トーク一覧に、そのトークで使うAIを表示。
+
+## 第5回（2026-10-28 16:34:58）
+- お試し：4人以上のトーク（最大7人）。前の列3人＋後ろの列に少し小さく並べ、後ろの人が話すと前の列の人と入れ替わる（ユーザーが選んだ案C）。
+- トークの作成画面を「前の列（3枠）」「後ろの列（4枠）」に。
+
+## 第4回（2026-10-28 15:55:27）
+- お試し：疑似半目を追加（半目の素材が無い表情でも、開き→溶け合わせ→閉じ→溶け合わせ→開き でなめらかに瞬き）。
+- 設定に「瞬き」欄：疑似半目のオン／オフ、半目の時間・閉じている時間・溶け合わせの濃さ、「今いるキャラを瞬きさせる」「ゆっくり瞬き（10倍）」の確認ボタン。
+
+## 第3回（2026-10-28 15:24:51）
+- キャラを複数登録できるように（キャラ画面）。今までのデータは「伊達　朱里」へ自動で引っ越し。
+- 表情を「＋表情を追加」で作り、目3枠・口3枠に1枚ずつ入れる方式に変更。見本の自動切り抜き表示・「試す」。ファイル名での自動振り分けは廃止。
+- LINE風のトーク一覧：個別／グループ（最大3人同時表示）、続きから再開、トークごとの名前変更・削除・書き出し。
+- 複数人のときはAIが「誰が・どの表情で・何を言うか」を返し、名前欄と口パクが話者に切り替わる。
+- タップ音：「movも可」という誤った説明を削除。mov/mp4 を選んだらはっきり案内。読めないタップ音のエラーは同じファイルにつき1回だけ通知。
+- 保存データを消されにくくする要求（storage.persist）。オリジナルのアイコン・アプリ名。ホーム画面で空のときの案内。
+- 背景・フォント・タップ音・APIキー等は全キャラ共通に整理。
+
+## 第2回（2026-10-28 14:44:34）
+- タップ音を追加（文字送り・ページ送りの画面タップ時のみ）。前の無音カット・音量自動調整・設定でON/OFFと音量。
+- Claudeアプリのプレビュー画面で立ち絵が出なかった件（blob URL 禁止）→ data URL へ自動切り替え・エラー通知。
+- 制限のある場所で開かれたら「Safariで開いて」と案内。
+
+## 第1回（2026-10-28 14:09:16）
+- 新規作成。会話・表情自動切り替え・瞬き・口パク・診断コピー・バックアップ・改善ログ。
+`;
+
+/* ====== 小道具 ====== */
+const $ = s => document.querySelector(s);
+const sleep = ms => new Promise(r => setTimeout(r, ms));
+const esc = s => String(s == null ? '' : s).replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+const uid = () => Date.now().toString(36) + Math.random().toString(36).slice(2,8);
+const norm = s => String(s || '').replace(/[\s　・･]/g,'');
+function lsGet(k){ try{ return localStorage.getItem(k); }catch(e){ return null; } }
+function lsSet(k,v){ try{ localStorage.setItem(k,v); return true; }catch(e){ return false; } }
+/* 置き場所で保存の名前を切り替える：/lab/（試作）と /chat/（本番）で同じファイルを使う */
+const IS_LAB = /\/lab\//.test(location.pathname);
+const K = IS_LAB
+  ? { settings:'lab.settings', logs:'lab.logs', idb:'akariLab', cfg:'lab.chat.cfg', manual:'lab.novelManual', synced:'lab.novelSynced' }
+  : { settings:'novel.settings', logs:'novel.logs', idb:'charaNovel', cfg:'chat.cfg', manual:'novel.manual', synced:'novel.synced' };
+const isStandalone = !!(window.navigator.standalone || (window.matchMedia && matchMedia('(display-mode: standalone)').matches));
+
+/* ====== 動作の記録 ====== */
+let LOGS = []; try{ LOGS = JSON.parse(lsGet(K.logs)||'[]'); }catch(e){ LOGS = []; }
+let lastReq = null, lastResp = null, lastError = null;
+function log(level, msg, extra){
+  const e = { t: new Date().toLocaleString('ja-JP'), level, msg: String(msg).slice(0,2000) };
+  if (extra) e.x = String(extra).slice(0,3000);
+  LOGS.push(e); if (LOGS.length > 300) LOGS = LOGS.slice(-300);
+  lsSet(K.logs, JSON.stringify(LOGS));
+  if (level === 'error'){ lastError = e; toast(msg, true); }
+}
+window.addEventListener('error', e => log('error', 'JSエラー：' + e.message, `${e.filename||''}:${e.lineno||''}:${e.colno||''}\n${e.error && e.error.stack || ''}`));
+window.addEventListener('unhandledrejection', e => log('error', 'Promiseエラー：' + (e.reason && e.reason.message || e.reason), e.reason && e.reason.stack));
+let toastTimer = 0;
+function toast(msg, isErr, ms){
+  const t = $('#toast'); $('#toastMsg').textContent = msg;
+  t.classList.toggle('ok', !isErr); $('#toastBtn').style.display = isErr ? '' : 'none';
+  t.classList.add('show'); clearTimeout(toastTimer);
+  toastTimer = setTimeout(() => t.classList.remove('show'), ms || (isErr ? 15000 : 2500));
+}
+async function copyText(t){
+  try{ await navigator.clipboard.writeText(t); return true; }catch(e){}
+  const ta = document.createElement('textarea'); ta.value = t; ta.setAttribute('readonly','');
+  ta.style.cssText = 'position:fixed;top:0;left:0;opacity:0'; document.body.appendChild(ta);
+  ta.select(); ta.setSelectionRange(0, t.length); let ok = false;
+  try{ ok = document.execCommand('copy'); }catch(e){} ta.remove(); return ok;
+}
+
+/* ====== 共通設定 ====== */
+const AKARI_PROMPT = `あなたは「伊達朱里（だて あかり）」として、相手と会話する。
+- 大学に通う成人女性。テニス部に所属している
+- 非常にネガティブで自己評価がとても低い。「私なんか」「すみません」「ごめんなさい」が口癖で、すぐに自分を卑下して謝る
+- 誰に対しても敬語で話す。お嬢様口調ではなく、控えめで自信のない普通の丁寧語
+- 一人称は「私」
+- 言葉に詰まりやすく、「……」「あ、えと……」「す、すみません」のような言いよどみや繰り返しが多い
+- テニスの才能は本物で、実際にかなり上手い。でも本人は絶対に認めず、勝っても「たまたま」「相手の方の調子が悪かっただけ」と言う
+- 触れられたり褒められたりすると、慌てて恐縮する
+- 卑屈ではあるが根は優しく、相手のことはきちんと気遣う
+- 性的な話題には乗らず、真っ赤になって慌てて話を逸らす
+- AIであることには触れず、朱里として自然に会話を続ける`;
+const GDEF = { apiKey:'', endpoint:'https://api.x.ai/v1/chat/completions', model:'grok-4.6', temperature:0.9, turns:30,
+  userName:'あなた', srvUrl:'', srvToken:'', uraFaceAI:true, aiProvider:'grok', geminiKey:'', geminiModel:'gemini-flash-latest', speed:45, auto:false, seOn:true, seVol:80, room:null, seErrName:'', blinkFade:true, blinkHalfMs:45, blinkCloseMs:90, blinkAlpha:50 };
+let S = Object.assign({}, GDEF);
+try{ Object.assign(S, JSON.parse(lsGet(K.settings)||'{}')); }catch(e){}
+function saveS(){ if(!lsSet(K.settings, JSON.stringify(S))) log('warn','設定を保存できませんでした（プライベートブラウズ等）'); syncLineCfg(true); scheduleNovelSync(); }
+/* LINE風アプリ（同じフォルダの index.html）とサーバーURL・合言葉を共有：K.cfg（{url, token}）。本番は chat.cfg */
+function syncLineCfg(write){
+  let c = null; try{ c = JSON.parse(lsGet(K.cfg) || 'null'); }catch(e){}
+  if (write){ if (S.srvUrl && (!c || c.url !== S.srvUrl || (c.token || '') !== (S.srvToken || ''))) lsSet(K.cfg, JSON.stringify(Object.assign({}, c || {}, { url:S.srvUrl, token:S.srvToken || '' }))); return; }
+  if (c && c.url){ S.srvUrl = c.url; S.srvToken = c.token || ''; }
+  else if (S.srvUrl) syncLineCfg(true);
+}
+syncLineCfg(false);
+const QS = new URLSearchParams(location.search);
+const FROM_LINE = QS.get('from') === 'line';
+
+/* ====== IndexedDB ====== */
+const idb = {
+  db:null,
+  open(){ return new Promise((res,rej)=>{ const r = indexedDB.open(K.idb,1);
+    r.onupgradeneeded = () => r.result.createObjectStore('kv');
+    r.onsuccess = () => { this.db = r.result; res(); }; r.onerror = () => rej(r.error); }); },
+  tx(mode, fn){ return new Promise((res,rej)=>{ const tx = this.db.transaction('kv', mode); const st = tx.objectStore('kv'); let out;
+    const q = fn(st); if (q) q.onsuccess = () => { out = q.result; }; tx.oncomplete = () => res(out); tx.onerror = () => rej(tx.error); tx.onabort = () => rej(tx.error); }); },
+  get(k){ return this.tx('readonly', st => st.get(k)); },
+  set(k,v){ return this.tx('readwrite', st => { st.put(v,k); }); },
+  del(k){ return this.tx('readwrite', st => { st.delete(k); }); }
+};
+
+/* ====== 画像・ファイルの記録 ====== */
+const REC = new Map();      // id -> {name,type,buf}
+const URLS = new Map(), DATAURLS = new Map(), THUMBS = new Map(), DIMS = new Map();
+let useData = false;
+function imgType(a){ if (a.type && a.type.startsWith('image/')) return a.type; return /\.jpe?g$/i.test(a.name) ? 'image/jpeg' : /\.webp$/i.test(a.name) ? 'image/webp' : 'image/png'; }
+async function loadRec(id){ if (!id || REC.has(id)) return REC.get(id); try{ const r = await idb.get('img:' + id); if (r) REC.set(id, r); return r; }catch(e){ log('error','保存した素材を読み込めませんでした：' + e.message); } }
+async function putRec(file){ const id = uid(); const r = { name:file.name, type:file.type || '', buf: await file.arrayBuffer() }; await idb.set('img:' + id, r); REC.set(id, r); return id; }
+async function delRec(id){ if (!id) return; try{ await idb.del('img:' + id); }catch(e){} const u = URLS.get(id); if (u) URL.revokeObjectURL(u); URLS.delete(id); DATAURLS.delete(id); THUMBS.delete(id); REC.delete(id); }
+function urlOf(id){
+  const a = REC.get(id); if (!a) return '';
+  if (useData && DATAURLS.has(id)) return DATAURLS.get(id);
+  if (!URLS.has(id)){ try{ URLS.set(id, URL.createObjectURL(new Blob([a.buf],{type:imgType(a)}))); }catch(e){ return DATAURLS.get(id) || ''; } }
+  return URLS.get(id);
+}
+function toData(id){ if (DATAURLS.has(id)) return Promise.resolve(DATAURLS.get(id)); const a = REC.get(id); if (!a) return Promise.resolve('');
+  return new Promise((res,rej) => { const fr = new FileReader(); fr.onload = () => { DATAURLS.set(id, fr.result); res(fr.result); }; fr.onerror = () => rej(fr.error); fr.readAsDataURL(new Blob([a.buf],{type:imgType(a)})); }); }
+function loadImg(u){ return new Promise(r => { if (!u) return r(null); const i = new Image(); i.onload = () => r(i); i.onerror = () => r(null); i.src = u; }); }
+async function ensureImg(id){   // 表示できるか確認（だめなら data URL に切り替え）
+  if (!id) return null; await loadRec(id); if (!REC.has(id)) return null;
+  let i = await loadImg(urlOf(id));
+  if (!i && !useData){ try{ const d = await toData(id); if (d && (i = await loadImg(d))){ useData = true; log('warn','この画面では一時アドレス（blob）で画像を出せないため、別の方法（data URL）に切り替えました'); } }catch(e){} }
+  if (!i && useData){ await toData(id); i = await loadImg(urlOf(id)); }
+  if (i) DIMS.set(id, [i.naturalWidth, i.naturalHeight]);
+  return i;
+}
+async function thumbOf(id, whole){   // 目・口の部分を切り抜いた見本
+  if (THUMBS.has(id)) return THUMBS.get(id);
+  const i = await ensureImg(id); if (!i) return '';
+  const W = i.naturalWidth, H = i.naturalHeight, k = Math.min(1, 400 / Math.max(W, H));
+  let bx = 0, by = 0, bw = W, bh = H;
+  if (!whole){
+    const c = document.createElement('canvas'); c.width = Math.max(1, Math.round(W*k)); c.height = Math.max(1, Math.round(H*k));
+    const g = c.getContext('2d'); g.drawImage(i, 0, 0, c.width, c.height);
+    try{
+      const d = g.getImageData(0, 0, c.width, c.height).data; let x0 = c.width, y0 = c.height, x1 = -1, y1 = -1;
+      for (let y = 0; y < c.height; y++) for (let x = 0; x < c.width; x++) if (d[(y*c.width + x)*4 + 3] > 16){ if (x < x0) x0 = x; if (x > x1) x1 = x; if (y < y0) y0 = y; if (y > y1) y1 = y; }
+      if (x1 >= 0){ const p = 0.25; let w = (x1-x0+1)/k, h = (y1-y0+1)/k; const s = Math.max(w, h) * (1 + p*2);
+        bx = Math.max(0, x0/k + w/2 - s/2); by = Math.max(0, y0/k + h/2 - s/2); bw = Math.min(W - bx, s); bh = Math.min(H - by, s); }
+    }catch(e){}
+  }
+  const o = document.createElement('canvas'), S2 = 128, sc = Math.min(S2/bw, S2/bh);
+  o.width = Math.max(1, Math.round(bw*sc)); o.height = Math.max(1, Math.round(bh*sc));
+  o.getContext('2d').drawImage(i, bx, by, bw, bh, 0, 0, o.width, o.height);
+  let u = ''; try{ u = o.toDataURL('image/png'); }catch(e){}
+  THUMBS.set(id, u); return u;
+}
+
+/* ====== データ ====== */
+let GLOBAL = { bg:null, font:null, se:null };
+let CHARS = [], ROOMS = [], ROOM = null, HIST = [];
+const charById = id => CHARS.find(c => c.id === id);
+function newChar(name){ return { id:uid(), name, prompt:'', callName:'あなた', scale:146.5, top:1.2, xoff:0, base:null, faces:[] }; }
+async function saveChars(){ try{ await idb.set('chars', CHARS); }catch(e){ log('error','キャラを保存できませんでした：' + e.message); } pushFacesSoon(); scheduleNovelSync(); }
+/* 裏トーク用：LINE風につないだキャラの表情（名前・説明だけ。画像は送らない）をサーバーに登録。サーバーが裏の返事で表情を選ぶ */
+let facesSent = {}, pushFacesT = 0;
+function pushFacesSoon(){ clearTimeout(pushFacesT); pushFacesT = setTimeout(() => pushFaces().catch(() => {}), 1500); }
+async function pushFaces(){
+  if (!S.srvUrl) return;
+  const done = new Set();
+  for (const c of CHARS){
+    if (!c.lineId || done.has(c.lineId)) continue; done.add(c.lineId);
+    for (const kind of ['ura', 'omote']){   // 裏トーク用・表（会う場面）用
+      const faces = usableFaces(c, kind).map(n => { const f = faceObj(c, n); return { name:n, desc:(f && f.desc) || '' }; });
+      const sig = JSON.stringify(faces), key = c.lineId + '|' + kind;
+      if (facesSent[key] === sig) continue;
+      try{ await srv('POST', '/faces', { charId:c.lineId, kind, faces }); facesSent[key] = sig; }
+      catch(e){ log('warn', `表情をLINE風のサーバーに登録できませんでした（${c.name}）：` + e.message); return; }
+    }
+  }
+}
+async function saveRooms(){ try{ await idb.set('rooms', ROOMS); }catch(e){ log('error','トークを保存できませんでした：' + e.message); } scheduleNovelSync(); }
+async function saveGlobal(){ try{ await idb.set('global', GLOBAL); }catch(e){ log('error','素材を保存できませんでした：' + e.message); } scheduleNovelSync(); }
+async function saveHist(){ if (!ROOM) return; try{ await idb.set('hist:' + ROOM.id, HIST); }catch(e){ log('error','会話を保存できませんでした：' + e.message); } scheduleNovelSync(); }
+let saveCharsT = 0; function saveCharsSoon(){ clearTimeout(saveCharsT); saveCharsT = setTimeout(saveChars, 400); }
+
+/* 第1・2回のデータを引っ越す */
+const STATE_MAP = { open:'open', half:'half', close:'close', closed:'close', '開':'open', '半':'half', '閉':'close' };
+async function migrateLegacy(oldAssets, oldHist, oldS){
+  const c = newChar(oldS.dispName || '伊達　朱里');
+  c.prompt = oldS.prompt || AKARI_PROMPT; c.callName = oldS.callName || '転校生さん';
+  if (oldS.scale != null) c.scale = +oldS.scale; if (oldS.top != null) c.top = +oldS.top; if (oldS.xpos != null) c.xoff = +oldS.xpos - 50;
+  const put = async a => { if (!a || !a.buf) return null; const id = uid(); const r = { name:a.name, type:a.type || '', buf:a.buf }; await idb.set('img:' + id, r); REC.set(id, r); return id; };
+  const g = { bg:null, font:null, se:null };
+  if (oldAssets){
+    g.bg = await put(oldAssets.bg); g.font = await put(oldAssets.font); g.se = await put(oldAssets.se); c.base = await put(oldAssets.base);
+    const faces = {}, F = n => (faces[n] = faces[n] || { eye:{}, mouth:{} });
+    for (const p of (oldAssets.parts || [])){
+      const n = String(p.name).replace(/\.[^.]+$/,'').trim(); let m;
+      if ((m = n.match(/^(eye|eyes|目)(?:[_\-](.+?))?[_\-](open|half|close|closed|開|半|閉)$/i))) F(m[2] || 'normal').eye[STATE_MAP[m[3].toLowerCase()]] = await put(p);
+      else if ((m = n.match(/^(mouth|口)(?:[_\-](.+?))?[_\-](open|half|close|closed|開|半|閉)$/i))) F(m[2] || 'normal').mouth[STATE_MAP[m[3].toLowerCase()]] = await put(p);
+    }
+    const fd = oldS.faceDesc || {};
+    c.faces = Object.entries(faces).map(([k,v]) => ({ id:uid(), name: k === 'normal' ? '通常' : k, desc: fd[k] || '', eye:v.eye, mouth:v.mouth }));
+  }
+  const r = { id:uid(), name: c.name.replace(/[\s　]/g,''), members:[c.id], updated:Date.now(), last:null };
+  if (Array.isArray(oldHist) && oldHist.length){
+    const h = oldHist.map(e => e.role === 'user' ? { role:'user', text:e.text, t:e.t }
+      : { role:'chars', t:e.t, lines:(e.lines || []).map(l => ({ who:c.id, face: l.face === 'normal' ? '通常' : l.face, text:l.text })) });
+    await idb.set('hist:' + r.id, h);
+    const la = [...h].reverse().find(x => x.role === 'chars'); if (la){ const l = la.lines[la.lines.length-1]; r.last = { who:c.id, text:l.text }; r.updated = la.t || Date.now(); }
+  }
+  CHARS = [c]; ROOMS = [r]; GLOBAL = g; S.room = r.id;
+  for (const k of ['prompt','callName','dispName','scale','top','xpos','faceDesc']) delete S[k];
+  await saveChars(); await saveRooms(); await saveGlobal(); saveS();
+  try{ await idb.del('assets'); await idb.del('history'); }catch(e){}
+  log('info', `第${VERSION.no}回の形式にデータを引っ越しました（表情${c.faces.length}件・会話${(oldHist||[]).length}件）`);
+}
+
+/* ====== 素材（共通） ====== */
+let fontOk = false, fontName = '';
+async function applyGlobal(){
+  if (GLOBAL.bg){ const i = await ensureImg(GLOBAL.bg);
+    if (i) $('#bg').style.backgroundImage = `url("${urlOf(GLOBAL.bg)}")`; else { $('#bg').style.backgroundImage = ''; log('error', '背景を表示できませんでした' + envHint()); } }
+  else $('#bg').style.backgroundImage = '';
+  if (GLOBAL.font && fontName !== GLOBAL.font){
+    const r = await loadRec(GLOBAL.font);
+    try{ const ff = new FontFace('AkariFont', r.buf); await ff.load(); document.fonts.add(ff); fontOk = true; fontName = GLOBAL.font; }
+    catch(e){ fontOk = false; log('error','フォントを読み込めませんでした：' + (r && r.name) + '（' + e.message + '）'); }
+  }
+  prepareSE();
+}
+function envHint(){ return envBad ? '。制限のある画面で開いているためです。Safariで開いてください' : '（ファイルが壊れているか、形式に非対応の可能性）'; }
+
+/* ====== タップ音 ====== */
+let actx = null, seBuf = null;
+function ensureCtx(){
+  if (!actx){ const C = window.AudioContext || window.webkitAudioContext; if (!C) return null; try{ actx = new C(); }catch(e){ return null; } }
+  if (actx.state !== 'running') actx.resume().catch(()=>{});
+  return actx;
+}
+['touchend','click'].forEach(ev => document.addEventListener(ev, () => {
+  const c = ensureCtx(); if (!c || c._unlocked) return;
+  try{ const b = c.createBuffer(1,1,22050), s = c.createBufferSource(); s.buffer = b; s.connect(c.destination); s.start(0); c._unlocked = true; }catch(e){}
+}, { passive:true }));
+function decodeAudio(c, buf){ return new Promise((res,rej) => { const p = c.decodeAudioData(buf, res, rej); if (p && p.then) p.then(res, rej); }); }
+function trimNorm(c, b){
+  const ch = b.numberOfChannels, n = b.length, sr = b.sampleRate; let peak = 0;
+  for (let k = 0; k < ch; k++){ const d = b.getChannelData(k); for (let i = 0; i < n; i++){ const v = Math.abs(d[i]); if (v > peak) peak = v; } }
+  if (peak < 1e-5) return null;
+  let st = n, en = 0;
+  for (let k = 0; k < ch; k++){ const d = b.getChannelData(k);
+    for (let i = 0; i < n; i++) if (Math.abs(d[i]) > peak*.06){ st = Math.min(st, i); break; }
+    for (let i = n-1; i >= 0; i--) if (Math.abs(d[i]) > peak*.01){ en = Math.max(en, i); break; } }
+  st = Math.max(0, st - Math.round(sr*.004)); en = Math.min(n, en + Math.round(sr*.03));
+  const len = Math.max(1, en - st), g = Math.min(40, .9/peak), fade = Math.min(len, Math.round(sr*.015));
+  const out = c.createBuffer(ch, len, sr);
+  for (let k = 0; k < ch; k++){ const d = b.getChannelData(k), o = out.getChannelData(k);
+    for (let i = 0; i < len; i++){ let v = d[st+i]*g; if (i > len-fade) v *= (len-i)/fade; o[i] = v; } }
+  return out;
+}
+let sePrepared = null;
+async function prepareSE(){
+  if (sePrepared === GLOBAL.se) return; sePrepared = GLOBAL.se; seBuf = null;
+  if (!GLOBAL.se){ refreshAssetUI(); return; }
+  const r = await loadRec(GLOBAL.se); if (!r) return;
+  const isVideo = /\.(mov|mp4|m4v)$/i.test(r.name) || /^video\//.test(r.type);
+  const c = ensureCtx(); if (!c){ log('warn','この端末は効果音（Web Audio）に対応していません'); return; }
+  try{
+    const raw = await decodeAudio(c, r.buf.slice(0));
+    seBuf = trimNorm(c, raw);
+    if (!seBuf) log('warn','タップ音のファイルが無音でした：' + r.name);
+    else { log('info', `タップ音を準備：${r.name}（${raw.duration.toFixed(2)}秒→${seBuf.duration.toFixed(2)}秒）`); S.seErrName = ''; saveS(); }
+  }catch(e){
+    const msg = isVideo ? `タップ音「${r.name}」は動画ファイルなので音を取り出せません。m4a・mp3・wav（tap.m4a など）を選び直してください`
+                        : `タップ音を読み込めませんでした：${r.name}（m4a・mp3・wav を試してください）`;
+    if (S.seErrName === r.name) log('warn', msg); else { S.seErrName = r.name; saveS(); log('error', msg); }
+  }
+  refreshAssetUI();
+}
+function playSE(){
+  if (!S.seOn || !seBuf) return; const c = ensureCtx(); if (!c) return;
+  try{ const s = c.createBufferSource(), g = c.createGain(); s.buffer = seBuf; g.gain.value = Math.max(0, S.seVol)/100; s.connect(g); g.connect(c.destination); s.start(0); }
+  catch(e){ log('warn','タップ音を鳴らせませんでした', e.message); }
+}
+
+/* ====== 画面配置 ====== */
+let G = { vw:0, vh:0, sh:0, sw:0, sx:0, sy:0 };
+const POS = { 1:[50], 2:[30,70], 3:[22,50,78] };
+const BACK_POS = [36, 64, 8, 92];          // 後ろの列（前の列のすき間→両端の順）
+const BACK_SCALE = 0.82, BACK_TOP = 2.5;   // 後ろの列：少し小さく・少し下に
+const MAX_MEMBERS = 7;                     // 前3人＋後ろ4人
+let STAGE = [], previewChar = null, spokeAt = 0;
+function layout(){
+  const vw = innerWidth, vh = innerHeight, sh = Math.min(vh, vw*9/16), sw = sh*16/9, sx = (vw-sw)/2, sy = (vh-sh)/2;
+  G = { vw, vh, sh, sw, sx, sy };
+  const r = document.documentElement.style;
+  r.setProperty('--S', sh/750 + 'px'); r.setProperty('--sx', sx + 'px'); r.setProperty('--sy', sy + 'px');
+  r.setProperty('--sw', sw + 'px'); r.setProperty('--sh', sh + 'px');
+  const nf = STAGE.filter(st => st.row === 'f').length;
+  STAGE.forEach(st => {
+    const c = st.c, d = c.base && DIMS.get(c.base), ratio = d ? d[0]/d[1] : 923/2104, back = st.row === 'b';
+    const h = sh * (+c.scale || 146.5)/100 * (back ? BACK_SCALE : 1), w = h * ratio;
+    const pos = back ? BACK_POS[st.slot] : (POS[nf] || POS[3])[st.slot];
+    const cx = sx + sw * (pos + (+c.xoff || 0))/100, top = sy + sh*((+c.top || 0) + (back ? BACK_TOP : 0))/100;
+    Object.assign(st.el.style, { height:h + 'px', width:w + 'px', left:(cx - w/2) + 'px', top:top + 'px',
+      zIndex: back ? 1 + st.slot : (nf === 3 && st.slot === 1) ? 15 : 10 + st.slot });
+  });
+}
+addEventListener('resize', () => layout());
+addEventListener('orientationchange', () => setTimeout(layout, 300));
+function stageMembers(){ if (previewChar){ const c = charById(previewChar); return c ? [c] : []; } return ROOM ? ROOM.members.map(charById).filter(Boolean) : []; }
+async function buildStage(){
+  for (const st of STAGE) st.dead = true;
+  const box = $('#charas'); box.innerHTML = '';
+  const ms = stageMembers();
+  for (const c of ms){ if (c.base) await ensureImg(c.base); for (const f of c.faces) for (const k of ['eye','mouth']) for (const v of Object.values(f[k] || {})) if (v) ensureImg(v); }
+  STAGE = ms.map(c => {
+    const el = document.createElement('div'); el.className = 'chara';
+    const mk = () => { const i = document.createElement('img'); i.alt = ''; el.appendChild(i); return i; };
+    const st = { c, el, base:mk(), eye:mk(), eye2:mk(), mouth:mk(), face:defaultFace(c), es:'open', ms:'close', dead:false, said:0 };
+    el.classList.add('noanim'); box.appendChild(el); blinkLoop(st); return st;
+  });
+  STAGE.forEach((st, i) => { st.row = i < 3 ? 'f' : 'b'; st.slot = i < 3 ? i : i - 3; });
+  layout(); STAGE.forEach(renderChar);
+  requestAnimationFrame(() => requestAnimationFrame(() => STAGE.forEach(st => st.el.classList.remove('noanim'))));
+  const bad = ms.filter(c => c.base && !DIMS.get(c.base)).map(c => c.name);
+  if (bad.length) log('error', `立ち絵を表示できませんでした：${bad.join('、')}` + envHint());
+}
+
+/* ====== 表情・瞬き・口パク ====== */
+const faceObj = (c, n) => c.faces.find(f => f.name === n) || null;
+function defaultFace(c){ const f = faceObj(c,'通常') || c.faces[0]; return f ? f.name : '通常'; }
+function faceNames(c){ const n = c.faces.map(f => f.name); return n.length ? n : ['通常']; }
+/* 表情の表示・非表示（トークの種類ごと）：f.off = { normal, ura, omote }（true＝そのトークでは使わない）。既定の表情（「通常」）は外せない */
+const KINDS = [['normal','ふつう'],['ura','裏'],['omote','表']];
+const roomKind = r => (r && r.kind) || 'normal';
+function usableFaces(c, kind){
+  const def = defaultFace(c);
+  const n = c.faces.filter(f => f.name === def || !(f.off && f.off[kind])).map(f => f.name);
+  return n.length ? n : [def];
+}
+function setImg(el, id){
+  const u = id ? urlOf(id) : '';
+  if (el.dataset.u !== u){ el.dataset.u = u; if (u){ el.onerror = () => { el.style.display = 'none'; const r = REC.get(id); log('error', `画像を表示できませんでした：${r ? r.name : id}` + envHint()); }; el.src = u; } }
+  el.style.display = u ? 'block' : 'none';
+}
+function renderChar(st){
+  if (st.dead) return; const f = faceObj(st.c, st.face);
+  setImg(st.base, st.c.base);
+  const fade = st.es === 'fade' && f && f.eye && f.eye.close;
+  setImg(st.eye, f && f.eye ? (f.eye[fade ? 'open' : st.es] || null) : null);
+  setImg(st.eye2, fade ? f.eye.close : null); st.eye2.style.opacity = fade ? Math.min(.95, Math.max(.05, S.blinkAlpha/100)) : '';
+  setImg(st.mouth, f && f.mouth ? (f.mouth[st.ms] || null) : null);
+}
+function setFace(st, name){ if (!st) return; st.face = faceNames(st.c).includes(name) ? name : defaultFace(st.c); st.es = 'open'; st.ms = 'close'; renderChar(st); }
+async function blinkOnce(st, slow){
+  const f = faceObj(st.c, st.face); if (!f || !f.eye || !f.eye.close || st.es !== 'open' || st.dead) return;
+  const k = slow ? 10 : 1, h = (+S.blinkHalfMs || 45)*k, c = (+S.blinkCloseMs || 90)*k;
+  // 本物の半目があればそれを使い、無ければ疑似半目（開きと閉じの溶け合わせ）か、閉じだけ
+  const seq = f.eye.half ? [['half',h],['close',c],['half',h]] : S.blinkFade ? [['fade',h],['close',c],['fade',h]] : [['close',c]];
+  for (const [s,d] of seq){ st.es = s; renderChar(st); await sleep(d); }
+  st.es = 'open'; renderChar(st);
+}
+function blinkLoop(st){ setTimeout(async () => { if (st.dead) return; await blinkOnce(st); if (Math.random() < .15){ await sleep(160); await blinkOnce(st); } blinkLoop(st); }, 2000 + Math.random()*4000); }
+let speaker = null, speaking = false;
+setInterval(() => {
+  for (const st of STAGE){
+    const f = faceObj(st.c, st.face), m = f && f.mouth || {};
+    let next = 'close';
+    if (st === speaker && speaking && (m.open || m.half)) next = st.ms === 'close' ? ((m.half && (!m.open || Math.random() < .4)) ? 'half' : 'open') : 'close';
+    if (next !== st.ms){ st.ms = next; renderChar(st); }
+  }
+}, 100);
+
+/* ====== 文字送り ====== */
+const textEl = $('#text'), hintEl = $('#hint');
+let pages = [], pageIdx = 0, state = 'idle', typeTok = 0, skipType = false, autoTimer = 0;
+function capChars(){
+  const fs = parseFloat(getComputedStyle(textEl).fontSize) || 30;
+  const cpl = Math.max(8, Math.floor(textEl.clientWidth / (fs*1.12)));
+  return cpl*3 - 1;
+}
+function splitText(t, cap){
+  const out = []; let arr = [...String(t).trim()];
+  while (arr.length > cap){
+    let cut = -1;
+    for (let i = cap; i > cap*.45; i--) if ('。！？!?」』）'.includes(arr[i-1]) && arr[i] !== '…' && !'」』）。'.includes(arr[i])) { cut = i; break; }
+    if (cut < 0) for (let i = cap; i > cap*.45; i--) if ('、，,…'.includes(arr[i-1]) && arr[i] !== '…' && !'。、」'.includes(arr[i])) { cut = i; break; }
+    if (cut < 0) cut = cap;
+    out.push(arr.slice(0,cut).join('')); arr = [...arr.slice(cut).join('').trim()];
+  }
+  if (arr.length) out.push(arr.join(''));
+  return out;
+}
+function paginate(lines){ const cap = capChars(), out = []; for (const l of lines) for (const t of splitText(l.text, cap)) out.push({ who:l.who, face:l.face, text:t }); return out; }
+function showHint(kind){
+  if (!kind){ hintEl.style.display = 'none'; return; }
+  hintEl.textContent = kind === 'next' ? '▼' : kind === 'retry' ? 'タップでもう一度' : 'タップで話しかける';
+  hintEl.style.display = 'block';
+}
+function stageOf(who){ return STAGE.find(s => s.c.id === who) || null; }
+function showName(who){ textEl.classList.toggle('narr', who === '');   // ナレーション（裏の＊）は少し薄い色
+  const c = who === '' ? null : (charById(who) || (STAGE[0] && STAGE[0].c)); $('#nameTxt').textContent = c ? c.name : ''; $('#nameplate').classList.toggle('hide', !c); }
+// 後ろの列の人が話すときは、前の列でいちばん長く黙っている人と入れ替わる
+function bringFront(st){
+  if (!st) return; st.said = ++spokeAt;
+  if (st.row !== 'b') return;
+  const out = STAGE.filter(x => x.row === 'f').sort((a,b) => a.said - b.said)[0]; if (!out) return;
+  [st.row, st.slot, out.row, out.slot] = [out.row, out.slot, st.row, st.slot];
+  layout();
+}
+async function typePage(p){
+  const tok = ++typeTok; const st = p.who === '' ? null : (stageOf(p.who) || STAGE[0]); bringFront(st); setFace(st, p.face); showName(p.who);
+  speaker = st; textEl.textContent = ''; showHint(null); skipType = false; const chars = [...p.text];
+  for (let i = 0; i < chars.length; i++){
+    if (tok !== typeTok) return false;
+    if (skipType || S.speed <= 0){ textEl.textContent = p.text; break; }
+    const c = chars[i]; textEl.textContent += c;
+    let d = +S.speed;
+    if ('、，,'.includes(c)){ speaking = false; d += 140; }
+    else if ('。！？!?…'.includes(c)){ speaking = false; d += c === '…' ? 90 : 300; }
+    else if (!' 　「」『』（）'.includes(c)) speaking = true;
+    await sleep(d);
+  }
+  speaking = false; return tok === typeTok;
+}
+async function playPage(){
+  clearTimeout(autoTimer); state = 'typing';
+  const p = pages[pageIdx]; const ok = await typePage(p); if (!ok) return;
+  if (pageIdx < pages.length - 1){
+    state = 'pageDone'; showHint('next');
+    if (S.auto) autoTimer = setTimeout(() => { if (state === 'pageDone') advance('auto'); }, 1000 + [...p.text].length*60);
+  } else { state = 'idle'; showHint('end'); }
+}
+function showLines(lines){ pages = paginate(lines); pageIdx = 0; if (!pages.length) return; return playPage(); }
+function showStatic(p){ typeTok++; speaking = false; clearTimeout(autoTimer); const st = p.who === '' ? null : (stageOf(p.who) || STAGE[0]); bringFront(st); setFace(st, p.face); showName(p.who); textEl.textContent = p.text; state = 'idle'; showHint('end'); }
+function jumpEnd(){ if (!pages.length || state === 'thinking' || state === 'error') return; pageIdx = pages.length - 1; showStatic(pages[pageIdx]); }
+function advance(src){   // src: 'tap'（画面タップ）/'skip'（▷|）/'auto'（オート）
+  clearTimeout(autoTimer);
+  if (previewChar && src === 'tap'){ previewChar = null; openRoom(ROOM && ROOM.id); return; }
+  if (state === 'typing'){ if (src === 'tap') playSE(); skipType = true; return; }
+  if (state === 'pageDone'){ if (src === 'tap') playSE(); pageIdx++; playPage(); return; }
+  if (state === 'error'){ if (src !== 'auto') send(null); return; }
+  if (state === 'idle' && src === 'tap'){ if (!ROOM){ openMenu('pRoom'); return; } openInput(); }
+}
+
+/* ====== AIとの会話 ====== */
+function nowText(){
+  const d = new Date(), w = '日月火水木金土'[d.getDay()];
+  return `${d.getFullYear()}年${d.getMonth()+1}月${d.getDate()}日(${w}) ${String(d.getHours()).padStart(2,'0')}:${String(d.getMinutes()).padStart(2,'0')}`;
+}
+const faceListText = c => usableFaces(c, roomKind(ROOM)).map(n => { const f = faceObj(c, n); return `  - ${n}${f && f.desc ? '：' + f.desc : ''}`; }).join('\n');
+function systemPrompt(ms){
+  const rule = `JSONだけを返す。前後に説明文やコードブロック記号を付けない。`;
+  if (ms.length === 1){
+    const c = ms[0];
+    return `${c.prompt || `あなたは「${c.name}」として、相手と会話する。`}
+
+# 今の状況
+- 現在日時：${nowText()}（日本時間）
+- 相手の呼び方：「${c.callName}」
+
+# 返答の形式（必ず守る）
+${rule}
+{"lines":[{"face":"表情名","text":"台詞"}]}
+- lines は1〜4個。1つの text は60文字以内を目安にし、表情が変わるところで分ける
+- text は${c.name}が口に出す台詞だけ。（）のト書き、地の文、話者名は書かない
+- face は次の中から、その台詞の気持ちに一番合うものを必ず1つ選ぶ：
+${faceListText(c)}`;
+  }
+  const names = ms.map(c => c.name);
+  return `これは ${names.join('・')} の${ms.length}人と、相手（ユーザー）がその場にいる会話です。あなたは${ms.length}人全員を、それぞれの設定どおりに演じ分ける。
+
+${ms.map(c => `# ${c.name} の設定
+${c.prompt || `（${c.name}として自然に話す）`}
+- ${c.name}から相手への呼び方：「${c.callName}」
+- ${c.name}の使える表情：
+${faceListText(c)}`).join('\n\n')}
+
+# 今の状況
+- 現在日時：${nowText()}（日本時間）
+
+# 返答の形式（必ず守る）
+${rule}
+{"lines":[{"who":"話す人の名前","face":"表情名","text":"台詞"}]}
+- who は ${names.map(n => `「${n}」`).join('、')} のどれかをそのまま書く
+- lines は1〜${ms.length > 3 ? 8 : 6}個。1つの text は60文字以内を目安にし、話す人や表情が変わるところで分ける
+- 全員が毎回話す必要はない。流れの中で自然な人が話す。キャラ同士で話してもよい
+- 相手（ユーザー）の台詞や行動は書かない。text は口に出す台詞だけで、（）のト書き・地の文・話者名は書かない
+- face は、その人の「使える表情」の中から必ず1つ選ぶ`;
+}
+function buildMessages(){
+  const ms = ROOM.members.map(charById).filter(Boolean);
+  const msgs = [{ role:'system', content: systemPrompt(ms) }];
+  for (const h of HIST.slice(-Math.max(2, S.turns*2))){
+    if (h.role === 'user') msgs.push({ role:'user', content:h.text });
+    else msgs.push({ role:'assistant', content: JSON.stringify({ lines: h.lines.map(l => ms.length === 1 ? { face:l.face, text:l.text } : { who:(charById(l.who) || {}).name || '', face:l.face, text:l.text }) }) });
+  }
+  return msgs;
+}
+function hintFor(st){
+  if (st === 400) return '（送った内容かモデル名の形式が受け付けられませんでした）';
+  if (st === 401 || st === 403) return '（APIキーが違う・無効・権限なしの可能性）';
+  if (st === 404) return '（モデル名かエンドポイントURLが違う可能性。設定→「一覧を取得」で確認）';
+  if (st === 429) return '（使いすぎ・残高不足・回数制限の可能性。少し待つか、xAI・Googleの残高や上限を確認）';
+  if (st >= 500) return '（AIの会社側の不調の可能性。少し待って再送）';
+  return '';
+}
+const provOf = r => (r && r.ai) || S.aiProvider || 'grok';
+const provName = p => p === 'gemini' ? 'Gemini' : 'Grok';
+function callAI(){ return provOf(ROOM) === 'gemini' ? callGemini() : callGrok(); }
+async function postJSON(url, headers, bodyStr){
+  const ctrl = new AbortController(), to = setTimeout(() => ctrl.abort(), 90000);
+  let res;
+  try{ res = await fetch(url, { method:'POST', headers:Object.assign({ 'Content-Type':'application/json' }, headers), body:bodyStr, signal:ctrl.signal }); }
+  catch(e){ throw new Error(e.name === 'AbortError' ? '90秒待っても返事が来ませんでした（タイムアウト）'
+      : `通信できませんでした（${e.message}）。電波、URL、またはブラウザからの直接接続（CORS）が拒否されている可能性`); }
+  finally{ clearTimeout(to); }
+  const txt = await res.text();
+  lastResp = { status:res.status, body:txt.slice(0,1500) };
+  if (!res.ok){
+    let m = ''; try{ const j = JSON.parse(txt); m = (j.error && (j.error.message || j.error)) || j.message || j.detail || ''; }catch(e){}
+    throw new Error(`APIエラー ${res.status}：${String(m || txt).slice(0,240)}${hintFor(res.status)}`);
+  }
+  try{ return JSON.parse(txt); }catch(e){ throw new Error('返事の形式が読めませんでした（JSONではない）'); }
+}
+async function callGemini(){
+  if (!S.geminiKey) throw new Error('GeminiのAPIキーが未設定です。〈 → 設定 で入力してください');
+  const messages = buildMessages(), model = S.geminiModel || 'gemini-flash-latest';
+  // Gemini 形式：system は systemInstruction、assistant は model。同じ役が続くときはまとめ、最初は user から
+  const contents = [];
+  for (const m of messages.slice(1)){
+    const role = m.role === 'assistant' ? 'model' : 'user', last = contents[contents.length-1];
+    if (last && last.role === role) last.parts[0].text += '\n' + m.content; else contents.push({ role, parts:[{ text:m.content }] });
+  }
+  if (!contents.length || contents[0].role !== 'user') contents.unshift({ role:'user', parts:[{ text:'（会話が始まります）' }] });
+  const body = { systemInstruction:{ parts:[{ text:messages[0].content }] }, contents, generationConfig:{ temperature:+S.temperature, responseMimeType:'application/json' } };
+  const bodyStr = JSON.stringify(body);
+  lastReq = { at:new Date().toLocaleString('ja-JP'), ai:'Gemini', model, room:ROOM.name, members:ROOM.members.length, messages:contents.length, chars:bodyStr.length,
+              lastUser:(HIST.filter(h => h.role === 'user').pop() || {}).text || '' };
+  lastResp = null;
+  const j = await postJSON(`https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(model)}:generateContent`, { 'x-goog-api-key':S.geminiKey }, bodyStr);
+  const cand = j.candidates && j.candidates[0];
+  const c = cand && cand.content && (cand.content.parts || []).filter(x => !x.thought).map(x => x.text || '').join('');
+  if (!c) throw new Error('返事が空でした' + (cand && cand.finishReason ? `（終了理由：${cand.finishReason}）` : (j.promptFeedback && j.promptFeedback.blockReason ? `（ブロック：${j.promptFeedback.blockReason}）` : '')));
+  if (j.usageMetadata) log('info', `送受信OK（Gemini）：入力${j.usageMetadata.promptTokenCount||'?'}／出力${j.usageMetadata.candidatesTokenCount||'?'}トークン`);
+  return c;
+}
+async function callGrok(){
+  if (!S.apiKey) throw new Error('xAIのAPIキーが未設定です。〈 → 設定 で入力してください');
+  const messages = buildMessages();
+  const body = { model:S.model, messages, temperature:+S.temperature };
+  const bodyStr = JSON.stringify(body);
+  lastReq = { at:new Date().toLocaleString('ja-JP'), ai:'Grok', endpoint:S.endpoint, model:S.model, room:ROOM.name, members:ROOM.members.length, messages:messages.length, chars:bodyStr.length,
+              lastUser:(HIST.filter(h => h.role === 'user').pop() || {}).text || '' };
+  lastResp = null;
+  const j = await postJSON(S.endpoint, { 'Authorization':'Bearer ' + S.apiKey }, bodyStr);
+  let c = j.choices && j.choices[0] && j.choices[0].message && j.choices[0].message.content;
+  if (Array.isArray(c)) c = c.map(x => x.text || '').join('');
+  if (!c) throw new Error('返事が空でした' + (j.choices && j.choices[0] && j.choices[0].finish_reason ? `（終了理由：${j.choices[0].finish_reason}）` : ''));
+  if (j.usage) log('info', `送受信OK（Grok）：入力${j.usage.prompt_tokens||'?'}／出力${j.usage.completion_tokens||'?'}トークン`);
+  return c;
+}
+function matchWho(w, ms, prev){
+  const n = norm(w); if (!n) return prev || ms[0].id;
+  let c = ms.find(x => norm(x.name) === n) || ms.find(x => norm(x.name).includes(n) || n.includes(norm(x.name)));
+  if (!c) log('info', `知らない話者「${w}」→ ${(charById(prev) || ms[0]).name}`);
+  return c ? c.id : (prev || ms[0].id);
+}
+function parseReply(c){
+  const ms = ROOM.members.map(charById).filter(Boolean);
+  let s = String(c).trim().replace(/^```(?:json)?\s*/i,'').replace(/\s*```$/,'');
+  let lines = null; const a = s.indexOf('{'), b = s.lastIndexOf('}');
+  if (a >= 0 && b > a){
+    try{ const j = JSON.parse(s.slice(a, b+1)); lines = Array.isArray(j.lines) ? j.lines : (j.text ? [j] : null); }
+    catch(e){ log('warn','返事のJSONを解析できず、本文をそのまま表示しました', s.slice(0,600)); }
+  } else log('warn','返事がJSON形式ではありませんでした', s.slice(0,600));
+  if (!lines) lines = s.replace(/[{}"]/g,'').split(/\n+/).map(t => ({ text:t }));
+  let prev = null;
+  return lines.map(l => {
+    const who = ms.length === 1 ? ms[0].id : matchWho(l.who, ms, prev); prev = who;
+    const ch = charById(who); let f = String(l.face || '').trim();
+    if (!usableFaces(ch, roomKind(ROOM)).includes(f)){ if (l.face) log('info', `${ch.name}の${faceNames(ch).includes(f) ? 'このトークで使わない' : '知らない'}表情「${f}」→ ${defaultFace(ch)}`); f = defaultFace(ch); }
+    return { who, face:f, text:String(l.text || '').replace(/^[（(].*?[)）]\s*/,'').trim() };
+  }).filter(l => l.text);
+}
+let thinkTimer = 0;
+function startThinking(){
+  state = 'thinking'; showHint(null); typeTok++; speaking = false;
+  let n = 0; textEl.textContent = '…'; clearInterval(thinkTimer);
+  thinkTimer = setInterval(() => { n = (n+1)%3; textEl.textContent = '…'.repeat(n+1); }, 450);
+}
+async function send(text){
+  if (state === 'thinking' || !ROOM) return;
+  if (ROOM.kind === 'ura') return sendUra(text);
+  if (ROOM.kind === 'omote') return sendMeet(text);
+  const room = ROOM;
+  if (text){ HIST.push({ role:'user', text, t:Date.now() }); await saveHist(); }
+  startThinking();
+  try{
+    const c = await callAI();
+    if (room !== ROOM) return;
+    const lines = parseReply(c);
+    if (!lines.length) throw new Error('返事に台詞が入っていませんでした');
+    HIST.push({ role:'chars', lines, t:Date.now() }); await saveHist();
+    const l = lines[lines.length-1]; room.last = { who:l.who, text:l.text }; room.updated = Date.now(); await saveRooms();
+    clearInterval(thinkTimer); await showLines(lines);
+  }catch(e){
+    clearInterval(thinkTimer); if (room !== ROOM) return; state = 'error';
+    textEl.textContent = '（うまくお返事できませんでした……。タップでもう一度試します）'; showHint('retry');
+    log('error', e.message, lastResp ? `HTTP ${lastResp.status}\n${lastResp.body}` : '');
+  }
+}
+
+/* ====== LINE風アプリのサーバー（試作） ====== */
+let LINE = { chars:[], groups:[], ok:false, msgs:null };
+async function srv(method, path, body){
+  if (!S.srvUrl) throw new Error('設定でLINE風アプリのサーバーURLを入れてください');
+  let r;
+  try{ r = await fetch(S.srvUrl.replace(/\/+$/,'') + path, { method, headers:{ 'Content-Type':'application/json', 'X-App-Token':S.srvToken || '' }, body: body ? JSON.stringify(body) : undefined }); }
+  catch(e){ throw new Error('LINE風アプリのサーバーにつながりません（URLや電波を確認）：' + e.message); }
+  const t = await r.text(); lastResp = { status:r.status, body:t.slice(0,1500) };
+  let j = null; try{ j = JSON.parse(t); }catch(e){}
+  if (!r.ok) throw new Error(`LINE風サーバー ${r.status}：${(j && (j.error || j.message)) || t.slice(0,200)}${r.status === 401 || r.status === 403 ? '（合言葉が違う可能性）' : ''}`);
+  return j || {};
+}
+const lineName = c => (c && (c.uraName || c.name)) || '？';
+async function loadLine(full){
+  const j = await srv('GET', '/sync?since=' + (full ? 0 : 9e15));
+  LINE.chars = j.chars || []; LINE.groups = j.groups || []; LINE.ok = true;
+  if (full) LINE.msgs = j.messages || [];
+  $('#srvState').textContent = `つながりました（キャラ${LINE.chars.length}人・グループ${LINE.groups.length}件）`;
+  return j;
+}
+$('#srvTest').onclick = async () => { try{ await loadLine(false); toast('LINE風アプリのサーバーにつながりました'); }catch(e){ $('#srvState').textContent = '✗ ' + e.message; log('error', e.message); } };
+const novelOfLine = lid => CHARS.find(c => c.lineId === lid);
+function uraMembers(target){   // 裏の相手（キャラ#ura かグループ）→ ノベルのキャラ
+  const base = target.replace(/#ura$/,'');
+  if (base.startsWith('grp-')){ const g = LINE.groups.find(x => x.id === base); return g ? g.members.map(m => ({ lid:m, c:novelOfLine(m) })) : []; }
+  return [{ lid:base, c:novelOfLine(base) }];
+}
+function uraToHist(msgs, room){   // サーバーのメッセージ → ノベルの会話
+  const out = []; const single = room.members[0];
+  for (const m of msgs){
+    if (m.retracted) continue;
+    const text = (m.text || '') + (m.image ? '（写真）' : '');
+    if (m.sender === 'me'){ out.push({ role:'user', text, t:m.at, sid:m.id }); continue; }
+    const who = m.sender === 'narr' ? '' : (m.speaker ? ((novelOfLine(m.speaker) || {}).id || single) : single);
+    const ch = who ? charById(who) : null;
+    const ok = n => n && ch && usableFaces(ch, 'ura').includes(n);
+    const srvFace = ok(m.face);   // サーバーが返事と一緒に選んだ表情（第38版〜）
+    const line = { who, face: ch ? (srvFace ? m.face : ok(uraFaceCache[m.id]) ? uraFaceCache[m.id] : defaultFace(ch)) : '', text, sid:m.id, ...(srvFace || m.face ? { srvFace:true } : {}) };
+    const last = out[out.length-1];
+    if (last && last.role === 'chars') last.lines.push(line); else out.push({ role:'chars', lines:[line], t:m.at });
+  }
+  return out;
+}
+let uraFaceCache = {};
+async function pickFaces(lines){   // 裏の返事に表情を付ける（端末のAIキーで小さく問い合わせ）
+  const need = lines.filter(l => !l.srvFace && l.who && charById(l.who) && usableFaces(charById(l.who), 'ura').length > 1);   // サーバーが選んだものは選び直さない
+  if (!S.uraFaceAI || !need.length) return;
+  const prov = S.aiProvider || 'grok'; if (prov === 'gemini' ? !S.geminiKey : !S.apiKey) return;
+  const list = need.map((l,i) => { const c = charById(l.who); return `${i+1}. ${c.name}「${l.text}」 候補：${usableFaces(c, 'ura').map(n => { const f = faceObj(c,n); return n + (f && f.desc ? '（' + f.desc + '）' : ''); }).join('、')}`; }).join('\n');
+  const sys = '各台詞に一番合う表情を候補から1つずつ選ぶ。JSONだけを返す：{"faces":["表情名", ...]}（台詞と同じ順・同じ数）';
+  try{
+    let txt;
+    if (prov === 'gemini'){
+      const j = await postJSON(`https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(S.geminiModel || 'gemini-flash-latest')}:generateContent`, { 'x-goog-api-key':S.geminiKey },
+        JSON.stringify({ systemInstruction:{ parts:[{ text:sys }] }, contents:[{ role:'user', parts:[{ text:list }] }], generationConfig:{ temperature:0.2, responseMimeType:'application/json' } }));
+      txt = ((j.candidates || [])[0] || {}).content; txt = txt ? (txt.parts || []).filter(x => !x.thought).map(x => x.text || '').join('') : '';
+    } else {
+      const j = await postJSON(S.endpoint, { 'Authorization':'Bearer ' + S.apiKey }, JSON.stringify({ model:S.model, temperature:0.2, messages:[{ role:'system', content:sys }, { role:'user', content:list }] }));
+      txt = j.choices && j.choices[0] && j.choices[0].message && j.choices[0].message.content || '';
+    }
+    const a = String(txt).indexOf('{'), b = String(txt).lastIndexOf('}');
+    const faces = JSON.parse(String(txt).slice(a, b+1)).faces || [];
+    need.forEach((l,i) => { const c = charById(l.who); if (usableFaces(c, 'ura').includes(faces[i])){ l.face = faces[i]; if (l.sid) uraFaceCache[l.sid] = faces[i]; } });
+    try{ await idb.set('uraFaces', uraFaceCache); }catch(e){}
+  }catch(e){ log('warn', '裏トークの表情を選べませんでした（通常の顔で表示）：' + e.message); }
+}
+async function openUra(room){
+  try{
+    await loadLine(true);
+    const msgs = (LINE.msgs || []).filter(m => m.charId === room.target).sort((a,b) => a.id - b.id);
+    HIST = uraToHist(msgs, room);
+    const l = msgs.filter(m => m.sender !== 'me').pop(); if (l){ room.last = { who: l.sender === 'narr' ? '' : room.members[0], text:l.text || '' }; room.updated = l.at; saveRooms(); }
+  }catch(e){ HIST = []; log('error', '裏トークを読み込めませんでした：' + e.message); }
+}
+async function sendUra(text){
+  const room = ROOM;
+  if (text){ HIST.push({ role:'user', text, t:Date.now() }); }
+  startThinking();
+  try{
+    const out = text || room._pending;
+    if (out){ room._pending = out; await srv('POST', '/send', { charId:room.target, text:out }); room._pending = null; }
+    const r = await srv('POST', '/reply', { charId:room.target });
+    if (room !== ROOM) return;
+    if (r.paused){ clearInterval(thinkTimer); state = 'idle'; showName(''); textEl.textContent = '（裏は今お休み中です。LINE風アプリの設定で再開できます）'; showHint('end'); return; }
+    const msgs = r.messages || [];
+    if (!msgs.length) throw new Error('返事がありませんでした');
+    const h = uraToHist(msgs, room); const lines = h.filter(x => x.role === 'chars').flatMap(x => x.lines);
+    await pickFaces(lines);
+    HIST.push({ role:'chars', lines, t:Date.now() });
+    const l = lines[lines.length-1]; room.last = { who:l.who, text:l.text }; room.updated = Date.now(); await saveRooms();
+    clearInterval(thinkTimer); await showLines(lines);
+  }catch(e){
+    clearInterval(thinkTimer); if (room !== ROOM) return; state = 'error';
+    textEl.textContent = '（うまくお返事できませんでした……。タップでもう一度試します）'; showHint('retry');
+    log('error', e.message, lastResp ? `HTTP ${lastResp.status}\n${lastResp.body}` : '');
+  }
+}
+
+/* ====== 表トーク（LINE風の表で約束して、実際に会う場面）。会話はサーバー（kv meetlog:）・AIは LINE風の表と同じ ====== */
+function meetToHist(log, room){
+  const out = []; const who0 = room.members[0]; const ch = charById(who0);
+  for (const m of log){
+    if (m.who === 'me'){ out.push({ role:'user', text:m.text, t:0 }); continue; }
+    const line = m.who === 'narr' ? { who:'', face:'', text:m.text } : { who:who0, face: ch && m.face && usableFaces(ch, 'omote').includes(m.face) ? m.face : (ch ? defaultFace(ch) : ''), text:m.text };
+    const last = out[out.length-1];
+    if (last && last.role === 'chars') last.lines.push(line); else out.push({ role:'chars', lines:[line], t:0 });
+  }
+  return out;
+}
+async function openMeet(room){
+  try{
+    const r = await srv('POST', '/meet/start', { charId:room.target });
+    const n = (r.lines || []).length, lg = r.log || [];
+    HIST = meetToHist(lg.slice(0, lg.length - n), room);
+    room.place = (r.appt && r.appt.place) || ''; room.updated = Date.now(); saveRooms();
+    return n ? meetToHist(r.lines, room).flatMap(h => h.lines || []) : null;
+  }catch(e){ HIST = []; log('error', '会う場面を始められませんでした：' + e.message, lastResp ? `HTTP ${lastResp.status}\n${lastResp.body}` : ''); toast('会う場面を始められませんでした。〈 →「困ったとき」で診断をコピーできます', true, 6000); return null; }
+}
+async function sendMeet(text){
+  const room = ROOM;
+  if (text) HIST.push({ role:'user', text, t:Date.now() });
+  startThinking();
+  try{
+    const r = await srv('POST', '/meet/say', { charId:room.target, text:text || '' });
+    if (room !== ROOM) return;
+    const lines = meetToHist(r.lines || [], room).flatMap(h => h.lines || []);
+    if (!lines.length) throw new Error('返事がありませんでした');
+    HIST.push({ role:'chars', lines, t:Date.now() });
+    const l = lines[lines.length-1]; room.last = { who:l.who, text:l.text }; room.updated = Date.now(); await saveRooms();
+    clearInterval(thinkTimer); await showLines(lines);
+  }catch(e){
+    clearInterval(thinkTimer); if (room !== ROOM) return; state = 'error';
+    textEl.textContent = '（うまくお返事できませんでした……。タップでもう一度試します）'; showHint('retry');
+    log('error', e.message, lastResp ? `HTTP ${lastResp.status}\n${lastResp.body}` : '');
+  }
+}
+async function meetRoomFor(cid, lineP){
+  const hit = ROOMS.find(r => r.kind === 'omote' && r.target === cid);
+  if (hit) return hit.id;
+  if (lineP) await lineP;
+  const c = novelOfLine(cid);
+  if (!c){
+    const lc = LINE.chars.find(x => x.id === cid);
+    toast(`立ち絵のキャラがまだつながっていません。〈 →「キャラ」で ${lc ? lc.name : '相手'} の「LINE風のキャラ」を選んでから、もう一度［会いに行く］を押してください`, true, 9000);
+    return null;
+  }
+  const lc = LINE.chars.find(x => x.id === cid);
+  const r = { id:uid(), name:'表：' + ((lc && lc.name) || c.name), members:[c.id], kind:'omote', target:cid, updated:Date.now(), last:null };
+  ROOMS.push(r); await saveRooms(); log('info', `表トーク（会う場面）を作りました：${r.name}`);
+  return r.id;
+}
+$('#endMeet').onclick = async () => {
+  if (!ROOM || ROOM.kind !== 'omote') return;
+  if (!confirm('会うのを終えますか？（会った内容がまとめられて、LINE風のトークでも覚えていてくれます）')) return;
+  try{ await srv('POST', '/meet/end', { charId:ROOM.target }); toast('会うのを終えました'); setTimeout(() => { location.href = 'index.html?chat=' + encodeURIComponent(ROOM.target); }, 900); }
+  catch(e){ toast('終えられませんでした：' + e.message, true, 6000); log('error', e.message); }
+};
+
+/* ====== LINE風のトーク画面から来たとき：その裏トークを探す（無ければ作る） ====== */
+async function uraRoomFor(target, lineP){
+  const hit = ROOMS.find(r => r.kind === 'ura' && r.target === target);
+  if (hit) return hit.id;
+  if (lineP) await lineP;
+  if (!LINE.ok){ toast('LINE風アプリのサーバーにつながらないので、裏トークを開けませんでした（設定のURL・合言葉を確認）', true, 7000); return null; }
+  const ms = uraMembers(target);
+  const miss = ms.filter(x => !x.c).map(x => lineName(LINE.chars.find(c => c.id === x.lid)));
+  if (!ms.length || miss.length){
+    toast(`立ち絵のキャラがまだつながっていません。〈 →「キャラ」で ${miss.join('、') || '相手'} の「LINE風のキャラ」を選んでから、もう一度［立ち絵］を押してください`, true, 9000);
+    return null;
+  }
+  const base = target.replace(/#ura$/,'');
+  const g = base.startsWith('grp-') ? LINE.groups.find(x => x.id === base) : null;
+  const name = '裏：' + (g ? g.name : lineName(LINE.chars.find(c => c.id === base)));
+  const r = { id:uid(), name, members:ms.map(x => x.c.id).slice(0, MAX_MEMBERS), kind:'ura', target, updated:Date.now(), last:null };
+  ROOMS.push(r); await saveRooms();
+  log('info', `裏トークを自動で作りました：${name}`);
+  return r.id;
+}
+
+/* ====== トークを開く ====== */
+async function openRoom(id){
+  previewChar = null;
+  ROOM = ROOMS.find(r => r.id === id) || null; S.room = ROOM ? ROOM.id : null; saveS();
+  HIST = [];
+  let fresh = null;
+  if (ROOM && ROOM.kind === 'ura'){ textEl.textContent = '（LINE風アプリから会話を読み込んでいます…）'; await openUra(ROOM); }
+  else if (ROOM && ROOM.kind === 'omote'){ textEl.textContent = '（待ち合わせ場所に向かっています…）'; fresh = await openMeet(ROOM); }
+  else if (ROOM){ try{ HIST = (await idb.get('hist:' + ROOM.id)) || []; }catch(e){ log('error','会話を読み込めませんでした：' + e.message); } }
+  clearInterval(thinkTimer); typeTok++; speaking = false; pages = [];
+  await buildStage();
+  $('#msg').placeholder = ROOM ? `${ROOM.name}に話しかける…` : '話しかける…';
+  $('#endMeet').hidden = !(ROOM && ROOM.kind === 'omote');
+  if (!ROOM){ showName(null); $('#nameplate').classList.add('hide'); textEl.textContent = CHARS.length ? '（右上の〈 →「トーク」で、話すトークを選んでください）' : '（右上の〈 →「キャラ」でキャラを作ってください）'; state = 'idle'; showHint(null); return; }
+  const noBase = STAGE.filter(s => !s.c.base).map(s => s.c.name);
+  const last = [...HIST].reverse().find(h => h.role === 'chars');
+  if (fresh && fresh.length){ HIST.push({ role:'chars', lines:fresh, t:Date.now() }); await showLines(fresh); }   // 会えた場面（表）は動かして見せる
+  else if (last){ pages = paginate(last.lines); pageIdx = pages.length - 1; showStatic(pages[pageIdx]); }
+  else { showName(null); $('#nameplate').classList.add('hide'); textEl.textContent = noBase.length ? `（${noBase.join('、')}の立ち絵がまだありません。右上の〈 →「キャラ」で入れてください）` : '（タップして話しかけてください）'; state = 'idle'; showHint('end'); }
+}
+
+/* ====== 入力欄 ====== */
+function openInput(){ $('#inputOv').classList.add('show'); const i = $('#msg'); i.value = ''; setTimeout(() => i.focus(), 30); }
+function closeInput(){ $('#inputOv').classList.remove('show'); $('#msg').blur(); }
+function doSend(){ const v = $('#msg').value.trim(); if (!v) return; closeInput(); send(v); }
+$('#send').onclick = doSend; $('#cancel').onclick = closeInput;
+$('#msg').addEventListener('keydown', e => { if (e.key === 'Enter' && !e.isComposing){ e.preventDefault(); doSend(); } });
+$('#inputOv').addEventListener('click', e => { if (e.target.id === 'inputOv') closeInput(); });
+
+/* ====== 操作 ====== */
+$('#app').addEventListener('click', e => { if (e.target.closest('#ctrls')) return; advance('tap'); });
+$('#bSkip').onclick = () => advance('skip');
+$('#bFast').onclick = jumpEnd;
+$('#bAuto').onclick = () => { S.auto = !S.auto; saveS(); drawAuto(); if (S.auto && state === 'pageDone') advance('auto'); };
+function drawAuto(){
+  const b = $('#bAuto'); b.classList.toggle('on', S.auto);
+  b.innerHTML = S.auto
+    ? '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"><path d="M9 5v14M15 5v14"/></svg>'
+    : '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round"><path d="M7 4.5v15L19 12z"/></svg>';
+}
+$('#bBack').onclick = () => openMenu();
+
+/* ====== メニュー ====== */
+let curPanel = 'pRoom';
+function showPanel(p){
+  curPanel = p;
+  document.querySelectorAll('#nav button[data-p]').forEach(x => x.classList.toggle('on', x.dataset.p === p));
+  document.querySelectorAll('.pn').forEach(x => x.classList.toggle('on', x.id === p));
+  if (p === 'pRoom') renderRooms(); if (p === 'pChar') renderChars(); if (p === 'pLog') renderLog();
+  if (p === 'pSet') fillSettings(); if (p === 'pAsset') refreshAssetUI(); if (p === 'pHelp') renderHelp();
+  if (p === 'pDev') $('#devView').textContent = DEV_LOG;
+  if (p === 'pBak') refreshBak();
+  $('#panels').scrollTop = 0;
+}
+function openMenu(p){ $('#menu').classList.add('show'); showPanel(p || curPanel); }
+let menuDirty = false;
+$('#mClose').onclick = async () => { $('#menu').classList.remove('show'); if (menuDirty){ menuDirty = false; await openRoom(ROOM && ROOM.id); } else layout(); };
+document.querySelectorAll('#nav button[data-p]').forEach(b => b.onclick = () => showPanel(b.dataset.p));
+$('#toLine').onclick = () => {   // 試作：LINE風アプリ（lab/index.html）へ。裏トークならその相手の裏を開く
+  let q = '';
+  if (ROOM && ROOM.kind === 'ura' && ROOM.target) q = '?chat=' + encodeURIComponent(ROOM.target.replace(/#ura$/,'')) + '&w=ura';
+  else if (ROOM && ROOM.kind === 'omote' && ROOM.target) q = '?chat=' + encodeURIComponent(ROOM.target);
+  else if (QS.get('back')) q = '?chat=' + encodeURIComponent(QS.get('back'));
+  location.href = 'index.html' + q;
+};
+
+/* --- トーク --- */
+function fmtTime(t){ if (!t) return ''; const d = new Date(t), n = new Date();
+  return d.toDateString() === n.toDateString() ? `${d.getHours()}:${String(d.getMinutes()).padStart(2,'0')}` : `${d.getMonth()+1}/${d.getDate()}`; }
+function renderRooms(){
+  const list = [...ROOMS].sort((a,b) => (b.updated||0) - (a.updated||0));
+  $('#roomList').innerHTML = list.length ? list.map(r => {
+    const mem = r.members.map(id => (charById(id) || {}).name || '？').join('・');
+    const last = r.last ? `${esc(((charById(r.last.who) || {}).name || '').replace(/[\s　]/g,''))}：${esc(r.last.text)}` : '（まだ会話がありません）';
+    return `<div class="it ${ROOM && ROOM.id === r.id ? 'cur' : ''}"><div class="main"><div class="t">${esc(r.name)} <span class="note">${r.kind === 'ura' ? '裏・LINE風と共有 ' : r.kind === 'omote' ? '表・会う場面 ' : ''}${r.members.length > 1 ? 'グループ ' : ''}${esc(mem)}・${r.kind === 'ura' || r.kind === 'omote' ? 'LINE風のAI' : provName(provOf(r))}</span></div><div class="sub">${last}</div></div>
+      <span class="note">${fmtTime(r.updated)}</span>
+      <button class="b p s" data-ropen="${r.id}">開く</button>${r.kind === 'omote' ? '' : `<button class="b s" data-redit="${r.id}">編集</button><button class="b s" data-rexp="${r.id}">書き出す</button>`}<button class="b d s" data-rdel="${r.id}">削除</button></div>`;
+  }).join('') : '<p class="note">トークがありません。「＋トークを作る」から作ってください。</p>';
+  $('#roomList').querySelectorAll('[data-ropen]').forEach(b => b.onclick = async () => { $('#menu').classList.remove('show'); menuDirty = false; await openRoom(b.dataset.ropen); });
+  $('#roomList').querySelectorAll('[data-redit]').forEach(b => b.onclick = () => roomForm(b.dataset.redit));
+  $('#roomList').querySelectorAll('[data-rexp]').forEach(b => b.onclick = () => exportRoom(b.dataset.rexp));
+  $('#roomList').querySelectorAll('[data-rdel]').forEach(b => b.onclick = async () => {
+    const r = ROOMS.find(x => x.id === b.dataset.rdel); if (!confirm(`トーク「${r.name}」と、その会話を全部消しますか？`)) return;
+    ROOMS = ROOMS.filter(x => x !== r); await saveRooms(); try{ await idb.del('hist:' + r.id); }catch(e){}
+    if (ROOM === r){ ROOM = null; HIST = []; S.room = null; saveS(); menuDirty = true; }
+    renderRooms();
+  });
+}
+$('#roomNew').onclick = () => roomForm(null);
+function roomForm(id){
+  const r = id ? ROOMS.find(x => x.id === id) : null;
+  if (!CHARS.length){ $('#roomEdit').innerHTML = '<p class="note">先に「キャラ」でキャラを作ってください。</p>'; return; }
+  const opt = (sel, none) => (none ? '<option value="">（なし）</option>' : '') + CHARS.map(c => `<option value="${c.id}" ${sel === c.id ? 'selected' : ''}>${esc(c.name)}</option>`).join('');
+  const m = r ? r.members : [];
+  $('#roomEdit').innerHTML = `<div class="card"><b>${r ? 'トークを編集' : '新しいトーク'}</b>
+    <div class="row"><label>トーク名</label><input type="text" id="rfName" value="${esc(r ? r.name : '')}" placeholder="空ならメンバー名"></div>
+    <div class="row"><label>トークの種類</label><select id="rfKind"><option value="">ふつう（このアプリだけ）</option><option value="ura" ${r && r.kind === 'ura' ? 'selected' : ''}>裏（LINE風アプリの裏と会話を共有）</option></select></div>
+    <div class="row" id="rfUraRow"><label>LINE風の裏の相手</label><select id="rfTarget">${LINE.ok ? [...LINE.chars.filter(c => true).map(c => [c.id + '#ura', lineName(c)]), ...LINE.groups.map(g => [g.id + '#ura', 'グループ：' + g.name])].map(([v,l]) => `<option value="${esc(v)}" ${r && r.target === v ? 'selected' : ''}>${esc(l)}</option>`).join('') : '<option value="">（設定で「つないでみる」を押してください）</option>'}</select></div>
+    <div class="row"><label>このトークのAI</label><select id="rfAi">${[['','共通の設定に従う'],['grok','Grok'],['gemini','Gemini']].map(([v,l]) => `<option value="${v}" ${(r && r.ai || '') === v ? 'selected' : ''}>${l}</option>`).join('')}</select></div>
+    <div class="row"><label>前の列（左→右）</label>${[0,1,2].map(i => `<select class="rfm">${opt(m[i], i > 0)}</select>`).join('')}</div>
+    <div class="row"><label>後ろの列（4人目〜）</label>${[3,4,5,6].map(i => `<select class="rfm">${opt(m[i], true)}</select>`).join('')}</div>
+    <p class="note">1人なら中央、2人なら左右、3人なら左・中央・右。4人目からは後ろの列に少し小さく並び、後ろの人が話すと、前の列でいちばん長く黙っている人と入れ替わります（最大${MAX_MEMBERS}人）。同じメンバーで複数のトークを作れます。</p>
+    <div class="row"><button class="b p" id="rfOk">${r ? '保存' : '作る'}</button><button class="b" id="rfNo">やめる</button></div></div>`;
+  $('#rfNo').onclick = () => { $('#roomEdit').innerHTML = ''; };
+  const kindUi = () => { const u = $('#rfKind').value === 'ura'; $('#rfUraRow').style.display = u ? '' : 'none'; document.querySelectorAll('#roomEdit .rfm').forEach(x => x.closest('.row').style.display = u ? 'none' : ''); };
+  $('#rfKind').onchange = kindUi; kindUi();
+  if (!LINE.ok && S.srvUrl) loadLine(false).then(() => { if ($('#rfKind')) roomForm(id); }).catch(() => {});
+  $('#rfOk').onclick = async () => {
+    if ($('#rfKind').value === 'ura'){
+      const target = $('#rfTarget').value; if (!target){ toast('LINE風アプリとつないでから選んでください', true, 4000); return; }
+      const ms = uraMembers(target), miss = ms.filter(x => !x.c).map(x => lineName(LINE.chars.find(c => c.id === x.lid)));
+      if (miss.length){ toast(`先に「キャラ」で ${miss.join('、')} をLINE風のキャラとつないでください`, true, 6000); return; }
+      const mem = ms.map(x => x.c.id).slice(0, MAX_MEMBERS);
+      const lbl = $('#rfTarget').selectedOptions[0].textContent;
+      const name = $('#rfName').value.trim() || ('裏：' + lbl.replace(/^グループ：/,''));
+      if (r){ Object.assign(r, { name, members:mem, kind:'ura', target }); if (ROOM === r) menuDirty = true; }
+      else ROOMS.push({ id:uid(), name, members:mem, kind:'ura', target, updated:Date.now(), last:null });
+      await saveRooms(); $('#roomEdit').innerHTML = ''; renderRooms(); toast('裏トークを作りました。「開く」で話せます'); return;
+    }
+    const mem = [...document.querySelectorAll('#roomEdit .rfm')].map(x => x.value).filter(Boolean);
+    if (new Set(mem).size !== mem.length){ toast('同じキャラを2回選んでいます', true, 4000); return; }
+    const name = $('#rfName').value.trim() || mem.map(x => charById(x).name.replace(/[\s　]/g,'')).join('・');
+    const ai = $('#rfAi').value;
+    if (r){ r.name = name; r.members = mem; r.ai = ai; delete r.kind; delete r.target; if (ROOM === r) menuDirty = true; }
+    else { const nr = { id:uid(), name, members:mem, ai, updated:Date.now(), last:null }; ROOMS.push(nr); }
+    await saveRooms(); $('#roomEdit').innerHTML = ''; renderRooms(); toast(r ? 'トークを保存しました' : 'トークを作りました。「開く」で話せます');
+  };
+}
+
+/* --- キャラ --- */
+let editChar = null;
+function renderChars(){
+  const area = $('#charArea');
+  if (editChar && charById(editChar)) return renderCharEditor(charById(editChar));
+  editChar = null;
+  area.innerHTML = `<div class="row"><button class="b p" id="charNew">＋キャラを追加</button></div><div class="list">${CHARS.map(c => `
+    <div class="it"><img class="thumbB" data-th="${c.base || ''}" alt=""><div class="main"><div class="t">${esc(c.name)}</div><div class="sub">表情 ${c.faces.length}件・${c.base ? '立ち絵あり' : '立ち絵なし'}</div></div>
+    <button class="b p s" data-cedit="${c.id}">編集</button><button class="b d s" data-cdel="${c.id}">削除</button></div>`).join('') || '<p class="note">キャラがいません。</p>'}</div>`;
+  area.querySelectorAll('img[data-th]').forEach(async i => { if (i.dataset.th){ const u = await thumbOf(i.dataset.th, true); if (u) i.src = u; } });
+  $('#charNew').onclick = async () => { const c = newChar('新しいキャラ'); CHARS.push(c); await saveChars(); editChar = c.id; renderChars(); };
+  area.querySelectorAll('[data-cedit]').forEach(b => b.onclick = () => { editChar = b.dataset.cedit; renderChars(); });
+  area.querySelectorAll('[data-cdel]').forEach(b => b.onclick = async () => {
+    const c = charById(b.dataset.cdel); const rs = ROOMS.filter(r => r.members.includes(c.id));
+    if (!confirm(`キャラ「${c.name}」を消しますか？${rs.length ? `\nこのキャラがいるトーク${rs.length}件（${rs.map(r => r.name).join('、')}）と、その会話も消えます。` : ''}`)) return;
+    for (const r of rs){ try{ await idb.del('hist:' + r.id); }catch(e){} if (ROOM === r){ ROOM = null; HIST = []; S.room = null; saveS(); } }
+    ROOMS = ROOMS.filter(r => !rs.includes(r)); await saveRooms();
+    const ids = [c.base]; for (const f of c.faces) for (const k of ['eye','mouth']) ids.push(...Object.values(f[k] || {}));
+    for (const id of ids) await delRec(id);
+    CHARS = CHARS.filter(x => x !== c); await saveChars(); menuDirty = true; renderChars();
+  });
+}
+let pickCb = null;
+$('#fImg').addEventListener('change', async e => { const f = e.target.files[0]; e.target.value = ''; if (f && pickCb){ const cb = pickCb; pickCb = null; try{ await cb(f); }catch(err){ log('error','画像を読み込めませんでした：' + err.message); } } });
+function pickImage(cb){ pickCb = cb; $('#fImg').click(); }
+const SLOTS = { eye:[['open','開き'],['half','半目'],['close','閉じ']], mouth:[['close','閉じ'],['half','半開き'],['open','開き']] };
+function tileHtml(fid, kind, key, label, id){
+  return `<div class="sg"><div class="tile ${id ? 'full' : ''}" data-slot="${fid}|${kind}|${key}">${id ? `<img data-th="${id}" alt="">` : '＋'}${id ? `<span class="x" data-clr="${fid}|${kind}|${key}">×</span>` : ''}</div>${label}</div>`;
+}
+function renderCharEditor(c){
+  const area = $('#charArea');
+  area.innerHTML = `<div class="row"><button class="b" id="ceBack">← キャラ一覧へ</button><b style="font-size:15px">${esc(c.name)}</b></div>
+    <div class="card">
+      <div class="row"><label>名前（名前欄）</label><input type="text" id="ceName" value="${esc(c.name)}"></div>
+      <div class="row"><label>相手の呼び方</label><input type="text" id="ceCall" value="${esc(c.callName)}"></div>
+      <div class="row"><label>LINE風のキャラ</label><select id="ceLine"><option value="">（つながない）</option>${LINE.chars.map(x => `<option value="${esc(x.id)}" ${c.lineId === x.id ? 'selected' : ''}>${esc(x.name)}${x.uraName && x.uraName !== x.name ? '（裏：' + esc(x.uraName) + '）' : ''}</option>`).join('')}${c.lineId && !LINE.chars.some(x => x.id === c.lineId) ? `<option value="${esc(c.lineId)}" selected>（つないだキャラ：${esc(c.lineId)}）</option>` : ''}</select><span class="note">${LINE.ok ? '' : '設定で「つないでみる」を押すと選べます'}</span></div>
+      <div class="row"><label>立ち絵ベース</label><div class="tile ${c.base ? 'full' : ''}" id="ceBase" style="width:48px;height:96px">${c.base ? `<img data-thw="${c.base}" alt="">` : '＋'}</div><span class="note">${c.base ? esc((REC.get(c.base) || {}).name || '') + (DIMS.get(c.base) ? `（${DIMS.get(c.base).join('×')}）` : '') : 'タップして選ぶ'}</span></div>
+      <div class="row"><label>大きさ（画面高さの%）</label><input type="number" id="ceScale" step="0.5" value="${c.scale}"><label>上の位置（%）</label><input type="number" id="ceTop" step="0.2" value="${c.top}"><label>左右ずれ（%）</label><input type="number" id="ceX" step="0.5" value="${c.xoff}"></div>
+      <h4>キャラ設定（AIへの指示）</h4><textarea id="cePrompt" placeholder="性格・口調・一人称など">${esc(c.prompt)}</textarea>
+      ${/伊達/.test(c.name) ? '<div class="row"><button class="b s" id="ceAkari">伊達朱里の最初のキャラ設定を入れる</button></div>' : ''}
+    </div>
+    <h4>表情</h4>
+    <p class="note">目・口は、立ち絵ベースと同じサイズの透過PNG（位置もそのまま）を1枚ずつ入れます。半目・半開きは空でも動きます。目の「閉じ」が無い表情は瞬きせず、口の「開き」が無い表情は口パクしません。空の枠はベースのままになります。「通常」という名前の表情が、いつもの顔になります。</p>
+    <div class="row"><input type="text" id="ceNewFace" placeholder="表情の名前（例：通常、喜ぶ、困る）"><button class="b p" id="ceAddFace">＋表情を追加</button></div>
+    <div id="ceFaces">${c.faces.map((f,i) => `<div class="card">
+      <div class="row"><input type="text" data-fname="${f.id}" value="${esc(f.name)}" style="max-width:150px;flex:none"><input type="text" data-fdesc="${f.id}" value="${esc(f.desc)}" placeholder="どんな気持ちの顔か（AIが選ぶ手がかり）"></div>
+      <div class="row"><label>使うトーク</label>${KINDS.map(([k,l]) => `<label><input type="checkbox" data-foff="${f.id}|${k}" ${f.off && f.off[k] ? '' : 'checked'} ${f.name === defaultFace(c) ? 'disabled' : ''}> ${l}</label>`).join('')}<span class="note">${f.name === defaultFace(c) ? 'いつもの顔なので外せません' : '外すと、そのトークではAIがこの表情を選ばず、ほかの表情から選びます'}</span></div>
+      <div class="slots"><div class="grp"><b>目</b>${SLOTS.eye.map(([k,l]) => tileHtml(f.id,'eye',k,l,f.eye[k])).join('')}</div>
+      <div class="grp"><b>口</b>${SLOTS.mouth.map(([k,l]) => tileHtml(f.id,'mouth',k,l,f.mouth[k])).join('')}</div></div>
+      <div class="row"><button class="b p s" data-ftry="${f.id}">試す</button>${i > 0 ? `<button class="b s" data-fup="${f.id}">↑上へ</button>` : ''}<button class="b d s" data-fdel="${f.id}">この表情を消す</button></div></div>`).join('') || '<p class="note">まだ表情がありません。</p>'}</div>`;
+  area.querySelectorAll('img[data-th]').forEach(async i => { const u = await thumbOf(i.dataset.th, false); if (u) i.src = u; });
+  area.querySelectorAll('img[data-thw]').forEach(async i => { const u = await thumbOf(i.dataset.thw, true); if (u) i.src = u; });
+  const bindNum = (id, k) => $('#' + id).addEventListener('input', e => { const v = parseFloat(e.target.value); if (isNaN(v)) return; c[k] = v; saveCharsSoon(); menuDirty = true; });
+  $('#ceBack').onclick = () => { editChar = null; renderChars(); };
+  $('#ceName').addEventListener('input', e => { c.name = e.target.value.trim() || '名無し'; saveCharsSoon(); menuDirty = true; });
+  $('#ceCall').addEventListener('input', e => { c.callName = e.target.value.trim(); saveCharsSoon(); });
+  $('#ceLine').addEventListener('change', e => {
+    const old = c.lineId; c.lineId = e.target.value || undefined; saveCharsSoon();
+    if (old && old !== c.lineId && !CHARS.some(x => x.lineId === old)){ for (const kind of ['ura', 'omote']){ delete facesSent[old + '|' + kind]; srv('POST', '/faces', { charId:old, kind, faces:[] }).catch(() => {}); } } // つなぐのをやめたら、サーバーの表情も消す
+  });
+  if (!LINE.ok && S.srvUrl) loadLine(false).then(() => { if (editChar === c.id && $('#ceLine')) renderCharEditor(c); }).catch(() => {});
+  $('#cePrompt').addEventListener('input', e => { c.prompt = e.target.value; saveCharsSoon(); });
+  bindNum('ceScale','scale'); bindNum('ceTop','top'); bindNum('ceX','xoff');
+  if ($('#ceAkari')) $('#ceAkari').onclick = () => { if (c.prompt && !confirm('今のキャラ設定を置き換えますか？')) return; c.prompt = AKARI_PROMPT; saveCharsSoon(); renderCharEditor(c); };
+  $('#ceBase').onclick = () => pickImage(async file => {
+    const old = c.base; c.base = await putRec(file); await ensureImg(c.base); await saveChars(); if (old) await delRec(old); menuDirty = true; renderCharEditor(c);
+    checkSizes(c);
+  });
+  $('#ceAddFace').onclick = async () => {
+    const n = $('#ceNewFace').value.replace(/[《》]/g,'').trim(); if (!n){ toast('表情の名前を入れてください', true, 3000); return; }
+    if (c.faces.some(f => f.name === n)){ toast('同じ名前の表情があります', true, 3000); return; }
+    c.faces.push({ id:uid(), name:n, desc:'', eye:{}, mouth:{} }); await saveChars(); menuDirty = true; renderCharEditor(c);
+  };
+  area.querySelectorAll('[data-fname]').forEach(i => i.addEventListener('change', () => {
+    const f = c.faces.find(x => x.id === i.dataset.fname), n = i.value.replace(/[《》]/g,'').trim();
+    if (!n || c.faces.some(x => x !== f && x.name === n)){ toast('名前が空か、ほかの表情と同じです', true, 3000); i.value = f.name; return; }
+    f.name = n; saveCharsSoon(); menuDirty = true;
+  }));
+  area.querySelectorAll('[data-fdesc]').forEach(i => i.addEventListener('input', () => { c.faces.find(x => x.id === i.dataset.fdesc).desc = i.value; saveCharsSoon(); }));
+  area.querySelectorAll('[data-foff]').forEach(i => i.addEventListener('change', () => {
+    const [fid, k] = i.dataset.foff.split('|'); const f = c.faces.find(x => x.id === fid); if (!f) return;
+    f.off = Object.assign({}, f.off); if (i.checked) delete f.off[k]; else f.off[k] = true;
+    saveCharsSoon(); menuDirty = true;
+  }));
+  area.querySelectorAll('[data-slot]').forEach(t => t.onclick = e => {
+    if (e.target.closest('[data-clr]')) return;
+    const [fid, kind, key] = t.dataset.slot.split('|'); const f = c.faces.find(x => x.id === fid);
+    pickImage(async file => { const old = f[kind][key]; f[kind][key] = await putRec(file); await saveChars(); if (old) await delRec(old); menuDirty = true; renderCharEditor(c); checkSizes(c, f[kind][key]); });
+  });
+  area.querySelectorAll('[data-clr]').forEach(x => x.onclick = async e => {
+    e.stopPropagation(); const [fid, kind, key] = x.dataset.clr.split('|'); const f = c.faces.find(q => q.id === fid);
+    const old = f[kind][key]; delete f[kind][key]; await saveChars(); await delRec(old); menuDirty = true; renderCharEditor(c);
+  });
+  area.querySelectorAll('[data-ftry]').forEach(b => b.onclick = async () => {
+    const f = c.faces.find(x => x.id === b.dataset.ftry);
+    $('#menu').classList.remove('show'); menuDirty = false;
+    if (!(ROOM && ROOM.members.includes(c.id))) previewChar = c.id;
+    await buildStage(); const st = STAGE.find(s => s.c.id === c.id); setFace(st, f.name);
+    if (previewChar){ showName(c.id); textEl.textContent = `（表情「${f.name}」のお試し中。タップで戻ります）`; state = 'idle'; showHint(null); }
+  });
+  area.querySelectorAll('[data-fup]').forEach(b => b.onclick = async () => {
+    const i = c.faces.findIndex(x => x.id === b.dataset.fup); if (i > 0){ [c.faces[i-1], c.faces[i]] = [c.faces[i], c.faces[i-1]]; await saveChars(); renderCharEditor(c); }
+  });
+  area.querySelectorAll('[data-fdel]').forEach(b => b.onclick = async () => {
+    const f = c.faces.find(x => x.id === b.dataset.fdel); if (!confirm(`表情「${f.name}」と、その画像を消しますか？`)) return;
+    for (const id of [...Object.values(f.eye), ...Object.values(f.mouth)]) await delRec(id);
+    c.faces = c.faces.filter(x => x !== f); await saveChars(); menuDirty = true; renderCharEditor(c);
+  });
+}
+async function checkSizes(c, only){
+  if (!c.base) return; await ensureImg(c.base); const bd = DIMS.get(c.base); if (!bd) return;
+  const ids = only ? [only] : []; if (!only) for (const f of c.faces) for (const k of ['eye','mouth']) ids.push(...Object.values(f[k]));
+  const bad = [];
+  for (const id of ids){ await ensureImg(id); const d = DIMS.get(id); if (d && (d[0] !== bd[0] || d[1] !== bd[1])) bad.push(`${(REC.get(id) || {}).name}(${d.join('×')})`); }
+  if (bad.length) toast(`立ち絵ベース（${bd.join('×')}）とサイズが違います：${bad.join('、')}。位置がずれます`, true, 8000);
+}
+
+/* --- 会話ログ --- */
+function renderLog(){
+  $('#logRoom').textContent = ROOM ? `トーク「${ROOM.name}」` : 'トークが開かれていません';
+  const el = $('#logList');
+  if (!HIST.length){ el.innerHTML = '<p class="note">まだ会話がありません</p>'; return; }
+  el.innerHTML = HIST.map(h => h.role === 'user'
+    ? `<div class="u">${esc(S.userName)}：${esc(h.text)}</div>`
+    : h.lines.map(l => `<div>${esc(((charById(l.who) || {}).name || '？').replace(/[\s　]/g,''))}：${esc(l.text)} <span class="f">[${esc(l.face)}]</span></div>`).join('')).join('');
+  setTimeout(() => { const p = $('#panels'); p.scrollTop = p.scrollHeight; }, 0);
+}
+$('#clearHist').onclick = async () => {
+  if (!ROOM || !confirm(`トーク「${ROOM.name}」の会話を全部消して、はじめからにしますか？`)) return;
+  HIST = []; await saveHist(); ROOM.last = null; await saveRooms(); renderLog(); menuDirty = true; toast('会話を消しました');
+};
+
+/* --- 設定 --- */
+const FIELDS = { sSrv:'srvUrl', sTok:'srvToken', sProv:'aiProvider', sGKey:'geminiKey', sGModel:'geminiModel', sKey:'apiKey', sEnd:'endpoint', sModel:'model', sTemp:'temperature', sTurns:'turns', sUser:'userName', sSpeed:'speed', sSeVol:'seVol', sBlinkHalf:'blinkHalfMs', sBlinkClose:'blinkCloseMs', sBlinkAlpha:'blinkAlpha' };
+const NUMS = ['temperature','turns','speed','seVol','blinkHalfMs','blinkCloseMs','blinkAlpha'];
+function fillSettings(){ for (const [id,k] of Object.entries(FIELDS)) $('#'+id).value = S[k]; $('#sSeOn').checked = !!S.seOn; $('#sBlinkFade').checked = !!S.blinkFade; $('#sUraFace').checked = !!S.uraFaceAI; }
+$('#sUraFace').addEventListener('change', e => { S.uraFaceAI = e.target.checked; saveS(); });
+$('#sBlinkFade').addEventListener('change', e => { S.blinkFade = e.target.checked; saveS(); });
+async function blinkNow(slow){
+  $('#menu').classList.remove('show'); menuDirty = false; layout(); await sleep(400);
+  const can = STAGE.filter(st => { const f = faceObj(st.c, st.face); return f && f.eye && f.eye.close; });
+  if (!can.length){ toast('今の表情に目の「閉じ」が入っていないので瞬きできません', true, 5000); return; }
+  for (const st of can) blinkOnce(st, slow);
+}
+$('#blinkTest').onclick = () => blinkNow(false); $('#blinkSlow').onclick = () => blinkNow(true);
+for (const [id,k] of Object.entries(FIELDS)){
+  $('#'+id).addEventListener('input', e => { let v = e.target.value; if (NUMS.includes(k)){ v = parseFloat(v); if (isNaN(v)) return; } else v = v.trim(); S[k] = v; saveS(); });
+}
+$('#sSeOn').addEventListener('change', e => { S.seOn = e.target.checked; saveS(); });
+$('#getGModels').onclick = async () => {
+  try{
+    if (!S.geminiKey) throw new Error('先にGeminiのAPIキーを入力してください');
+    const r = await fetch('https://generativelanguage.googleapis.com/v1beta/models?pageSize=200', { headers:{ 'x-goog-api-key':S.geminiKey } }); const t = await r.text();
+    if (!r.ok){ lastResp = { status:r.status, body:t.slice(0,1500) }; throw new Error(`モデル一覧の取得に失敗 ${r.status}${hintFor(r.status)}`); }
+    const ids = (JSON.parse(t).models || []).filter(m => (m.supportedGenerationMethods || []).includes('generateContent')).map(m => m.name.replace(/^models\//,'')).sort();
+    $('#gModelList').innerHTML = ['gemini-flash-latest', ...ids].map(i => `<option value="${esc(i)}">`).join('');
+    log('info','Geminiモデル一覧：' + ids.join(', ')); toast(`${ids.length}件取得しました。モデル欄をタップすると選べます`);
+  }catch(e){ log('error', /^(モデル|先に)/.test(e.message) ? e.message : 'モデル一覧の取得に失敗：' + e.message); }
+};
+$('#getModels').onclick = async () => {
+  try{
+    if (!S.apiKey) throw new Error('先にAPIキーを入力してください');
+    const u = S.endpoint.replace(/\/chat\/completions.*$/,'/models');
+    const r = await fetch(u, { headers:{ Authorization:'Bearer ' + S.apiKey } }); const t = await r.text();
+    if (!r.ok){ lastResp = { status:r.status, body:t.slice(0,1500) }; throw new Error(`モデル一覧の取得に失敗 ${r.status}${hintFor(r.status)}`); }
+    const ids = (JSON.parse(t).data || []).map(m => m.id).sort();
+    $('#modelList').innerHTML = ids.map(i => `<option value="${esc(i)}">`).join('');
+    log('info','モデル一覧：' + ids.join(', ')); toast(`${ids.length}件取得しました。モデル欄をタップすると選べます`);
+  }catch(e){ log('error', /^(モデル|先に)/.test(e.message) ? e.message : 'モデル一覧の取得に失敗：' + e.message); }
+};
+
+/* --- 素材（共通） --- */
+const kb = n => (n/1024 > 1024 ? (n/1048576).toFixed(1)+'MB' : Math.round(n/1024)+'KB');
+function refreshAssetUI(){
+  const d = id => { const r = id && REC.get(id); return r ? `${esc(r.name)}（${kb(r.buf.byteLength)}）` : '未設定'; };
+  $('#aBg').innerHTML = d(GLOBAL.bg);
+  $('#aFont').innerHTML = d(GLOBAL.font) + (GLOBAL.font ? (fontOk ? ' ✓' : ' ✗') : '');
+  $('#aSe').innerHTML = d(GLOBAL.se) + (GLOBAL.se ? (seBuf ? ` ✓ ${seBuf.duration.toFixed(2)}秒` : ' ✗') : '');
+}
+const gInput = { bg:'#fImg', font:'#fFont', se:'#fSe' };
+if (IS_LAB) $('#copyLab').hidden = true;
+async function setGlobal(k, file){
+  const old = GLOBAL[k]; GLOBAL[k] = await putRec(file); await saveGlobal(); if (old) await delRec(old);
+  if (k === 'se'){ sePrepared = null; S.seErrName = ''; } await applyGlobal(); refreshAssetUI();
+  if (k === 'se'){ if (seBuf) toast('タップ音を読み込みました'); } else if (k !== 'bg' || $('#bg').style.backgroundImage) toast('読み込みました');
+}
+document.querySelectorAll('[data-gpick]').forEach(b => b.onclick = () => {
+  const k = b.dataset.gpick;
+  if (k === 'bg') pickImage(f => setGlobal('bg', f)); else $(gInput[k]).click();
+});
+['font','se'].forEach(k => $(gInput[k]).addEventListener('change', e => { const f = e.target.files[0]; e.target.value = ''; if (f) setGlobal(k, f).catch(err => log('error','読み込めませんでした：' + err.message)); }));
+document.querySelectorAll('[data-gdel]').forEach(b => b.onclick = async () => {
+  const k = b.dataset.gdel; if (!GLOBAL[k] || !confirm('消しますか？')) return;
+  const old = GLOBAL[k]; GLOBAL[k] = null; await saveGlobal(); await delRec(old);
+  if (k === 'font') toast('フォントは次に開いたときから元に戻ります'); if (k === 'se'){ sePrepared = null; }
+  await applyGlobal(); refreshAssetUI();
+});
+$('#seTest').onclick = () => { if (!seBuf) toast('タップ音が読み込まれていません', true, 3000); else { const o = S.seOn; S.seOn = true; playSE(); S.seOn = o; } };
+
+/* --- バックアップ --- */
+function b64(buf){ return new Promise(r => { const fr = new FileReader(); fr.onload = () => r(fr.result.split(',')[1]); fr.readAsDataURL(new Blob([buf])); }); }
+function unb64(s){ const bin = atob(s), u = new Uint8Array(bin.length); for (let i = 0; i < bin.length; i++) u[i] = bin.charCodeAt(i); return u.buffer; }
+function stamp(){ const d = new Date(), p = n => String(n).padStart(2,'0'); return `${d.getFullYear()}${p(d.getMonth()+1)}${p(d.getDate())}-${p(d.getHours())}${p(d.getMinutes())}`; }
+async function saveFile(name, data){
+  const blob = new Blob([JSON.stringify(data)], { type:'application/json' }), file = new File([blob], name, { type:'application/json' });
+  if (navigator.canShare && navigator.canShare({ files:[file] })){
+    try{ await navigator.share({ files:[file] }); log('info','書き出しました：' + name); return true; }catch(e){ if (e.name === 'AbortError') return false; }
+  }
+  const a = document.createElement('a'); a.href = URL.createObjectURL(blob); a.download = name; document.body.appendChild(a); a.click(); a.remove();
+  log('info','書き出しました：' + name); toast('書き出しました'); return true;
+}
+function allRecIds(){
+  const s = new Set([GLOBAL.bg, GLOBAL.font, GLOBAL.se]);
+  for (const c of CHARS){ s.add(c.base); for (const f of c.faces) for (const k of ['eye','mouth']) Object.values(f[k] || {}).forEach(v => s.add(v)); }
+  s.delete(null); s.delete(undefined); return [...s];
+}
+$('#bkExport').onclick = async () => {
+  try{
+    const set = Object.assign({}, S); if (!$('#bkKey').checked){ delete set.apiKey; delete set.geminiKey; delete set.srvToken; }
+    const hists = {}; for (const r of ROOMS) hists[r.id] = (await idb.get('hist:' + r.id)) || [];
+    const data = { app:'akari-novel', schema:3, version:VERSION_TEXT, exportedAt:new Date().toISOString(), settings:set, global:GLOBAL, chars:CHARS, rooms:ROOMS, hists };
+    if ($('#bkAssets').checked){ data.files = {}; for (const id of allRecIds()){ const r = await loadRec(id); if (r) data.files[id] = { name:r.name, type:r.type, b64: await b64(r.buf) }; } }
+    const name = `akari-backup-${stamp()}.json`, assets = !!data.files, bytes = new Blob([JSON.stringify(data)]).size;
+    $('#bkSaved').textContent = '書き出しています…';
+    if (!(await saveFile(name, data))){ $('#bkSaved').textContent = ''; return; }
+    $('#bkSaved').textContent = '保存しました：' + name;
+    const m = { at:Date.now(), assets, bytes }; lsSet(K.manual, JSON.stringify(m)); showManual(m);
+    if (S.srvUrl) srv('POST', '/backup/novel-manual', { assets, bytes }).catch(() => {});
+  }catch(e){ $('#bkSaved').textContent = ''; log('error','バックアップを書き出せませんでした：' + e.message); }
+};
+/* 手動バックアップの表示（LINE風アプリ第37版と同じ形） */
+const fmtMB = b => b >= 1e6 ? (b / 1e6).toFixed(1) + 'MB' : Math.max(1, Math.round(b / 1e3)) + 'KB';
+const fmtDT = t => { const d = new Date(t), p = n => String(n).padStart(2,'0'); return `${d.getFullYear()}/${p(d.getMonth()+1)}/${p(d.getDate())} ${p(d.getHours())}:${p(d.getMinutes())}`; };
+function daysAgo(t){ const a = new Date(t), b = new Date(); a.setHours(0,0,0,0); b.setHours(0,0,0,0); return Math.round((b - a) / 864e5); }
+function showManual(m){
+  if (!m || !m.at){ $('#bkLast').textContent = '最後に手動で保存：まだありません'; return; }
+  const d = daysAgo(m.at);
+  $('#bkLast').textContent = `最後に手動で保存：${fmtDT(m.at)}（${d <= 0 ? '今日' : d + '日前'}・${m.assets ? '素材あり' : '素材なし'}${m.bytes ? '・' + fmtMB(m.bytes) : ''}）`;
+}
+/* 自動バックアップ：会話・設定（素材・AIのキー・合言葉は除く）をサーバーに預ける。LINE風アプリと一緒に R2 へ自動で保存される */
+async function novelData(){
+  const set = Object.assign({}, S); for (const k of ['apiKey','geminiKey','srvToken','srvUrl']) delete set[k];
+  const hists = {}; for (const r of ROOMS) if (!r.kind){ const h = await idb.get('hist:' + r.id); if (h && h.length) hists[r.id] = h; }
+  return { app:'akari-novel-data', version:VERSION_TEXT, settings:set, global:GLOBAL, chars:CHARS, rooms:ROOMS.map(({ _pending, ...r }) => r), hists, uraFaces:uraFaceCache };
+}
+let novelSyncT = 0, novelReady = false;
+function scheduleNovelSync(){ if (!novelReady || !S.srvUrl) return; clearTimeout(novelSyncT); novelSyncT = setTimeout(() => syncNovel().catch(() => {}), 20000); }
+async function syncNovel(manual){
+  clearTimeout(novelSyncT);
+  if (!S.srvUrl){ if (manual) toast('設定で LINE風アプリのサーバーURLを入れてください', true, 4000); return; }
+  try{
+    const r = await srv('POST', '/novel/save', { data: await novelData() });
+    const v = { at:r.at || Date.now(), lines:r.lines || 0 }; lsSet(K.synced, JSON.stringify(v));
+    if (manual) toast('サーバーに預けました'); if ($('#menu').classList.contains('show')) refreshBak();
+  }catch(e){ log('warn', '会話・設定をサーバーに預けられませんでした：' + e.message); if (manual) toast('預けられませんでした：' + e.message, true, 6000); }
+}
+document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'hidden' && novelSyncT) syncNovel().catch(() => {}); });
+async function refreshBak(){
+  let m = null; try{ m = JSON.parse(lsGet(K.manual) || 'null'); }catch(e){}
+  showManual(m);
+  let sy = null; try{ sy = JSON.parse(lsGet(K.synced) || 'null'); }catch(e){}
+  const el = $('#bkAuto');
+  if (!S.srvUrl){ el.innerHTML = '（設定で LINE風アプリのサーバーにつなぐと使えます）'; return; }
+  let st = null; try{ st = await srv('GET', '/backup/status'); }catch(e){ el.innerHTML = 'サーバーの状態を読めませんでした：' + esc(e.message); return; }
+  if (st.novelManual && (!m || st.novelManual.at > m.at)) showManual(st.novelManual);
+  const last = st.last && st.last.at ? `最後の自動バックアップ：${fmtDT(st.last.at)}` : '自動バックアップはまだありません';
+  el.innerHTML = (st.r2 ? `<div>毎月1日・15日の朝4時ごろ、LINE風アプリと一緒に自動で保存されます（「1日用」「15日用」を交互に上書き）。${esc(last)}</div>`
+    : '<div style="color:#fff;background:#c0392b;border-radius:6px;padding:6px 8px">自動バックアップの保存先（R2）が、まだつながっていません。つながると、LINE風アプリと一緒に自動で動き始めます。それまでは手動のバックアップで守ってください。</div>')
+    + `<div class="note" style="margin-top:4px">サーバーに預けた最新：${sy ? fmtDT(sy.at) + `（会話${sy.lines}件）` : 'まだありません'}（変えてから20秒ほどで自動で預けます）</div>`;
+  try{ const d = await srv('GET', '/novel/data'); $('#bkFromPrev').hidden = !d.hasPrev; }catch(e){}
+}
+async function restoreFromServer(prev){
+  try{
+    const d = await srv('GET', '/novel/data' + (prev ? '?prev=1' : ''));
+    if (!d.data) throw new Error('サーバーに預けたデータがありません');
+    const n = Object.values(d.data.hists || {}).reduce((a, h) => a + h.length, 0);
+    if (!confirm(`${fmtDT(d.at)} に預けた会話・設定（キャラ${(d.data.chars || []).length}人・トーク${(d.data.rooms || []).length}件・会話${n}件）で、今のものを置き換えますか？\n素材とAIのキーは今のまま残ります。`)) return;
+    for (const r of ROOMS) try{ await idb.del('hist:' + r.id); }catch(e){}
+    for (const [rid, h] of Object.entries(d.data.hists || {})) await idb.set('hist:' + rid, h);
+    await idb.set('chars', d.data.chars || []); await idb.set('rooms', d.data.rooms || []); await idb.set('global', Object.assign({}, GLOBAL, d.data.global || {}));
+    if (d.data.uraFaces) await idb.set('uraFaces', d.data.uraFaces);
+    const keep = {}; for (const k of ['apiKey','geminiKey','srvToken','srvUrl']) keep[k] = S[k];
+    S = Object.assign({}, GDEF, d.data.settings || {}, keep); saveS();
+    log('info', 'サーバーに預けた会話・設定から戻しました'); location.reload();
+  }catch(e){ log('error', '戻せませんでした：' + e.message); }
+}
+$('#bkSyncNow').onclick = () => syncNovel(true);
+$('#bkFromSrv').onclick = () => restoreFromServer(false);
+$('#bkFromPrev').onclick = () => restoreFromServer(true);
+async function exportRoom(id){
+  const r = ROOMS.find(x => x.id === id); const hist = (await idb.get('hist:' + r.id)) || [];
+  const names = {}; r.members.forEach(m => names[m] = (charById(m) || {}).name);
+  await saveFile(`akari-talk-${r.name}-${stamp()}.json`, { app:'akari-room', version:VERSION_TEXT, exportedAt:new Date().toISOString(), room:r, names, hist });
+}
+$('#bkImport').onclick = () => $('#fBak').click();
+$('#fBak').addEventListener('change', async e => {
+  const f = e.target.files[0]; e.target.value = ''; if (!f) return;
+  try{
+    const data = JSON.parse(await f.text());
+    if (data.app === 'akari-room'){
+      const mem = data.room.members.map(m => charById(m) ? m : (CHARS.find(c => norm(c.name) === norm((data.names || {})[m])) || {}).id);
+      if (mem.some(x => !x)) throw new Error('このトークのメンバーのキャラが見つかりません。先にキャラを作るか、全部のバックアップを復元してください');
+      const map = {}; data.room.members.forEach((m,i) => map[m] = mem[i]);
+      const nr = { id:uid(), name:data.room.name + '（復元）', members:mem, updated:Date.now(), last:data.room.last ? { who:map[data.room.last.who], text:data.room.last.text } : null };
+      const h = (data.hist || []).map(x => x.role === 'user' ? x : { ...x, lines:x.lines.map(l => ({ ...l, who:map[l.who] || mem[0] })) });
+      await idb.set('hist:' + nr.id, h); ROOMS.push(nr); await saveRooms(); renderRooms(); toast('トークを追加しました'); return;
+    }
+    if (data.app !== 'akari-novel') throw new Error('このアプリのバックアップではないようです');
+    if (!confirm(`${data.exportedAt ? new Date(data.exportedAt).toLocaleString('ja-JP') : ''} のバックアップで、今のデータを置き換えますか？`)) return;
+    const key = S.apiKey;
+    if (data.schema >= 3){
+      if (data.files) for (const [id, r] of Object.entries(data.files)) await idb.set('img:' + id, { name:r.name, type:r.type, buf:unb64(r.b64) });
+      for (const r of ROOMS) try{ await idb.del('hist:' + r.id); }catch(err){}
+      for (const [rid, h] of Object.entries(data.hists || {})) await idb.set('hist:' + rid, h);
+      await idb.set('chars', data.chars || []); await idb.set('rooms', data.rooms || []); await idb.set('global', data.global || {});
+      S = Object.assign({}, GDEF, data.settings || {});
+    } else {   // 第1・2回の形式
+      await idb.del('chars'); await idb.del('rooms'); await idb.del('global');
+      if (data.assets){ const dec = a => a ? { name:a.name, type:a.type, buf:unb64(a.b64) } : null;
+        await idb.set('assets', { bg:dec(data.assets.bg), base:dec(data.assets.base), font:dec(data.assets.font), se:dec(data.assets.se), parts:(data.assets.parts||[]).map(dec).filter(Boolean) }); }
+      await idb.set('history', Array.isArray(data.history) ? data.history : []);
+      S = Object.assign({}, GDEF, data.settings || {});
+    }
+    if (!S.apiKey) S.apiKey = key; saveS();
+    log('info','バックアップから復元しました'); location.reload();
+  }catch(err){ log('error','復元できませんでした：' + err.message); }
+});
+
+/* --- 困ったとき --- */
+function diagText(){
+  const st = isStandalone ? 'ホーム画面から' : 'ブラウザ';
+  const chars = CHARS.map(c => `${c.name}[ベース:${c.base ? ((REC.get(c.base) || {}).name || '?') + (DIMS.get(c.base) ? '(' + DIMS.get(c.base).join('×') + ')' : '') : 'なし'} 大きさ${c.scale}/上${c.top}/ずれ${c.xoff} 表情:${c.faces.map(f => `${f.name}(目${Object.keys(f.eye).join('/') || '-'} 口${Object.keys(f.mouth).join('/') || '-'})`).join(' ') || 'なし'} 設定${(c.prompt || '').length}字]`).join('\n  ');
+  const recent = LOGS.slice(-40).reverse().map(l => `[${l.t}] ${l.level}: ${l.msg}${l.x ? '\n    ' + l.x.replace(/\n/g,'\n    ') : ''}`).join('\n');
+  const se = GLOBAL.se && REC.get(GLOBAL.se);
+  return `【朱里ノベル${IS_LAB ? ' 統合の試作' : ''} 診断情報】
+版：${VERSION_TEXT}
+日時：${new Date().toLocaleString('ja-JP')}
+端末：${navigator.userAgent}
+画面：${innerWidth}×${innerHeight} dpr${devicePixelRatio} / ${st} / 状態:${state}
+開き方：${location.protocol}//${location.host}${location.pathname}${envBad ? '（制限のある画面）' : ''} 画像方式=${useData ? 'data' : 'blob'} 保存の保護=${persistState}
+設定：AI=${provName(S.aiProvider)}（今のトーク：${ROOM ? provName(provOf(ROOM)) : '-'}） Gemini=${S.geminiModel}/キー${S.geminiKey ? 'あり' : 'なし'} Grok endpoint=${S.endpoint} model=${S.model} 温度=${S.temperature} 往復=${S.turns} 速さ=${S.speed} 瞬き=${S.blinkFade ? '疑似半目' : '2枚'}/${S.blinkHalfMs}/${S.blinkCloseMs}ms/${S.blinkAlpha}% キー=${S.apiKey ? '設定あり(' + S.apiKey.length + '文字)' : '未設定'}
+素材：背景=${GLOBAL.bg ? (REC.get(GLOBAL.bg) || {}).name : 'なし'} フォント=${GLOBAL.font ? (REC.get(GLOBAL.font) || {}).name + (fontOk ? '(OK)' : '(失敗)') : 'なし'} タップ音=${se ? se.name + (seBuf ? `(${seBuf.duration.toFixed(2)}秒)` : '(未準備)') : 'なし'}(${S.seOn ? 'ON' : 'OFF'} ${S.seVol}%) 音声=${actx ? actx.state : '未作成'}
+キャラ${CHARS.length}人：
+  ${chars || 'なし'}
+LINE風：${S.srvUrl ? (LINE.ok ? `つながった（キャラ${LINE.chars.length}・グループ${LINE.groups.length}）` : '未接続') : 'URL未設定'} 合言葉${S.srvToken ? 'あり' : 'なし'} 裏の表情=${S.uraFaceAI ? 'AI' : '通常'}
+トーク${ROOMS.length}件・今のトーク：${ROOM ? `${ROOM.name}（${ROOM.members.map(m => (charById(m) || {}).name).join('・')}）会話${HIST.length}件` : 'なし'}
+直近の送信：${lastReq ? JSON.stringify(lastReq) : 'なし'}
+直近の受信：${lastResp ? `HTTP ${lastResp.status}\n${lastResp.body}` : 'なし'}
+最後のエラー：${lastError ? `[${lastError.t}] ${lastError.msg}` : 'なし'}
+--- 記録（新しい順・最大40件）---
+${recent || '（なし）'}`;
+}
+async function copyDiag(){ const ok = await copyText(diagText()); toast(ok ? '診断情報をコピーしました。Claudeに貼り付けてください' : 'コピーできませんでした。困ったとき欄の文字を長押しで選んでください', !ok); }
+$('#copyDiag').onclick = copyDiag; $('#toastBtn').onclick = copyDiag; $('#toastX').onclick = () => $('#toast').classList.remove('show');
+$('#clearLogs').onclick = () => { if (!confirm('動作の記録を消しますか？')) return; LOGS = []; lastError = null; lsSet(K.logs,'[]'); renderHelp(); };
+function renderHelp(){ $('#logView').textContent = diagText(); }
+$('#copyDev').onclick = async () => { const ok = await copyText(DEV_LOG); toast(ok ? '改善ログをコピーしました' : 'コピーできませんでした', !ok); };
+
+/* ====== 本番のデータを写す（読むだけ） ====== */
+function openProd(name = 'akariNovel'){ return new Promise((res,rej) => { const r = indexedDB.open(name); r.onupgradeneeded = () => { try{ r.result.createObjectStore('kv'); }catch(e){} }; r.onsuccess = () => res(r.result); r.onerror = () => rej(r.error); }); }
+$('#copyProd').onclick = () => copyFrom('akariNovel', 'akari.settings', 'akari.html');
+$('#copyLab').onclick = () => copyFrom('akariLab', 'lab.settings', '試作（lab）');
+async function copyFrom(dbName, setKey, label){
+  try{
+    const db = await openProd(dbName);
+    const all = await new Promise((res,rej) => { const out = []; const tx = db.transaction('kv'); const q = tx.objectStore('kv').openCursor();
+      q.onsuccess = () => { const c = q.result; if (c){ out.push([c.key, c.value]); c.continue(); } else res(out); }; q.onerror = () => rej(q.error); });
+    db.close();
+    if (!all.some(([k]) => k === 'chars')) throw new Error(`${label}のデータが見つかりません（ホーム画面から開いている場合は、バックアップのファイルで写してください）`);
+    if (!confirm(`${label}のデータ（${all.length}件）で、ここのキャラ・トーク・素材を置き換えますか？（${label}は変わりません）`)) return;
+    for (const [k,v] of all) await idb.set(k, v);
+    let ps = {}; try{ ps = JSON.parse(localStorage.getItem(setKey) || '{}'); }catch(e){}
+    for (const k of ['apiKey','endpoint','model','temperature','turns','userName','aiProvider','geminiKey','geminiModel','speed','seOn','seVol','blinkFade','blinkHalfMs','blinkCloseMs','blinkAlpha']) if (ps[k] != null) S[k] = ps[k];
+    saveS(); log('info', `${label}のデータを写しました（${all.length}件）`); location.reload();
+  }catch(e){ log('error', `${label}のデータを写せませんでした：` + e.message); }
+}
+
+/* ====== 開いている場所の確認 ====== */
+let envBad = false, persistState = '未確認';
+(function envCheck(){
+  let framed = false; try{ framed = window.top !== window.self; }catch(e){ framed = true; }
+  if (!/^https?:$/.test(location.protocol) || framed){
+    envBad = true;
+    log('warn', `制限のある画面で開かれています（${location.protocol}${framed ? '／埋め込み表示' : ''}）`);
+    setTimeout(() => toast(`プレビュー画面では画像や保存が制限されます。Safariで https://koara1012.github.io${IS_LAB ? '/lab/' : '/chat/'}novel.html を開いてください`, false, 12000), 600);
+  }
+})();
+
+/* ====== 起動 ====== */
+(async function init(){
+  $('#ver').textContent = `第${VERSION.no}回`; $('#verFull').textContent = VERSION_TEXT;
+  drawAuto(); layout();
+  try{ await idb.open(); }catch(e){ log('error','端末の保存領域（IndexedDB）を開けませんでした：' + e.message); }
+  if (navigator.storage && navigator.storage.persist){
+    try{ const already = navigator.storage.persisted ? await navigator.storage.persisted() : false;
+      persistState = already ? '保護済み' : ((await navigator.storage.persist()) ? '保護済み' : '保護されていない'); }catch(e){ persistState = '確認できず'; }
+  }
+  log('info', `起動 ${VERSION_TEXT}`);
+  if (idb.db){
+    try{
+      const chars = await idb.get('chars');
+      if (!chars){
+        const oldA = await idb.get('assets'), oldH = await idb.get('history');
+        let oldS = {}; try{ oldS = JSON.parse(lsGet('akari.settings') || '{}'); }catch(e){}
+        await migrateLegacy(oldA, oldH, oldS);
+      } else {
+        CHARS = chars; ROOMS = (await idb.get('rooms')) || []; GLOBAL = Object.assign({ bg:null, font:null, se:null }, (await idb.get('global')) || {});
+      }
+      for (const c of CHARS){ c.faces = c.faces || []; c.faces.forEach(f => { f.eye = f.eye || {}; f.mouth = f.mouth || {}; }); }
+    }catch(e){ log('error','データを読み込めませんでした：' + e.message); }
+  }
+  for (const id of allRecIds()) await loadRec(id);
+  try{ uraFaceCache = (await idb.get('uraFaces')) || {}; }catch(e){}
+  const wantUra = QS.get('ura'), wantMeet = QS.get('meet');
+  if (QS.toString()) history.replaceState(null, '', location.pathname);
+  let lineP = S.srvUrl ? loadLine(false).then(() => pushFaces()).catch(e => { log('warn', e.message); }) : null;
+  await applyGlobal();
+  let startId = S.room && ROOMS.some(r => r.id === S.room) ? S.room : (ROOMS[0] && ROOMS[0].id);
+  if (wantUra){ const id = await uraRoomFor(wantUra, lineP); if (id) startId = id; }
+  if (wantMeet){ const id = await meetRoomFor(wantMeet, lineP); if (id) startId = id; }
+  await openRoom(startId);
+  const empty = !CHARS.some(c => c.base) && !GLOBAL.bg;
+  novelReady = true; scheduleNovelSync();   // 会話・設定をサーバーに預ける（自動バックアップ用）
+  if (isStandalone && empty) setTimeout(() => toast('ホーム画面のアプリは、Safariとは保存場所が別です。Safariで「バックアップ」→書き出し、ここで「バックアップから復元」すると引っ越せます', false, 14000), 900);
+})();
+</script>
+</body>
+</html>

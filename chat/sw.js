@@ -28,7 +28,18 @@ self.addEventListener('notificationclick', (e) => {
   const data = e.notification.data || {};
   const charId = data.charId;
   const tl = data.tl;
-  if (data.url) { e.waitUntil(self.clients.openWindow(data.url)); return; } // 会う約束の通知：ノベル画面（会う場面）を開く
+  if (data.url) { // 会う約束の通知：ノベル画面（会う場面）を開く。アプリが開いていれば、その画面で開き直す
+    e.waitUntil((async () => {
+      const cs = await self.clients.matchAll({ type: 'window', includeUncontrolled: true });
+      for (const c of cs) {
+        if (!c.url.startsWith(self.registration.scope)) continue;
+        try { await c.focus(); if (c.navigate) { await c.navigate(data.url); return; } } catch (_) {}
+        c.postMessage({ type: 'goto', url: data.url }); return;
+      }
+      await self.clients.openWindow(data.url);
+    })());
+    return;
+  }
   let path = './';
   if (tl) path = './?tl=' + encodeURIComponent(tl) + (data.postId ? '&post=' + encodeURIComponent(data.postId) : '');
   else if (charId) path = './?chat=' + encodeURIComponent(charId);

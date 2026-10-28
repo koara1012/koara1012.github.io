@@ -1,6 +1,6 @@
 # トーク（キャラチャット）引き継ぎメモ
 
-最終更新：第39版（2026-10-28 会う約束（試作））
+最終更新：第40版（2026-10-28 LINE風とノベル画面の統合）
 
 iPhoneのホーム画面に置いて使う、キャラクターとのLINE風チャットアプリ（PWA）です。
 このメモは、次に作業する人（または Claude）が、ここだけ読めば全体をつかめるように書いています。
@@ -22,13 +22,16 @@ iPhone（PWA）  ──HTTPS──▶  Cloudflare Worker「chara-chat」 ──�
 
 | 部分 | 場所 | 公開のされ方 |
 |---|---|---|
-| アプリ画面 | `chat/`（index.html・sw.js・manifest.json・アイコン） | GitHub Pages：https://koara1012.github.io/chat/ （main に push すると自動で公開） |
+| アプリ画面 | `chat/`（index.html・**novel.html（立ち絵のノベル画面）**・sw.js・manifest.json・アイコン） | GitHub Pages：https://koara1012.github.io/chat/ （main に push すると自動で公開） |
+| 試作の置き場 | `lab/`（index.html・novel.html は `chat/` と**同じファイル**。置き場所で保存の名前が変わる：`lab.*`・IndexedDB `akariLab`、通知なし） | https://koara1012.github.io/lab/ |
 | サーバー | `server/worker.js`・`server/wrangler.jsonc` | Cloudflare Workers Builds が GitHub の main を見て自動デプロイ（Root directory = `server`） |
 | テスト | `tests/` | 手元で `node --no-warnings tests/run-all.mjs` |
 
 - サーバーURL：Cloudflare の Workers の画面で確認できます（公開リポジトリなので、ここには書きません）。
 - アプリの設定画面で「サーバーURL」と「合言葉（APP_TOKEN）」を入れて使います。この2つは iPhone の中だけに保存されます。
 - 画面とサーバーは、それぞれ版の文字列を持っています（`chat/index.html` の `APP_VERSION`、`server/worker.js` の `VERSION`）。更新するときは両方そろえます。
+- **第40版から、LINE風アプリとノベル画面（伊達朱里などの立ち絵の会話）は1つのアプリ**です。`chat/index.html`（LINE風）と `chat/novel.html`（ノベル。引き継ぎは `AKARI_HANDOVER.md`）は別ファイルで、トーク画面の［立ち絵］・帯の［会いに行く］・通知のタップでノベルへ、ノベルの［‹ LINE風へ］で戻ります。サーバーURL・合言葉は `chat.cfg` を共有。
+- `chat/` を直したら `lab/` にも同じファイルを写します（`cp chat/index.html chat/novel.html lab/`）。中身は `IS_LAB`（置き場所）で切り替わります。
 
 ## 2. Cloudflare の設定
 
@@ -162,9 +165,10 @@ node --no-warnings tests/run-all.mjs t_group     # 名前で絞る
 - 背景画像の着せかえ（相談のみ。キャラごと／共通、表裏別、置き場所をどうするか未定）
 - アプリのアイコンの変更（相談のみ。変えたら、ホーム画面から削除して追加し直す必要あり）
 - 表の返事の長さ設定（保留）
-- ノベル風アプリ（`akari.html`）との連携：LINEで会う約束→ノベル画面で会う→まとめを記憶に戻す。試作中（`lab/index.html` が本番 `chat/index.html` 第37版のコピー。保存は `lab.*`、通知なし）。**`chat/index.html` を直したら、試作版にも同じ直しが要るか確かめる**。詳しくは `AKARI_HANDOVER.md` §9
+- ノベル画面との統合は第40版で済み（`AKARI_HANDOVER.md` §9）。`akari.html`（単独のノベル画面）は残してある
 
 ## 9. 更新履歴（新しい順）
+- **第40版**：LINE風とノベル画面の統合（段階4）。`chat/novel.html` を追加（試作 `lab/` と同じファイル）。LINE風にも［立ち絵］ボタン・会う約束の帯と設定。通知のタップ先 `MEET_URL` を `chat/novel.html` に（`sw.js` はアプリが開いていればその画面で開き直す）。ノベル画面の会話・設定（素材・AIのキー・合言葉は除く）を `POST /novel/save` で kv `novel:data` に預かる（自動バックアップに入る。急に減ったら `novel:prev` に前のもの）・`GET /novel/data`。ノベルの手動バックアップの記録 `POST /backup/novel-manual`（`bk:novelManual`、`/backup/status` の `novelManual`）。テスト `t_novel`
 - **第39版**：会う約束（試作・設定 `meetFeature`、既定オフ）。表の返事を作るとき、ユーザーが話した直後なら `meet_status/date/time/place` も答えてもらい `appt:` に記録（`callOmoteRich` の `opt.meet`）。表のプロンプトに約束の状態（約束あり・忙しくて保留・延期で決め直し・来なかった・会っている・会った内容）を足す（`apptContext`）。会う約束モードは全員（`meetOn`）とキャラごと（`meetOffChars`）。オンに戻すと延期中の約束を `replan` に。二段の通知（`runAppointments`）。会う場面（ノベル画面の表トーク）の返事は表のAIで、トークの最近の会話・くらしを渡す（`meetReply`）。終えたら要約を記憶に（`meetEnd`）。`chat/sw.js` は通知の `url` を開く。画面は `lab/index.html`（帯・設定）と `lab/novel.html`（表トーク）だけ。テスト `t_meet`
 - **第38版**：裏の返事に立ち絵の表情（ノベル画面用）。ノベル画面が `POST /faces` で表情の名前・説明を登録したキャラだけ、裏の返事（1人・グループ）でAIにセリフの先頭へ《表情名》を付けてもらい、保存時に外して `messages.face` に入れる（`/sync`・`/reply` で返す。次の会話ではAIに《》付きで渡す）。表情が無いキャラ・表は今までどおり。LINE風の画面には出ない。テスト `t_faces`
 - **第37版**：手動バックアップの欄に「最後に手動で保存した日時」を表示（保存し終えたときにサーバーへ記録）

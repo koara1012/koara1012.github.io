@@ -2704,6 +2704,7 @@ if (navigator.serviceWorker) {
     if (d.type === 'sync') sync();
     if (d.type === 'open' && d.charId) { setMode('talk'); sync().then(() => openChat(d.charId, 'omote')); }
     if (d.type === 'openTl') openTlFromNotice(d.world, d.postId);
+    if (d.type === 'goto' && d.url) location.href = d.url; // 会う約束の通知（ノベル画面へ）
   });
 }
 

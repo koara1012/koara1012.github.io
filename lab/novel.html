@@ -36,6 +36,7 @@ html,body{margin:0;height:100%;background:#000;color:#fff;overflow:hidden;
 #nameplate::after{content:"";position:absolute;left:calc(var(--S)*-11);top:calc(var(--S)*-3);width:calc(var(--S)*6);height:calc(100% + var(--S)*6);
   background:radial-gradient(circle at 50% calc(var(--S)*3),rgba(0,0,0,.9) calc(var(--S)*2.6),transparent calc(var(--S)*3)),
              radial-gradient(circle at 50% calc(100% - var(--S)*3),rgba(0,0,0,.9) calc(var(--S)*2.6),transparent calc(var(--S)*3))}
+#text.narr{color:#d6cfe3}
 #text{position:absolute;top:calc(var(--S)*38);
   left:max(calc(env(safe-area-inset-left) + 20px), calc(var(--sx) + var(--S)*215));
   right:max(calc(env(safe-area-inset-right) + 20px), calc(var(--sx) + var(--S)*100));
@@ -242,13 +243,16 @@ pre.box{white-space:pre-wrap;word-break:break-all;background:#1a161d;border:1px 
 <script>
 'use strict';
 /* ====== 版 ====== */
-const VERSION = { no: 3, at: '2026-10-28 19:45:00' };
+const VERSION = { no: 4, at: '2026-10-28 20:00:00' };
 const VERSION_TEXT = `試作・段階${VERSION.no}（${VERSION.at} 更新・本番 akari.html 第6回がもと）`;
 
 /* ====== 改善ログ（他のAIへの引き継ぎ用）======
    改善のたびに「## 第〜回」を先頭側へ追記し、概要も最新に保つ */
 const DEV_LOG = `# 朱里ノベル 統合の試作（lab/novel.html） 改善ログ
 ※ 本番 akari.html 第6回をもとにした試作。保存先は本番と分けている（localStorage lab.settings / lab.logs、IndexedDB akariLab）。
+## 試作・段階4（2026-10-28 20:00:00）
+- 裏トークのナレーション（名前欄なし）の文字を少し薄い色（#d6cfe3）に（ユーザーが「色だけ変える」を選んだ）。#text.narr、showName('') で付け外し。
+
 ## 試作・段階3（2026-10-28 19:45:00）
 - 表情差分ごとに「使うトーク」（ふつう・裏・表）を選べる（f.off = {normal,ura,omote}、true＝使わない）。外した種類ではAIの候補から外し、返ってきたら既定の顔に。既定（「通常」）は外せない。usableFaces(c, kind)。
 - 裏トークの表情をサーバーで付ける（LINE風 第38版）：LINE風につないだキャラの、裏で使う表情の名前・説明を POST /faces で登録（キャラ保存の1.5秒後・起動時。画像は送らない）。サーバーの返事の face を使い、無いときだけ端末のAIキーで選ぶ（srvFace の行は選び直さない）。
@@ -693,7 +697,8 @@ function showHint(kind){
   hintEl.style.display = 'block';
 }
 function stageOf(who){ return STAGE.find(s => s.c.id === who) || null; }
-function showName(who){ const c = who === '' ? null : (charById(who) || (STAGE[0] && STAGE[0].c)); $('#nameTxt').textContent = c ? c.name : ''; $('#nameplate').classList.toggle('hide', !c); }
+function showName(who){ textEl.classList.toggle('narr', who === '');   // ナレーション（裏の＊）は少し薄い色
+  const c = who === '' ? null : (charById(who) || (STAGE[0] && STAGE[0].c)); $('#nameTxt').textContent = c ? c.name : ''; $('#nameplate').classList.toggle('hide', !c); }
 // 後ろの列の人が話すときは、前の列でいちばん長く黙っている人と入れ替わる
 function bringFront(st){
   if (!st) return; st.said = ++spokeAt;

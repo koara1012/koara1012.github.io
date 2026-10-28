@@ -177,6 +177,11 @@ pre.box{white-space:pre-wrap;word-break:break-all;background:#1a161d;border:1px 
       <div class="row"><label>送る会話の往復数</label><input type="number" id="sTurns" min="2" max="200"><span class="note">多いほど覚えているが料金が増える</span></div>
       <div class="row"><label>ログでのあなたの名前</label><input type="text" id="sUser"></div>
       <div class="row"><label>文字の速さ（ms/字）</label><input type="number" id="sSpeed" min="0" max="300"></div>
+      <h4>瞬き</h4>
+      <div class="row"><label>疑似半目</label><label><input type="checkbox" id="sBlinkFade"> 半目が無い表情は、開きと閉じを溶け合わせて半目の代わりにする</label></div>
+      <div class="row"><label>半目の時間（ms）</label><input type="number" id="sBlinkHalf" min="10" max="200" step="5"><label>閉じている時間（ms）</label><input type="number" id="sBlinkClose" min="30" max="400" step="5"><label>溶け合わせの濃さ（%）</label><input type="number" id="sBlinkAlpha" min="10" max="90" step="5"></div>
+      <div class="row"><button class="b" id="blinkTest">今いるキャラを瞬きさせる</button><button class="b" id="blinkSlow">ゆっくり瞬き（10倍・確認用）</button></div>
+      <h4>タップ音</h4>
       <div class="row"><label>タップ音</label><label><input type="checkbox" id="sSeOn"> 鳴らす</label><label>音量（%）</label><input type="number" id="sSeVol" min="0" max="200" step="5"></div>
       <p class="note">タップ音は画面タップでの文字送り・ページ送りのときだけ鳴ります。iPhoneの消音モード中は鳴らないことがあります。<br>キャラごとの名前・性格・立ち絵・表情は「キャラ」で設定します。APIキーはこの端末の中だけに保存され、xAI以外には送られません。</p>
     </div>
@@ -220,7 +225,7 @@ pre.box{white-space:pre-wrap;word-break:break-all;background:#1a161d;border:1px 
 <script>
 'use strict';
 /* ====== 版 ====== */
-const VERSION = { no: 3, at: '2026-10-28 15:24:51' };
+const VERSION = { no: 4, at: '2026-10-28 15:55:27' };
 const VERSION_TEXT = `第${VERSION.no}回（${VERSION.at} 更新）`;
 
 /* ====== 改善ログ（他のAIへの引き継ぎ用）======
@@ -247,7 +252,7 @@ const DEV_LOG = `# 伊達朱里ノベル風チャット 改善ログ
   - 立ち位置：1人=50%、2人=30%/70%、3人=22%/50%/78%（＋キャラごとの左右ずれ）。話していない人も暗くしない（ユーザーの希望）。
   - 口パクは話している人だけ。瞬きは全員が別々のタイミング。
 - AIへの返答形式：1人 {"lines":[{"face","text"}]}（1〜4行）／複数 {"lines":[{"who","face","text"}]}（1〜6行）。who は名前で照合（空白無視・部分一致）。
-- 瞬き：2〜6秒ランダム、half→close→half（halfが無ければcloseのみ）、たまに2回。口パク：文字送り中に約100msで切り替え、句読点で閉じる。
+- 瞬き：2〜6秒ランダム、half→close→half、たまに2回。半目が無い表情は「疑似半目」（開きの上に閉じを不透明度blinkAlpha%で重ねる＝st.es 'fade'、レイヤー eye2）。設定 blinkFade / blinkHalfMs(45) / blinkCloseMs(90) / blinkAlpha(50)。ユーザーは全キャラ半目の素材を持っていない。口パク：文字送り中に約100msで切り替え、句読点で閉じる。
 - タップ音：GLOBAL.se。Web Audioでデコード→前後の無音カット・ピーク0.9に正規化。画面タップの文字送り・ページ送りの時だけ鳴る（▷|・オート・入力欄を開くタップ・メニューでは鳴らない）。iPhoneのSafariは mov からは音を取り出せない。
 - 画像表示：blob URL が使えない環境（Claudeアプリのプレビュー等）では自動で data URL に切り替え。表示できない画像はエラー通知。
 - 保存先：localStorage「akari.settings」（共通設定・APIキー・今のトーク）「akari.logs」（動作記録 最大300件）
@@ -255,6 +260,10 @@ const DEV_LOG = `# 伊達朱里ノベル風チャット 改善ログ
   第1・2回の assets / history は起動時に自動でキャラ「伊達　朱里」とその個別トークへ引っ越し（normal→通常）。
 - 起動時に navigator.storage.persist() を要求。ホーム画面アプリはSafariと保存場所が別なので、空なら案内を出す。
 - 困ったとき：エラー時にトースト→ワンタップで診断情報をコピー。バックアップ：全部（画像・キー任意）／トーク1つ。第1・2回の形式も復元可。
+
+## 第4回（2026-10-28 15:55:27）
+- お試し：疑似半目を追加（半目の素材が無い表情でも、開き→溶け合わせ→閉じ→溶け合わせ→開き でなめらかに瞬き）。
+- 設定に「瞬き」欄：疑似半目のオン／オフ、半目の時間・閉じている時間・溶け合わせの濃さ、「今いるキャラを瞬きさせる」「ゆっくり瞬き（10倍）」の確認ボタン。
 
 ## 第3回（2026-10-28 15:24:51）
 - キャラを複数登録できるように（キャラ画面）。今までのデータは「伊達　朱里」へ自動で引っ越し。
@@ -324,7 +333,7 @@ const AKARI_PROMPT = `あなたは「伊達朱里（だて あかり）」とし
 - 性的な話題には乗らず、真っ赤になって慌てて話を逸らす
 - AIであることには触れず、朱里として自然に会話を続ける`;
 const GDEF = { apiKey:'', endpoint:'https://api.x.ai/v1/chat/completions', model:'grok-4.6', temperature:0.9, turns:30,
-  userName:'あなた', speed:45, auto:false, seOn:true, seVol:80, room:null, seErrName:'' };
+  userName:'あなた', speed:45, auto:false, seOn:true, seVol:80, room:null, seErrName:'', blinkFade:true, blinkHalfMs:45, blinkCloseMs:90, blinkAlpha:50 };
 let S = Object.assign({}, GDEF);
 try{ Object.assign(S, JSON.parse(lsGet('akari.settings')||'{}')); }catch(e){}
 function saveS(){ if(!lsSet('akari.settings', JSON.stringify(S))) log('warn','設定を保存できませんでした（プライベートブラウズ等）'); }
@@ -528,7 +537,7 @@ async function buildStage(){
   STAGE = ms.map(c => {
     const el = document.createElement('div'); el.className = 'chara';
     const mk = () => { const i = document.createElement('img'); i.alt = ''; el.appendChild(i); return i; };
-    const st = { c, el, base:mk(), eye:mk(), mouth:mk(), face:defaultFace(c), es:'open', ms:'close', dead:false };
+    const st = { c, el, base:mk(), eye:mk(), eye2:mk(), mouth:mk(), face:defaultFace(c), es:'open', ms:'close', dead:false };
     box.appendChild(el); blinkLoop(st); return st;
   });
   layout(); STAGE.forEach(renderChar);
@@ -548,13 +557,17 @@ function setImg(el, id){
 function renderChar(st){
   if (st.dead) return; const f = faceObj(st.c, st.face);
   setImg(st.base, st.c.base);
-  setImg(st.eye, f && f.eye ? (f.eye[st.es] || null) : null);
+  const fade = st.es === 'fade' && f && f.eye && f.eye.close;
+  setImg(st.eye, f && f.eye ? (f.eye[fade ? 'open' : st.es] || null) : null);
+  setImg(st.eye2, fade ? f.eye.close : null); st.eye2.style.opacity = fade ? Math.min(.95, Math.max(.05, S.blinkAlpha/100)) : '';
   setImg(st.mouth, f && f.mouth ? (f.mouth[st.ms] || null) : null);
 }
 function setFace(st, name){ if (!st) return; st.face = faceNames(st.c).includes(name) ? name : defaultFace(st.c); st.es = 'open'; st.ms = 'close'; renderChar(st); }
-async function blinkOnce(st){
+async function blinkOnce(st, slow){
   const f = faceObj(st.c, st.face); if (!f || !f.eye || !f.eye.close || st.es !== 'open' || st.dead) return;
-  const seq = f.eye.half ? [['half',45],['close',75],['half',45]] : [['close',100]];
+  const k = slow ? 10 : 1, h = (+S.blinkHalfMs || 45)*k, c = (+S.blinkCloseMs || 90)*k;
+  // 本物の半目があればそれを使い、無ければ疑似半目（開きと閉じの溶け合わせ）か、閉じだけ
+  const seq = f.eye.half ? [['half',h],['close',c],['half',h]] : S.blinkFade ? [['fade',h],['close',c],['fade',h]] : [['close',c]];
   for (const [s,d] of seq){ st.es = s; renderChar(st); await sleep(d); }
   st.es = 'open'; renderChar(st);
 }
@@ -988,9 +1001,17 @@ $('#clearHist').onclick = async () => {
 };
 
 /* --- 設定 --- */
-const FIELDS = { sKey:'apiKey', sEnd:'endpoint', sModel:'model', sTemp:'temperature', sTurns:'turns', sUser:'userName', sSpeed:'speed', sSeVol:'seVol' };
-const NUMS = ['temperature','turns','speed','seVol'];
-function fillSettings(){ for (const [id,k] of Object.entries(FIELDS)) $('#'+id).value = S[k]; $('#sSeOn').checked = !!S.seOn; }
+const FIELDS = { sKey:'apiKey', sEnd:'endpoint', sModel:'model', sTemp:'temperature', sTurns:'turns', sUser:'userName', sSpeed:'speed', sSeVol:'seVol', sBlinkHalf:'blinkHalfMs', sBlinkClose:'blinkCloseMs', sBlinkAlpha:'blinkAlpha' };
+const NUMS = ['temperature','turns','speed','seVol','blinkHalfMs','blinkCloseMs','blinkAlpha'];
+function fillSettings(){ for (const [id,k] of Object.entries(FIELDS)) $('#'+id).value = S[k]; $('#sSeOn').checked = !!S.seOn; $('#sBlinkFade').checked = !!S.blinkFade; }
+$('#sBlinkFade').addEventListener('change', e => { S.blinkFade = e.target.checked; saveS(); });
+async function blinkNow(slow){
+  $('#menu').classList.remove('show'); menuDirty = false; layout(); await sleep(400);
+  const can = STAGE.filter(st => { const f = faceObj(st.c, st.face); return f && f.eye && f.eye.close; });
+  if (!can.length){ toast('今の表情に目の「閉じ」が入っていないので瞬きできません', true, 5000); return; }
+  for (const st of can) blinkOnce(st, slow);
+}
+$('#blinkTest').onclick = () => blinkNow(false); $('#blinkSlow').onclick = () => blinkNow(true);
 for (const [id,k] of Object.entries(FIELDS)){
   $('#'+id).addEventListener('input', e => { let v = e.target.value; if (NUMS.includes(k)){ v = parseFloat(v); if (isNaN(v)) return; } else v = v.trim(); S[k] = v; saveS(); });
 }
@@ -1111,7 +1132,7 @@ function diagText(){
 端末：${navigator.userAgent}
 画面：${innerWidth}×${innerHeight} dpr${devicePixelRatio} / ${st} / 状態:${state}
 開き方：${location.protocol}//${location.host}${location.pathname}${envBad ? '（制限のある画面）' : ''} 画像方式=${useData ? 'data' : 'blob'} 保存の保護=${persistState}
-設定：endpoint=${S.endpoint} model=${S.model} 温度=${S.temperature} 往復=${S.turns} 速さ=${S.speed} キー=${S.apiKey ? '設定あり(' + S.apiKey.length + '文字)' : '未設定'}
+設定：endpoint=${S.endpoint} model=${S.model} 温度=${S.temperature} 往復=${S.turns} 速さ=${S.speed} 瞬き=${S.blinkFade ? '疑似半目' : '2枚'}/${S.blinkHalfMs}/${S.blinkCloseMs}ms/${S.blinkAlpha}% キー=${S.apiKey ? '設定あり(' + S.apiKey.length + '文字)' : '未設定'}
 素材：背景=${GLOBAL.bg ? (REC.get(GLOBAL.bg) || {}).name : 'なし'} フォント=${GLOBAL.font ? (REC.get(GLOBAL.font) || {}).name + (fontOk ? '(OK)' : '(失敗)') : 'なし'} タップ音=${se ? se.name + (seBuf ? `(${seBuf.duration.toFixed(2)}秒)` : '(未準備)') : 'なし'}(${S.seOn ? 'ON' : 'OFF'} ${S.seVol}%) 音声=${actx ? actx.state : '未作成'}
 キャラ${CHARS.length}人：
   ${chars || 'なし'}

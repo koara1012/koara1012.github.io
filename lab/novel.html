@@ -200,6 +200,8 @@ pre.box{white-space:pre-wrap;word-break:break-all;background:#1a161d;border:1px 
       <div class="row"><label>疑似半目</label><label><input type="checkbox" id="sBlinkFade"> 半目が無い表情は、開きと閉じを溶け合わせて半目の代わりにする</label></div>
       <div class="row"><label>半目の時間（ms）</label><input type="number" id="sBlinkHalf" min="10" max="200" step="5"><label>閉じている時間（ms）</label><input type="number" id="sBlinkClose" min="30" max="400" step="5"><label>溶け合わせの濃さ（%）</label><input type="number" id="sBlinkAlpha" min="10" max="90" step="5"></div>
       <div class="row"><button class="b" id="blinkTest">今いるキャラを瞬きさせる</button><button class="b" id="blinkSlow">ゆっくり瞬き（10倍・確認用）</button></div>
+      <h4>BGM</h4>
+      <div class="row"><label>BGM</label><label><input type="checkbox" id="sBgmOn"> 流す（ループ）</label><label>音量（%）</label><input type="number" id="sBgmVol" min="0" max="100" step="5"></div>
       <h4>タップ音</h4>
       <div class="row"><label>タップ音</label><label><input type="checkbox" id="sSeOn"> 鳴らす</label><label>音量（%）</label><input type="number" id="sSeVol" min="0" max="200" step="5"></div>
       <p class="note">タップ音は画面タップでの文字送り・ページ送りのときだけ鳴ります。iPhoneの消音モード中は鳴らないことがあります。<br>キャラごとの名前・性格・立ち絵・表情は「キャラ」で設定します。APIキーはこの端末の中だけに保存され、xAI以外には送られません。</p>
@@ -209,7 +211,8 @@ pre.box{white-space:pre-wrap;word-break:break-all;background:#1a161d;border:1px 
       <div class="row"><label>背景</label><button class="b" data-gpick="bg">選ぶ</button><span id="aBg" class="note"></span><button class="b d s" data-gdel="bg">消す</button></div>
       <div class="row"><label>フォント</label><button class="b" data-gpick="font">選ぶ</button><span id="aFont" class="note"></span><button class="b d s" data-gdel="font">消す</button></div>
       <div class="row"><label>タップ音</label><button class="b" data-gpick="se">選ぶ</button><span id="aSe" class="note"></span><button class="b s" id="seTest">鳴らす</button><button class="b d s" data-gdel="se">消す</button></div>
-      <p class="note">タップ音は m4a・mp3・wav が使えます。動画ファイル（mov・mp4）からは音を取り出せません。前後の無音は自動で切り、音量も自動でそろえます。</p>
+      <div class="row"><label>BGM</label><button class="b" data-gpick="bgm">選ぶ</button><span id="aBgm" class="note"></span><button class="b s" id="bgmTest">再生／止める</button><button class="b d s" data-gdel="bgm">消す</button></div>
+      <p class="note">タップ音は m4a・mp3・wav が使えます。動画ファイル（mov・mp4）からは音を取り出せません。前後の無音は自動で切り、音量も自動でそろえます。<br>BGM は m4a・mp3・wav などの音楽ファイルを1つ選ぶと、最後まで行ったら最初に戻ってくり返し流れます（ループ）。iPhoneでは、画面に一度さわったところから鳴り始めます。音量は「設定」で変えられます。</p>
     </div>
 
     <div class="pn" id="pBak"><h3>バックアップ</h3>
@@ -241,6 +244,7 @@ pre.box{white-space:pre-wrap;word-break:break-all;background:#1a161d;border:1px 
 <input type="file" class="hidefile" id="fImg" accept="image/png,image/webp,image/jpeg">
 <input type="file" class="hidefile" id="fFont" accept=".ttf,.otf,.woff,.woff2,font/*,application/octet-stream">
 <input type="file" class="hidefile" id="fSe" accept="audio/*,.m4a,.mp3,.wav,.aac">
+<input type="file" class="hidefile" id="fBgm" accept="audio/*,.m4a,.mp3,.wav,.aac,.ogg">
 <input type="file" class="hidefile" id="fBak" accept="application/json,.json">
 
 <div id="toast"><span id="toastMsg"></span><button class="b p" id="toastBtn">診断をコピー</button><button class="b" id="toastX">×</button></div>
@@ -249,13 +253,16 @@ pre.box{white-space:pre-wrap;word-break:break-all;background:#1a161d;border:1px 
 <script>
 'use strict';
 /* ====== 版 ====== */
-const VERSION = { no: 8, at: '2026-10-28 23:55:00' };
+const VERSION = { no: 9, at: '2026-10-29 01:20:00' };
 const VERSION_TEXT = `${/\/lab\//.test(location.pathname) ? '試作・' : ''}統合 第${VERSION.no}回（${VERSION.at} 更新・akari.html 第6回がもと）`;
 
 /* ====== 改善ログ（他のAIへの引き継ぎ用）======
    改善のたびに「## 第〜回」を先頭側へ追記し、概要も最新に保つ */
 const DEV_LOG = `# 朱里ノベル 統合の試作（lab/novel.html） 改善ログ
 ※ 本番 akari.html 第6回をもとにした試作。保存先は本番と分けている（localStorage lab.settings / lab.logs、IndexedDB akariLab）。
+## 統合 第9回（2026-10-29 01:20:00）
+- BGM（ループ）：素材に「BGM」（GLOBAL.bgm。音楽ファイルを1つ、端末の中に保存。リポジトリには入れない）。<audio loop> で流し、音量は Web Audio の GainNode（iPhone は audio.volume が効かない）。設定に「流す」（bgmOn）と音量（bgmVol、既定40%）。iPhone は画面に一度さわってから鳴る。画面を離れたら止め、戻ったら再開。手動バックアップの素材に入る。
+
 ## 統合 第8回（2026-10-28 23:55:00）
 - 表情の口の枠の並びを「開き→半開き→閉じ」に（表示だけ。保存の形は同じ）。
 - 表情の［試す］で、短い台詞（TRY_LINE）を話させて口パクも確かめられるように。口の「開き」が無い表情はそう表示。
@@ -410,7 +417,7 @@ const AKARI_PROMPT = `あなたは「伊達朱里（だて あかり）」とし
 - 性的な話題には乗らず、真っ赤になって慌てて話を逸らす
 - AIであることには触れず、朱里として自然に会話を続ける`;
 const GDEF = { apiKey:'', endpoint:'https://api.x.ai/v1/chat/completions', model:'grok-4.6', temperature:0.9, turns:30,
-  userName:'あなた', srvUrl:'', srvToken:'', uraFaceAI:true, aiProvider:'grok', geminiKey:'', geminiModel:'gemini-flash-latest', speed:45, auto:false, seOn:true, seVol:80, room:null, seErrName:'', blinkFade:true, blinkHalfMs:45, blinkCloseMs:90, blinkAlpha:50 };
+  userName:'あなた', srvUrl:'', srvToken:'', uraFaceAI:true, aiProvider:'grok', geminiKey:'', geminiModel:'gemini-flash-latest', speed:45, auto:false, seOn:true, seVol:80, bgmOn:true, bgmVol:40, room:null, seErrName:'', blinkFade:true, blinkHalfMs:45, blinkCloseMs:90, blinkAlpha:50 };
 let S = Object.assign({}, GDEF);
 try{ Object.assign(S, JSON.parse(lsGet(K.settings)||'{}')); }catch(e){}
 function saveS(){ if(!lsSet(K.settings, JSON.stringify(S))) log('warn','設定を保存できませんでした（プライベートブラウズ等）'); syncLineCfg(true); scheduleNovelSync(); }
@@ -486,7 +493,7 @@ async function thumbOf(id, whole){   // 目・口の部分を切り抜いた見�
 }
 
 /* ====== データ ====== */
-let GLOBAL = { bg:null, font:null, se:null };
+let GLOBAL = { bg:null, font:null, se:null, bgm:null };
 let CHARS = [], ROOMS = [], ROOM = null, HIST = [];
 const charById = id => CHARS.find(c => c.id === id);
 function newChar(name){ return { id:uid(), name, prompt:'', callName:'あなた', scale:146.5, top:1.2, xoff:0, base:null, faces:[] }; }
@@ -558,6 +565,7 @@ async function applyGlobal(){
     catch(e){ fontOk = false; log('error','フォントを読み込めませんでした：' + (r && r.name) + '（' + e.message + '）'); }
   }
   prepareSE();
+  prepareBgm();
 }
 function envHint(){ return envBad ? '。制限のある画面で開いているためです。Safariで開いてください' : '（ファイルが壊れているか、形式に非対応の可能性）'; }
 
@@ -588,6 +596,35 @@ function trimNorm(c, b){
     for (let i = 0; i < len; i++){ let v = d[st+i]*g; if (i > len-fade) v *= (len-i)/fade; o[i] = v; } }
   return out;
 }
+/* ====== BGM（ループ）：音楽ファイルを <audio loop> で流し、音量は Web Audio の GainNode で（iPhoneは audio.volume が効かないため） ====== */
+let bgmEl = null, bgmGain = null, bgmPrepared = null, bgmUrl = '', bgmWant = false;
+async function prepareBgm(){
+  if (bgmPrepared === GLOBAL.bgm) return; bgmPrepared = GLOBAL.bgm;
+  if (bgmEl){ try{ bgmEl.pause(); }catch(e){} }
+  if (bgmUrl){ try{ URL.revokeObjectURL(bgmUrl); }catch(e){} bgmUrl = ''; }
+  if (!GLOBAL.bgm){ if (bgmEl) bgmEl.removeAttribute('src'); refreshAssetUI(); return; }
+  const r = await loadRec(GLOBAL.bgm); if (!r){ refreshAssetUI(); return; }
+  if (!bgmEl){
+    bgmEl = new Audio(); bgmEl.loop = true; bgmEl.preload = 'auto'; bgmEl.setAttribute('playsinline', '');
+    bgmEl.addEventListener('error', () => log('error', `BGM「${(REC.get(GLOBAL.bgm) || {}).name || ''}」を再生できませんでした（m4a・mp3・wav を試してください）`));
+  }
+  try{ bgmUrl = URL.createObjectURL(new Blob([r.buf], { type: r.type || 'audio/mpeg' })); bgmEl.src = bgmUrl; }
+  catch(e){ bgmEl.src = 'data:' + (r.type || 'audio/mpeg') + ';base64,' + await b64(r.buf); }
+  log('info', `BGM を準備：${r.name}`);
+  refreshAssetUI(); bgmSync();
+}
+function bgmVolume(){ return Math.max(0, Math.min(100, +S.bgmVol || 0)) / 100; }
+function bgmSync(){   // 設定・画面の状態に合わせて、流す／止める・音量
+  if (!bgmEl || !GLOBAL.bgm) return;
+  const c = ensureCtx();
+  if (c && !bgmGain){ try{ const src = c.createMediaElementSource(bgmEl); bgmGain = c.createGain(); src.connect(bgmGain); bgmGain.connect(c.destination); }catch(e){ bgmGain = null; } }
+  if (bgmGain) bgmGain.gain.value = bgmVolume(); else bgmEl.volume = bgmVolume();
+  bgmWant = S.bgmOn !== false && document.visibilityState === 'visible';
+  if (bgmWant){ if (bgmEl.paused) bgmEl.play().catch(() => {}); }   // iPhone は画面にさわるまで鳴らない（さわったら下で再開）
+  else if (!bgmEl.paused) bgmEl.pause();
+}
+['touchend','click'].forEach(ev => document.addEventListener(ev, () => { if (bgmEl && GLOBAL.bgm && S.bgmOn !== false && bgmEl.paused) bgmSync(); }, { passive:true }));
+document.addEventListener('visibilitychange', () => bgmSync());
 let sePrepared = null;
 async function prepareSE(){
   if (sePrepared === GLOBAL.se) return; sePrepared = GLOBAL.se; seBuf = null;
@@ -1390,9 +1427,9 @@ $('#clearHist').onclick = async () => {
 };
 
 /* --- 設定 --- */
-const FIELDS = { sSrv:'srvUrl', sTok:'srvToken', sProv:'aiProvider', sGKey:'geminiKey', sGModel:'geminiModel', sKey:'apiKey', sEnd:'endpoint', sModel:'model', sTemp:'temperature', sTurns:'turns', sUser:'userName', sSpeed:'speed', sSeVol:'seVol', sBlinkHalf:'blinkHalfMs', sBlinkClose:'blinkCloseMs', sBlinkAlpha:'blinkAlpha' };
-const NUMS = ['temperature','turns','speed','seVol','blinkHalfMs','blinkCloseMs','blinkAlpha'];
-function fillSettings(){ for (const [id,k] of Object.entries(FIELDS)) $('#'+id).value = S[k]; $('#sSeOn').checked = !!S.seOn; $('#sBlinkFade').checked = !!S.blinkFade; $('#sUraFace').checked = !!S.uraFaceAI; }
+const FIELDS = { sSrv:'srvUrl', sTok:'srvToken', sProv:'aiProvider', sGKey:'geminiKey', sGModel:'geminiModel', sKey:'apiKey', sEnd:'endpoint', sModel:'model', sTemp:'temperature', sTurns:'turns', sUser:'userName', sSpeed:'speed', sSeVol:'seVol', sBgmVol:'bgmVol', sBlinkHalf:'blinkHalfMs', sBlinkClose:'blinkCloseMs', sBlinkAlpha:'blinkAlpha' };
+const NUMS = ['temperature','turns','speed','seVol','bgmVol','blinkHalfMs','blinkCloseMs','blinkAlpha'];
+function fillSettings(){ for (const [id,k] of Object.entries(FIELDS)) $('#'+id).value = S[k]; $('#sSeOn').checked = !!S.seOn; $('#sBgmOn').checked = S.bgmOn !== false; $('#sBlinkFade').checked = !!S.blinkFade; $('#sUraFace').checked = !!S.uraFaceAI; }
 $('#sUraFace').addEventListener('change', e => { S.uraFaceAI = e.target.checked; saveS(); });
 $('#sBlinkFade').addEventListener('change', e => { S.blinkFade = e.target.checked; saveS(); });
 async function blinkNow(slow){
@@ -1406,6 +1443,8 @@ for (const [id,k] of Object.entries(FIELDS)){
   $('#'+id).addEventListener('input', e => { let v = e.target.value; if (NUMS.includes(k)){ v = parseFloat(v); if (isNaN(v)) return; } else v = v.trim(); S[k] = v; saveS(); });
 }
 $('#sSeOn').addEventListener('change', e => { S.seOn = e.target.checked; saveS(); });
+$('#sBgmOn').addEventListener('change', e => { S.bgmOn = e.target.checked; saveS(); bgmSync(); });
+$('#sBgmVol').addEventListener('input', () => bgmSync());
 $('#getGModels').onclick = async () => {
   try{
     if (!S.geminiKey) throw new Error('先にGeminiのAPIキーを入力してください');
@@ -1435,25 +1474,32 @@ function refreshAssetUI(){
   $('#aBg').innerHTML = d(GLOBAL.bg);
   $('#aFont').innerHTML = d(GLOBAL.font) + (GLOBAL.font ? (fontOk ? ' ✓' : ' ✗') : '');
   $('#aSe').innerHTML = d(GLOBAL.se) + (GLOBAL.se ? (seBuf ? ` ✓ ${seBuf.duration.toFixed(2)}秒` : ' ✗') : '');
+  $('#aBgm').innerHTML = d(GLOBAL.bgm) + (GLOBAL.bgm ? (S.bgmOn === false ? '（設定で止めています）' : ' ✓ ループ') : '');
 }
-const gInput = { bg:'#fImg', font:'#fFont', se:'#fSe' };
+const gInput = { bg:'#fImg', font:'#fFont', se:'#fSe', bgm:'#fBgm' };
 if (IS_LAB) $('#copyLab').hidden = true;
 async function setGlobal(k, file){
   const old = GLOBAL[k]; GLOBAL[k] = await putRec(file); await saveGlobal(); if (old) await delRec(old);
   if (k === 'se'){ sePrepared = null; S.seErrName = ''; } await applyGlobal(); refreshAssetUI();
+  if (k === 'bgm'){ bgmPrepared = null; await prepareBgm(); toast('BGM を読み込みました（ループで流れます）'); return; }
   if (k === 'se'){ if (seBuf) toast('タップ音を読み込みました'); } else if (k !== 'bg' || $('#bg').style.backgroundImage) toast('読み込みました');
 }
 document.querySelectorAll('[data-gpick]').forEach(b => b.onclick = () => {
   const k = b.dataset.gpick;
   if (k === 'bg') pickImage(f => setGlobal('bg', f)); else $(gInput[k]).click();
 });
-['font','se'].forEach(k => $(gInput[k]).addEventListener('change', e => { const f = e.target.files[0]; e.target.value = ''; if (f) setGlobal(k, f).catch(err => log('error','読み込めませんでした：' + err.message)); }));
+['font','se','bgm'].forEach(k => $(gInput[k]).addEventListener('change', e => { const f = e.target.files[0]; e.target.value = ''; if (f) setGlobal(k, f).catch(err => log('error','読み込めませんでした：' + err.message)); }));
 document.querySelectorAll('[data-gdel]').forEach(b => b.onclick = async () => {
   const k = b.dataset.gdel; if (!GLOBAL[k] || !confirm('消しますか？')) return;
   const old = GLOBAL[k]; GLOBAL[k] = null; await saveGlobal(); await delRec(old);
-  if (k === 'font') toast('フォントは次に開いたときから元に戻ります'); if (k === 'se'){ sePrepared = null; }
+  if (k === 'font') toast('フォントは次に開いたときから元に戻ります'); if (k === 'se'){ sePrepared = null; } if (k === 'bgm'){ bgmPrepared = null; }
   await applyGlobal(); refreshAssetUI();
 });
+$('#bgmTest').onclick = () => {
+  if (!bgmEl || !GLOBAL.bgm){ toast('BGM が読み込まれていません', true, 3000); return; }
+  if (bgmEl.paused){ if (S.bgmOn === false){ S.bgmOn = true; saveS(); } bgmSync(); } else { S.bgmOn = false; saveS(); bgmSync(); }
+  refreshAssetUI();
+};
 $('#seTest').onclick = () => { if (!seBuf) toast('タップ音が読み込まれていません', true, 3000); else { const o = S.seOn; S.seOn = true; playSE(); S.seOn = o; } };
 
 /* --- バックアップ --- */
@@ -1469,7 +1515,7 @@ async function saveFile(name, data){
   log('info','書き出しました：' + name); toast('書き出しました'); return true;
 }
 function allRecIds(){
-  const s = new Set([GLOBAL.bg, GLOBAL.font, GLOBAL.se]);
+  const s = new Set([GLOBAL.bg, GLOBAL.font, GLOBAL.se, GLOBAL.bgm]);
   for (const c of CHARS){ s.add(c.base); for (const f of c.faces) for (const k of ['eye','mouth']) Object.values(f[k] || {}).forEach(v => s.add(v)); }
   s.delete(null); s.delete(undefined); return [...s];
 }
@@ -1601,7 +1647,7 @@ function diagText(){
 画面：${innerWidth}×${innerHeight} dpr${devicePixelRatio} / ${st} / 状態:${state}
 開き方：${location.protocol}//${location.host}${location.pathname}${envBad ? '（制限のある画面）' : ''} 画像方式=${useData ? 'data' : 'blob'} 保存の保護=${persistState}
 設定：AI=${provName(S.aiProvider)}（今のトーク：${ROOM ? provName(provOf(ROOM)) : '-'}） Gemini=${S.geminiModel}/キー${S.geminiKey ? 'あり' : 'なし'} Grok endpoint=${S.endpoint} model=${S.model} 温度=${S.temperature} 往復=${S.turns} 速さ=${S.speed} 瞬き=${S.blinkFade ? '疑似半目' : '2枚'}/${S.blinkHalfMs}/${S.blinkCloseMs}ms/${S.blinkAlpha}% キー=${S.apiKey ? '設定あり(' + S.apiKey.length + '文字)' : '未設定'}
-素材：背景=${GLOBAL.bg ? (REC.get(GLOBAL.bg) || {}).name : 'なし'} フォント=${GLOBAL.font ? (REC.get(GLOBAL.font) || {}).name + (fontOk ? '(OK)' : '(失敗)') : 'なし'} タップ音=${se ? se.name + (seBuf ? `(${seBuf.duration.toFixed(2)}秒)` : '(未準備)') : 'なし'}(${S.seOn ? 'ON' : 'OFF'} ${S.seVol}%) 音声=${actx ? actx.state : '未作成'}
+素材：背景=${GLOBAL.bg ? (REC.get(GLOBAL.bg) || {}).name : 'なし'} フォント=${GLOBAL.font ? (REC.get(GLOBAL.font) || {}).name + (fontOk ? '(OK)' : '(失敗)') : 'なし'} タップ音=${se ? se.name + (seBuf ? `(${seBuf.duration.toFixed(2)}秒)` : '(未準備)') : 'なし'}(${S.seOn ? 'ON' : 'OFF'} ${S.seVol}%) BGM=${GLOBAL.bgm ? ((REC.get(GLOBAL.bgm) || {}).name || '?') + (bgmEl ? (bgmEl.paused ? '(停止)' : '(再生中)') : '(未準備)') : 'なし'}(${S.bgmOn === false ? 'OFF' : 'ON'} ${S.bgmVol}%) 音声=${actx ? actx.state : '未作成'}
 キャラ${CHARS.length}人：
   ${chars || 'なし'}
 LINE風：${S.srvUrl ? (LINE.ok ? `つながった（キャラ${LINE.chars.length}・グループ${LINE.groups.length}）` : '未接続') : 'URL未設定'} 合言葉${S.srvToken ? 'あり' : 'なし'} 裏の表情=${S.uraFaceAI ? 'AI' : '通常'}
@@ -1632,7 +1678,7 @@ async function copyFrom(dbName, setKey, label){
     if (!confirm(`${label}のデータ（${all.length}件）で、ここのキャラ・トーク・素材を置き換えますか？（${label}は変わりません）`)) return;
     for (const [k,v] of all) await idb.set(k, v);
     let ps = {}; try{ ps = JSON.parse(localStorage.getItem(setKey) || '{}'); }catch(e){}
-    for (const k of ['apiKey','endpoint','model','temperature','turns','userName','aiProvider','geminiKey','geminiModel','speed','seOn','seVol','blinkFade','blinkHalfMs','blinkCloseMs','blinkAlpha']) if (ps[k] != null) S[k] = ps[k];
+    for (const k of ['apiKey','endpoint','model','temperature','turns','userName','aiProvider','geminiKey','geminiModel','speed','seOn','seVol','bgmOn','bgmVol','blinkFade','blinkHalfMs','blinkCloseMs','blinkAlpha']) if (ps[k] != null) S[k] = ps[k];
     saveS(); log('info', `${label}のデータを写しました（${all.length}件）`); location.reload();
   }catch(e){ log('error', `${label}のデータを写せませんでした：` + e.message); }
 }
@@ -1666,7 +1712,7 @@ let envBad = false, persistState = '未確認';
         let oldS = {}; try{ oldS = JSON.parse(lsGet('akari.settings') || '{}'); }catch(e){}
         await migrateLegacy(oldA, oldH, oldS);
       } else {
-        CHARS = chars; ROOMS = (await idb.get('rooms')) || []; GLOBAL = Object.assign({ bg:null, font:null, se:null }, (await idb.get('global')) || {});
+        CHARS = chars; ROOMS = (await idb.get('rooms')) || []; GLOBAL = Object.assign({ bg:null, font:null, se:null, bgm:null }, (await idb.get('global')) || {});
       }
       for (const c of CHARS){ c.faces = c.faces || []; c.faces.forEach(f => { f.eye = f.eye || {}; f.mouth = f.mouth || {}; }); }
     }catch(e){ log('error','データを読み込めませんでした：' + e.message); }

@@ -14,7 +14,7 @@
 //    ・Cron トリガー  * * * * *  （毎分。実際に動くのは13分おき）
 // =====================================================================
 
-const VERSION = '第39版（2026-10-28 21:00:00 更新・会う約束（試作））';
+const VERSION = '第40版（2026-10-28 22:30:00 更新・LINE風とノベル画面の統合）';
 const DEFAULT_MODEL = 'gemini-flash-latest';
 const DEFAULT_GROK_MODEL = 'grok-4.7';                 // X（Twitter）の Grok と同じ最新世代
 const FALLBACK_GROK_MODEL = 'grok-4-fast-non-reasoning'; // 上が使えないときの予備
@@ -1910,7 +1910,7 @@ function novelLines(d) { return Object.values((d && d.hists) || {}).reduce((n, h
 //           meeting（会っている）／done（会った）／missed（通知が届いたのに行かなかった）
 // kv meetlog:<キャラid> = [{ who:'me'|'char'|'narr', text, face }]（会っている場面の会話。終えたら消す）
 const MEET_SOON = 20 * 60e3, MEET_MISS = 2 * 3600e3, MEET_LOG_MAX = 300, MEET_AUTO_END = 6 * 3600e3;
-const MEET_URL = 'https://koara1012.github.io/lab/novel.html'; // 通知をタップしたら開くノベル画面（試作）
+const MEET_URL = 'https://koara1012.github.io/chat/novel.html'; // 通知をタップしたら開くノベル画面（ホーム画面のアプリの中で開く）
 const meetOn = (st, c) => !!(st.meetFeature && st.meetOn !== false && c && !c.uraOnly && !(st.meetOffChars || []).includes(c.id));
 const meetUrl = (id) => MEET_URL + '?from=line&meet=' + encodeURIComponent(id);
 async function omoteChar(env, id) {

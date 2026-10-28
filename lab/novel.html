@@ -176,7 +176,7 @@ pre.box{white-space:pre-wrap;word-break:break-all;background:#1a161d;border:1px 
       <div class="row"><label>サーバーURL</label><input type="text" id="sSrv" placeholder="https://chara-chat.….workers.dev"></div>
       <div class="row"><label>合言葉</label><input type="password" id="sTok" placeholder="LINE風アプリの設定と同じもの"></div>
       <div class="row"><button class="b p" id="srvTest">つないでみる</button><span class="note" id="srvState"></span></div>
-      <div class="row"><label>裏トークの表情</label><label><input type="checkbox" id="sUraFace"> 下のAIのキーで表情を選ぶ（少し料金がかかります。オフなら「通常」の顔）</label></div>
+      <div class="row"><label>裏トークの表情</label><label><input type="checkbox" id="sUraFace"> サーバーが表情を付けなかった返事だけ、下のAIのキーで選ぶ（少し料金がかかります。オフなら「通常」の顔）。ふだんは LINE風のサーバー（第38版〜）が返事と一緒に選びます</label></div>
       <p class="note">LINE風アプリの「設定」にあるサーバーURLと合言葉を入れてください。この端末の中だけに保存されます。</p></div>
       <div class="card"><b>本番のノベル画面からデータを写す</b>
       <div class="row"><button class="b" id="copyProd">本番（akari.html）のキャラ・素材・トーク・設定を写す</button></div>
@@ -242,13 +242,17 @@ pre.box{white-space:pre-wrap;word-break:break-all;background:#1a161d;border:1px 
 <script>
 'use strict';
 /* ====== 版 ====== */
-const VERSION = { no: 2, at: '2026-10-28 19:10:00' };
+const VERSION = { no: 3, at: '2026-10-28 19:45:00' };
 const VERSION_TEXT = `試作・段階${VERSION.no}（${VERSION.at} 更新・本番 akari.html 第6回がもと）`;
 
 /* ====== 改善ログ（他のAIへの引き継ぎ用）======
    改善のたびに「## 第〜回」を先頭側へ追記し、概要も最新に保つ */
 const DEV_LOG = `# 朱里ノベル 統合の試作（lab/novel.html） 改善ログ
 ※ 本番 akari.html 第6回をもとにした試作。保存先は本番と分けている（localStorage lab.settings / lab.logs、IndexedDB akariLab）。
+## 試作・段階3（2026-10-28 19:45:00）
+- 表情差分ごとに「使うトーク」（ふつう・裏・表）を選べる（f.off = {normal,ura,omote}、true＝使わない）。外した種類ではAIの候補から外し、返ってきたら既定の顔に。既定（「通常」）は外せない。usableFaces(c, kind)。
+- 裏トークの表情をサーバーで付ける（LINE風 第38版）：LINE風につないだキャラの、裏で使う表情の名前・説明を POST /faces で登録（キャラ保存の1.5秒後・起動時。画像は送らない）。サーバーの返事の face を使い、無いときだけ端末のAIキーで選ぶ（srvFace の行は選び直さない）。
+
 ## 試作・段階2（2026-10-28 19:10:00）
 - LINE風アプリの試作版 lab/index.html（本番 chat/ のコピー）と1つのアプリに。保存の名前に「lab.」を付けて本番の chat.* には書き込まない。通知（サービスワーカー）は登録しない。
 - サーバーURL・合言葉は lab.chat.cfg を共有（どちらで変えても同じ）。最初だけ本番の chat.cfg から読み写す。
@@ -452,7 +456,22 @@ let GLOBAL = { bg:null, font:null, se:null };
 let CHARS = [], ROOMS = [], ROOM = null, HIST = [];
 const charById = id => CHARS.find(c => c.id === id);
 function newChar(name){ return { id:uid(), name, prompt:'', callName:'あなた', scale:146.5, top:1.2, xoff:0, base:null, faces:[] }; }
-async function saveChars(){ try{ await idb.set('chars', CHARS); }catch(e){ log('error','キャラを保存できませんでした：' + e.message); } }
+async function saveChars(){ try{ await idb.set('chars', CHARS); }catch(e){ log('error','キャラを保存できませんでした：' + e.message); } pushFacesSoon(); }
+/* 裏トーク用：LINE風につないだキャラの表情（名前・説明だけ。画像は送らない）をサーバーに登録。サーバーが裏の返事で表情を選ぶ */
+let facesSent = {}, pushFacesT = 0;
+function pushFacesSoon(){ clearTimeout(pushFacesT); pushFacesT = setTimeout(() => pushFaces().catch(() => {}), 1500); }
+async function pushFaces(){
+  if (!S.srvUrl) return;
+  const done = new Set();
+  for (const c of CHARS){
+    if (!c.lineId || done.has(c.lineId)) continue; done.add(c.lineId);
+    const faces = usableFaces(c, 'ura').map(n => { const f = faceObj(c, n); return { name:n, desc:(f && f.desc) || '' }; });
+    const sig = JSON.stringify(faces);
+    if (facesSent[c.lineId] === sig) continue;
+    try{ await srv('POST', '/faces', { charId:c.lineId, faces }); facesSent[c.lineId] = sig; }
+    catch(e){ log('warn', `表情をLINE風のサーバーに登録できませんでした（${c.name}）：` + e.message); return; }
+  }
+}
 async function saveRooms(){ try{ await idb.set('rooms', ROOMS); }catch(e){ log('error','トークを保存できませんでした：' + e.message); } }
 async function saveGlobal(){ try{ await idb.set('global', GLOBAL); }catch(e){ log('error','素材を保存できませんでした：' + e.message); } }
 async function saveHist(){ if (!ROOM) return; try{ await idb.set('hist:' + ROOM.id, HIST); }catch(e){ log('error','会話を保存できませんでした：' + e.message); } }
@@ -920,7 +939,9 @@ function uraToHist(msgs, room){   // サーバーのメッセージ → ノベ�
     if (m.sender === 'me'){ out.push({ role:'user', text, t:m.at, sid:m.id }); continue; }
     const who = m.sender === 'narr' ? '' : (m.speaker ? ((novelOfLine(m.speaker) || {}).id || single) : single);
     const ch = who ? charById(who) : null;
-    const line = { who, face: ch ? ((uraFaceCache[m.id] && usableFaces(ch, 'ura').includes(uraFaceCache[m.id])) ? uraFaceCache[m.id] : defaultFace(ch)) : '', text, sid:m.id };
+    const ok = n => n && ch && usableFaces(ch, 'ura').includes(n);
+    const srvFace = ok(m.face);   // サーバーが返事と一緒に選んだ表情（第38版〜）
+    const line = { who, face: ch ? (srvFace ? m.face : ok(uraFaceCache[m.id]) ? uraFaceCache[m.id] : defaultFace(ch)) : '', text, sid:m.id, ...(srvFace || m.face ? { srvFace:true } : {}) };
     const last = out[out.length-1];
     if (last && last.role === 'chars') last.lines.push(line); else out.push({ role:'chars', lines:[line], t:m.at });
   }
@@ -928,7 +949,7 @@ function uraToHist(msgs, room){   // サーバーのメッセージ → ノベ�
 }
 let uraFaceCache = {};
 async function pickFaces(lines){   // 裏の返事に表情を付ける（端末のAIキーで小さく問い合わせ）
-  const need = lines.filter(l => l.who && charById(l.who) && usableFaces(charById(l.who), 'ura').length > 1);
+  const need = lines.filter(l => !l.srvFace && l.who && charById(l.who) && usableFaces(charById(l.who), 'ura').length > 1);   // サーバーが選んだものは選び直さない
   if (!S.uraFaceAI || !need.length) return;
   const prov = S.aiProvider || 'grok'; if (prov === 'gemini' ? !S.geminiKey : !S.apiKey) return;
   const list = need.map((l,i) => { const c = charById(l.who); return `${i+1}. ${c.name}「${l.text}」 候補：${usableFaces(c, 'ura').map(n => { const f = faceObj(c,n); return n + (f && f.desc ? '（' + f.desc + '）' : ''); }).join('、')}`; }).join('\n');
@@ -1470,7 +1491,7 @@ let envBad = false, persistState = '未確認';
   try{ uraFaceCache = (await idb.get('uraFaces')) || {}; }catch(e){}
   const wantUra = QS.get('ura');
   if (QS.toString()) history.replaceState(null, '', location.pathname);
-  let lineP = S.srvUrl ? loadLine(false).catch(e => { log('warn', e.message); }) : null;
+  let lineP = S.srvUrl ? loadLine(false).then(() => pushFaces()).catch(e => { log('warn', e.message); }) : null;
   await applyGlobal();
   let startId = S.room && ROOMS.some(r => r.id === S.room) ? S.room : (ROOMS[0] && ROOMS[0].id);
   if (wantUra){ const id = await uraRoomFor(wantUra, lineP); if (id) startId = id; }

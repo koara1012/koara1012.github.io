@@ -249,13 +249,17 @@ pre.box{white-space:pre-wrap;word-break:break-all;background:#1a161d;border:1px 
 <script>
 'use strict';
 /* ====== 版 ====== */
-const VERSION = { no: 6, at: '2026-10-28 22:30:00' };
+const VERSION = { no: 7, at: '2026-10-28 22:40:00' };
 const VERSION_TEXT = `${/\/lab\//.test(location.pathname) ? '試作・' : ''}統合 第${VERSION.no}回（${VERSION.at} 更新・akari.html 第6回がもと）`;
 
 /* ====== 改善ログ（他のAIへの引き継ぎ用）======
    改善のたびに「## 第〜回」を先頭側へ追記し、概要も最新に保つ */
 const DEV_LOG = `# 朱里ノベル 統合の試作（lab/novel.html） 改善ログ
 ※ 本番 akari.html 第6回をもとにした試作。保存先は本番と分けている（localStorage lab.settings / lab.logs、IndexedDB akariLab）。
+## 統合 第7回（2026-10-28 22:40:00）
+- 起動したとき、前回の表トーク（会う場面）は自動で開かない（開くと会いに行くことになるため。復元直後に会う場面が始まっていた）。
+- 復元の途中経過を記録とトーストに出す（ファイル名・サイズ・やめた・復元中）。ホーム画面のアプリで「復元できない」と言われたときの手がかりに。
+
 ## 統合 第6回（2026-10-28 22:30:00）
 - 置き場所で保存の名前を切り替える（IS_LAB・K）。/lab/：lab.settings・lab.logs・IndexedDB akariLab・lab.chat.cfg。/chat/（本番）：novel.settings・novel.logs・IndexedDB charaNovel・chat.cfg（LINE風アプリと同じ）。同じファイルを両方に置く。
 - 統合後のバックアップ：手動は「保存しました：ファイル名」「最後に手動で保存：日時（今日・素材あり・サイズ）」（サーバーにも POST /backup/novel-manual で記録）。素材は最初から含める（外せる）。「AIのキー・合言葉も含める」を外すと apiKey・geminiKey・srvToken を入れない（前は geminiKey が入っていた不具合を修正）。
@@ -1538,8 +1542,10 @@ async function exportRoom(id){
 }
 $('#bkImport').onclick = () => $('#fBak').click();
 $('#fBak').addEventListener('change', async e => {
-  const f = e.target.files[0]; e.target.value = ''; if (!f) return;
+  const f = e.target.files[0]; e.target.value = ''; if (!f){ log('warn', '復元：ファイルが選ばれませんでした'); return; }
   try{
+    log('info', `復元：ファイルを読み込みます（${f.name}・${Math.round(f.size / 1e5) / 10}MB）`);
+    toast('バックアップのファイルを読み込んでいます…', false, 4000);
     const data = JSON.parse(await f.text());
     if (data.app === 'akari-room'){
       const mem = data.room.members.map(m => charById(m) ? m : (CHARS.find(c => norm(c.name) === norm((data.names || {})[m])) || {}).id);
@@ -1550,7 +1556,8 @@ $('#fBak').addEventListener('change', async e => {
       await idb.set('hist:' + nr.id, h); ROOMS.push(nr); await saveRooms(); renderRooms(); toast('トークを追加しました'); return;
     }
     if (data.app !== 'akari-novel') throw new Error('このアプリのバックアップではないようです');
-    if (!confirm(`${data.exportedAt ? new Date(data.exportedAt).toLocaleString('ja-JP') : ''} のバックアップで、今のデータを置き換えますか？`)) return;
+    if (!confirm(`${data.exportedAt ? new Date(data.exportedAt).toLocaleString('ja-JP') : ''} のバックアップで、今のデータを置き換えますか？`)){ log('info', '復元：やめました'); toast('復元をやめました', false, 3000); return; }
+    toast('復元しています…（画像が多いと少しかかります）', false, 20000);
     const key = S.apiKey;
     if (data.schema >= 3){
       if (data.files) for (const [id, r] of Object.entries(data.files)) await idb.set('img:' + id, { name:r.name, type:r.type, buf:unb64(r.b64) });
@@ -1660,6 +1667,8 @@ let envBad = false, persistState = '未確認';
   let lineP = S.srvUrl ? loadLine(false).then(() => pushFaces()).catch(e => { log('warn', e.message); }) : null;
   await applyGlobal();
   let startId = S.room && ROOMS.some(r => r.id === S.room) ? S.room : (ROOMS[0] && ROOMS[0].id);
+  // 表トーク（会う場面）は開くと「会いに行く」ことになるので、起動したときには自動で開かない
+  if (!wantMeet && (ROOMS.find(r => r.id === startId) || {}).kind === 'omote'){ const n = ROOMS.find(r => r.kind !== 'omote'); startId = n ? n.id : null; }
   if (wantUra){ const id = await uraRoomFor(wantUra, lineP); if (id) startId = id; }
   if (wantMeet){ const id = await meetRoomFor(wantMeet, lineP); if (id) startId = id; }
   await openRoom(startId);

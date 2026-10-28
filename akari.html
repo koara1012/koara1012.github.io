@@ -171,9 +171,15 @@ pre.box{white-space:pre-wrap;word-break:break-all;background:#1a161d;border:1px 
       <h4>このトークをはじめからにする</h4><div class="row"><button class="b d" id="clearHist">このトークの会話を全部消す</button><span class="note">消す前にバックアップがおすすめです</span></div></div>
 
     <div class="pn" id="pSet"><h3>設定（全キャラ共通）</h3>
+      <div class="row"><label>AIの種類（共通）</label><select id="sProv"><option value="grok">Grok（xAI）</option><option value="gemini">Gemini（Google）</option></select><span class="note">トークごとにも変えられます（トーク→編集）</span></div>
+      <h4>Grok（xAI）</h4>
       <div class="row"><label>xAI APIキー</label><input type="password" id="sKey" placeholder="xai-..."></div>
       <div class="row"><label>エンドポイント</label><input type="text" id="sEnd"></div>
       <div class="row"><label>モデル</label><input type="text" id="sModel" list="modelList"><datalist id="modelList"></datalist><button class="b" id="getModels">一覧を取得</button></div>
+      <h4>Gemini（Google）</h4>
+      <div class="row"><label>Gemini APIキー</label><input type="password" id="sGKey" placeholder="AIza..."></div>
+      <div class="row"><label>Geminiモデル</label><input type="text" id="sGModel" list="gModelList"><datalist id="gModelList"></datalist><button class="b" id="getGModels">一覧を取得</button></div>
+      <h4>共通</h4>
       <div class="row"><label>温度（0〜2）</label><input type="number" id="sTemp" step="0.1" min="0" max="2"></div>
       <div class="row"><label>送る会話の往復数</label><input type="number" id="sTurns" min="2" max="200"><span class="note">多いほど覚えているが料金が増える</span></div>
       <div class="row"><label>ログでのあなたの名前</label><input type="text" id="sUser"></div>
@@ -226,7 +232,7 @@ pre.box{white-space:pre-wrap;word-break:break-all;background:#1a161d;border:1px 
 <script>
 'use strict';
 /* ====== 版 ====== */
-const VERSION = { no: 5, at: '2026-10-28 16:34:58' };
+const VERSION = { no: 6, at: '2026-10-28 16:40:52' };
 const VERSION_TEXT = `第${VERSION.no}回（${VERSION.at} 更新）`;
 
 /* ====== 改善ログ（他のAIへの引き継ぎ用）======
@@ -237,7 +243,7 @@ const DEV_LOG = `# 伊達朱里ノベル風チャット 改善ログ
 
 ## このアプリの概要（引き継ぎ用）
 - 1ファイル（akari.html）だけで動くノベルゲーム風キャラ会話アプリ。iPhone横画面専用。アイコンは akari-icon.png（オリジナル絵）。
-- AIは xAI Grok（OpenAI互換 /v1/chat/completions）をブラウザから直接呼ぶ。エンドポイントとモデル名は設定で変更可。
+- AIは xAI Grok（OpenAI互換 /v1/chat/completions）か Google Gemini（generateContent、既定 gemini-flash-latest＝LINE風アプリと同じ）をブラウザから直接呼ぶ。共通の設定 aiProvider と、トークごとの room.ai（空なら共通に従う）で切り替え。キーはどちらもiPhoneの中（ユーザーの決定）。
 - ゲーム素材（背景・立ち絵・表情・フォント・タップ音）はリポジトリに入れない。利用者がiPhone内から読み込み IndexedDB に保存。
 - 画面設計は 1334×750（16:9）基準。CSS変数 --S = 16:9領域の高さ/750 px。余った左右は背景・メッセージ枠を伸ばして埋める。
   - メッセージ枠：y=520〜750、黒 不透明度69%（AviUtl透明度31%）、横幅いっぱい
@@ -262,6 +268,10 @@ const DEV_LOG = `# 伊達朱里ノベル風チャット 改善ログ
   第1・2回の assets / history は起動時に自動でキャラ「伊達　朱里」とその個別トークへ引っ越し（normal→通常）。
 - 起動時に navigator.storage.persist() を要求。ホーム画面アプリはSafariと保存場所が別なので、空なら案内を出す。
 - 困ったとき：エラー時にトースト→ワンタップで診断情報をコピー。バックアップ：全部（画像・キー任意）／トーク1つ。第1・2回の形式も復元可。
+
+## 第6回（2026-10-28 16:40:52）
+- AIを Grok と Gemini で切り替えられるように（設定で共通の種類、トークの編集でトークごと）。Gemini のキーとモデルを設定に追加・モデル一覧の取得。
+- トーク一覧に、そのトークで使うAIを表示。
 
 ## 第5回（2026-10-28 16:34:58）
 - お試し：4人以上のトーク（最大7人）。前の列3人＋後ろの列に少し小さく並べ、後ろの人が話すと前の列の人と入れ替わる（ユーザーが選んだ案C）。
@@ -339,7 +349,7 @@ const AKARI_PROMPT = `あなたは「伊達朱里（だて あかり）」とし
 - 性的な話題には乗らず、真っ赤になって慌てて話を逸らす
 - AIであることには触れず、朱里として自然に会話を続ける`;
 const GDEF = { apiKey:'', endpoint:'https://api.x.ai/v1/chat/completions', model:'grok-4.6', temperature:0.9, turns:30,
-  userName:'あなた', speed:45, auto:false, seOn:true, seVol:80, room:null, seErrName:'', blinkFade:true, blinkHalfMs:45, blinkCloseMs:90, blinkAlpha:50 };
+  userName:'あなた', aiProvider:'grok', geminiKey:'', geminiModel:'gemini-flash-latest', speed:45, auto:false, seOn:true, seVol:80, room:null, seErrName:'', blinkFade:true, blinkHalfMs:45, blinkCloseMs:90, blinkAlpha:50 };
 let S = Object.assign({}, GDEF);
 try{ Object.assign(S, JSON.parse(lsGet('akari.settings')||'{}')); }catch(e){}
 function saveS(){ if(!lsSet('akari.settings', JSON.stringify(S))) log('warn','設定を保存できませんでした（プライベートブラウズ等）'); }
@@ -725,23 +735,19 @@ function hintFor(st){
   if (st === 400) return '（送った内容かモデル名の形式が受け付けられませんでした）';
   if (st === 401 || st === 403) return '（APIキーが違う・無効・権限なしの可能性）';
   if (st === 404) return '（モデル名かエンドポイントURLが違う可能性。設定→「一覧を取得」で確認）';
-  if (st === 429) return '（使いすぎ・残高不足・回数制限の可能性。少し待つかxAIの残高を確認）';
-  if (st >= 500) return '（xAI側の不調の可能性。少し待って再送）';
+  if (st === 429) return '（使いすぎ・残高不足・回数制限の可能性。少し待つか、xAI・Googleの残高や上限を確認）';
+  if (st >= 500) return '（AIの会社側の不調の可能性。少し待って再送）';
   return '';
 }
-async function callGrok(){
-  if (!S.apiKey) throw new Error('APIキーが未設定です。〈 → 設定 で入力してください');
-  const messages = buildMessages();
-  const body = { model:S.model, messages, temperature:+S.temperature };
-  const bodyStr = JSON.stringify(body);
-  lastReq = { at:new Date().toLocaleString('ja-JP'), endpoint:S.endpoint, model:S.model, room:ROOM.name, members:ROOM.members.length, messages:messages.length, chars:bodyStr.length,
-              lastUser:(HIST.filter(h => h.role === 'user').pop() || {}).text || '' };
-  lastResp = null;
+const provOf = r => (r && r.ai) || S.aiProvider || 'grok';
+const provName = p => p === 'gemini' ? 'Gemini' : 'Grok';
+function callAI(){ return provOf(ROOM) === 'gemini' ? callGemini() : callGrok(); }
+async function postJSON(url, headers, bodyStr){
   const ctrl = new AbortController(), to = setTimeout(() => ctrl.abort(), 90000);
   let res;
-  try{ res = await fetch(S.endpoint, { method:'POST', headers:{ 'Content-Type':'application/json', 'Authorization':'Bearer ' + S.apiKey }, body:bodyStr, signal:ctrl.signal }); }
+  try{ res = await fetch(url, { method:'POST', headers:Object.assign({ 'Content-Type':'application/json' }, headers), body:bodyStr, signal:ctrl.signal }); }
   catch(e){ throw new Error(e.name === 'AbortError' ? '90秒待っても返事が来ませんでした（タイムアウト）'
-      : `通信できませんでした（${e.message}）。電波、エンドポイントURL、またはブラウザからの直接接続（CORS）が拒否されている可能性`); }
+      : `通信できませんでした（${e.message}）。電波、URL、またはブラウザからの直接接続（CORS）が拒否されている可能性`); }
   finally{ clearTimeout(to); }
   const txt = await res.text();
   lastResp = { status:res.status, body:txt.slice(0,1500) };
@@ -749,11 +755,43 @@ async function callGrok(){
     let m = ''; try{ const j = JSON.parse(txt); m = (j.error && (j.error.message || j.error)) || j.message || j.detail || ''; }catch(e){}
     throw new Error(`APIエラー ${res.status}：${String(m || txt).slice(0,240)}${hintFor(res.status)}`);
   }
-  let j; try{ j = JSON.parse(txt); }catch(e){ throw new Error('返事の形式が読めませんでした（JSONではない）'); }
+  try{ return JSON.parse(txt); }catch(e){ throw new Error('返事の形式が読めませんでした（JSONではない）'); }
+}
+async function callGemini(){
+  if (!S.geminiKey) throw new Error('GeminiのAPIキーが未設定です。〈 → 設定 で入力してください');
+  const messages = buildMessages(), model = S.geminiModel || 'gemini-flash-latest';
+  // Gemini 形式：system は systemInstruction、assistant は model。同じ役が続くときはまとめ、最初は user から
+  const contents = [];
+  for (const m of messages.slice(1)){
+    const role = m.role === 'assistant' ? 'model' : 'user', last = contents[contents.length-1];
+    if (last && last.role === role) last.parts[0].text += '\n' + m.content; else contents.push({ role, parts:[{ text:m.content }] });
+  }
+  if (!contents.length || contents[0].role !== 'user') contents.unshift({ role:'user', parts:[{ text:'（会話が始まります）' }] });
+  const body = { systemInstruction:{ parts:[{ text:messages[0].content }] }, contents, generationConfig:{ temperature:+S.temperature, responseMimeType:'application/json' } };
+  const bodyStr = JSON.stringify(body);
+  lastReq = { at:new Date().toLocaleString('ja-JP'), ai:'Gemini', model, room:ROOM.name, members:ROOM.members.length, messages:contents.length, chars:bodyStr.length,
+              lastUser:(HIST.filter(h => h.role === 'user').pop() || {}).text || '' };
+  lastResp = null;
+  const j = await postJSON(`https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(model)}:generateContent`, { 'x-goog-api-key':S.geminiKey }, bodyStr);
+  const cand = j.candidates && j.candidates[0];
+  const c = cand && cand.content && (cand.content.parts || []).filter(x => !x.thought).map(x => x.text || '').join('');
+  if (!c) throw new Error('返事が空でした' + (cand && cand.finishReason ? `（終了理由：${cand.finishReason}）` : (j.promptFeedback && j.promptFeedback.blockReason ? `（ブロック：${j.promptFeedback.blockReason}）` : '')));
+  if (j.usageMetadata) log('info', `送受信OK（Gemini）：入力${j.usageMetadata.promptTokenCount||'?'}／出力${j.usageMetadata.candidatesTokenCount||'?'}トークン`);
+  return c;
+}
+async function callGrok(){
+  if (!S.apiKey) throw new Error('xAIのAPIキーが未設定です。〈 → 設定 で入力してください');
+  const messages = buildMessages();
+  const body = { model:S.model, messages, temperature:+S.temperature };
+  const bodyStr = JSON.stringify(body);
+  lastReq = { at:new Date().toLocaleString('ja-JP'), ai:'Grok', endpoint:S.endpoint, model:S.model, room:ROOM.name, members:ROOM.members.length, messages:messages.length, chars:bodyStr.length,
+              lastUser:(HIST.filter(h => h.role === 'user').pop() || {}).text || '' };
+  lastResp = null;
+  const j = await postJSON(S.endpoint, { 'Authorization':'Bearer ' + S.apiKey }, bodyStr);
   let c = j.choices && j.choices[0] && j.choices[0].message && j.choices[0].message.content;
   if (Array.isArray(c)) c = c.map(x => x.text || '').join('');
   if (!c) throw new Error('返事が空でした' + (j.choices && j.choices[0] && j.choices[0].finish_reason ? `（終了理由：${j.choices[0].finish_reason}）` : ''));
-  if (j.usage) log('info', `送受信OK：入力${j.usage.prompt_tokens||'?'}／出力${j.usage.completion_tokens||'?'}トークン`);
+  if (j.usage) log('info', `送受信OK（Grok）：入力${j.usage.prompt_tokens||'?'}／出力${j.usage.completion_tokens||'?'}トークン`);
   return c;
 }
 function matchWho(w, ms, prev){
@@ -791,7 +829,7 @@ async function send(text){
   if (text){ HIST.push({ role:'user', text, t:Date.now() }); await saveHist(); }
   startThinking();
   try{
-    const c = await callGrok();
+    const c = await callAI();
     if (room !== ROOM) return;
     const lines = parseReply(c);
     if (!lines.length) throw new Error('返事に台詞が入っていませんでした');
@@ -866,7 +904,7 @@ function renderRooms(){
   $('#roomList').innerHTML = list.length ? list.map(r => {
     const mem = r.members.map(id => (charById(id) || {}).name || '？').join('・');
     const last = r.last ? `${esc(((charById(r.last.who) || {}).name || '').replace(/[\s　]/g,''))}：${esc(r.last.text)}` : '（まだ会話がありません）';
-    return `<div class="it ${ROOM && ROOM.id === r.id ? 'cur' : ''}"><div class="main"><div class="t">${esc(r.name)} <span class="note">${r.members.length > 1 ? 'グループ ' : ''}${esc(mem)}</span></div><div class="sub">${last}</div></div>
+    return `<div class="it ${ROOM && ROOM.id === r.id ? 'cur' : ''}"><div class="main"><div class="t">${esc(r.name)} <span class="note">${r.members.length > 1 ? 'グループ ' : ''}${esc(mem)}・${provName(provOf(r))}</span></div><div class="sub">${last}</div></div>
       <span class="note">${fmtTime(r.updated)}</span>
       <button class="b p s" data-ropen="${r.id}">開く</button><button class="b s" data-redit="${r.id}">編集</button><button class="b s" data-rexp="${r.id}">書き出す</button><button class="b d s" data-rdel="${r.id}">削除</button></div>`;
   }).join('') : '<p class="note">トークがありません。「＋トークを作る」から作ってください。</p>';
@@ -888,6 +926,7 @@ function roomForm(id){
   const m = r ? r.members : [];
   $('#roomEdit').innerHTML = `<div class="card"><b>${r ? 'トークを編集' : '新しいトーク'}</b>
     <div class="row"><label>トーク名</label><input type="text" id="rfName" value="${esc(r ? r.name : '')}" placeholder="空ならメンバー名"></div>
+    <div class="row"><label>このトークのAI</label><select id="rfAi">${[['','共通の設定に従う'],['grok','Grok'],['gemini','Gemini']].map(([v,l]) => `<option value="${v}" ${(r && r.ai || '') === v ? 'selected' : ''}>${l}</option>`).join('')}</select></div>
     <div class="row"><label>前の列（左→右）</label>${[0,1,2].map(i => `<select class="rfm">${opt(m[i], i > 0)}</select>`).join('')}</div>
     <div class="row"><label>後ろの列（4人目〜）</label>${[3,4,5,6].map(i => `<select class="rfm">${opt(m[i], true)}</select>`).join('')}</div>
     <p class="note">1人なら中央、2人なら左右、3人なら左・中央・右。4人目からは後ろの列に少し小さく並び、後ろの人が話すと、前の列でいちばん長く黙っている人と入れ替わります（最大${MAX_MEMBERS}人）。同じメンバーで複数のトークを作れます。</p>
@@ -897,8 +936,9 @@ function roomForm(id){
     const mem = [...document.querySelectorAll('#roomEdit .rfm')].map(x => x.value).filter(Boolean);
     if (new Set(mem).size !== mem.length){ toast('同じキャラを2回選んでいます', true, 4000); return; }
     const name = $('#rfName').value.trim() || mem.map(x => charById(x).name.replace(/[\s　]/g,'')).join('・');
-    if (r){ r.name = name; r.members = mem; if (ROOM === r) menuDirty = true; }
-    else { const nr = { id:uid(), name, members:mem, updated:Date.now(), last:null }; ROOMS.push(nr); }
+    const ai = $('#rfAi').value;
+    if (r){ r.name = name; r.members = mem; r.ai = ai; if (ROOM === r) menuDirty = true; }
+    else { const nr = { id:uid(), name, members:mem, ai, updated:Date.now(), last:null }; ROOMS.push(nr); }
     await saveRooms(); $('#roomEdit').innerHTML = ''; renderRooms(); toast(r ? 'トークを保存しました' : 'トークを作りました。「開く」で話せます');
   };
 }
@@ -1024,7 +1064,7 @@ $('#clearHist').onclick = async () => {
 };
 
 /* --- 設定 --- */
-const FIELDS = { sKey:'apiKey', sEnd:'endpoint', sModel:'model', sTemp:'temperature', sTurns:'turns', sUser:'userName', sSpeed:'speed', sSeVol:'seVol', sBlinkHalf:'blinkHalfMs', sBlinkClose:'blinkCloseMs', sBlinkAlpha:'blinkAlpha' };
+const FIELDS = { sProv:'aiProvider', sGKey:'geminiKey', sGModel:'geminiModel', sKey:'apiKey', sEnd:'endpoint', sModel:'model', sTemp:'temperature', sTurns:'turns', sUser:'userName', sSpeed:'speed', sSeVol:'seVol', sBlinkHalf:'blinkHalfMs', sBlinkClose:'blinkCloseMs', sBlinkAlpha:'blinkAlpha' };
 const NUMS = ['temperature','turns','speed','seVol','blinkHalfMs','blinkCloseMs','blinkAlpha'];
 function fillSettings(){ for (const [id,k] of Object.entries(FIELDS)) $('#'+id).value = S[k]; $('#sSeOn').checked = !!S.seOn; $('#sBlinkFade').checked = !!S.blinkFade; }
 $('#sBlinkFade').addEventListener('change', e => { S.blinkFade = e.target.checked; saveS(); });
@@ -1039,6 +1079,16 @@ for (const [id,k] of Object.entries(FIELDS)){
   $('#'+id).addEventListener('input', e => { let v = e.target.value; if (NUMS.includes(k)){ v = parseFloat(v); if (isNaN(v)) return; } else v = v.trim(); S[k] = v; saveS(); });
 }
 $('#sSeOn').addEventListener('change', e => { S.seOn = e.target.checked; saveS(); });
+$('#getGModels').onclick = async () => {
+  try{
+    if (!S.geminiKey) throw new Error('先にGeminiのAPIキーを入力してください');
+    const r = await fetch('https://generativelanguage.googleapis.com/v1beta/models?pageSize=200', { headers:{ 'x-goog-api-key':S.geminiKey } }); const t = await r.text();
+    if (!r.ok){ lastResp = { status:r.status, body:t.slice(0,1500) }; throw new Error(`モデル一覧の取得に失敗 ${r.status}${hintFor(r.status)}`); }
+    const ids = (JSON.parse(t).models || []).filter(m => (m.supportedGenerationMethods || []).includes('generateContent')).map(m => m.name.replace(/^models\//,'')).sort();
+    $('#gModelList').innerHTML = ['gemini-flash-latest', ...ids].map(i => `<option value="${esc(i)}">`).join('');
+    log('info','Geminiモデル一覧：' + ids.join(', ')); toast(`${ids.length}件取得しました。モデル欄をタップすると選べます`);
+  }catch(e){ log('error', /^(モデル|先に)/.test(e.message) ? e.message : 'モデル一覧の取得に失敗：' + e.message); }
+};
 $('#getModels').onclick = async () => {
   try{
     if (!S.apiKey) throw new Error('先にAPIキーを入力してください');
@@ -1155,7 +1205,7 @@ function diagText(){
 端末：${navigator.userAgent}
 画面：${innerWidth}×${innerHeight} dpr${devicePixelRatio} / ${st} / 状態:${state}
 開き方：${location.protocol}//${location.host}${location.pathname}${envBad ? '（制限のある画面）' : ''} 画像方式=${useData ? 'data' : 'blob'} 保存の保護=${persistState}
-設定：endpoint=${S.endpoint} model=${S.model} 温度=${S.temperature} 往復=${S.turns} 速さ=${S.speed} 瞬き=${S.blinkFade ? '疑似半目' : '2枚'}/${S.blinkHalfMs}/${S.blinkCloseMs}ms/${S.blinkAlpha}% キー=${S.apiKey ? '設定あり(' + S.apiKey.length + '文字)' : '未設定'}
+設定：AI=${provName(S.aiProvider)}（今のトーク：${ROOM ? provName(provOf(ROOM)) : '-'}） Gemini=${S.geminiModel}/キー${S.geminiKey ? 'あり' : 'なし'} Grok endpoint=${S.endpoint} model=${S.model} 温度=${S.temperature} 往復=${S.turns} 速さ=${S.speed} 瞬き=${S.blinkFade ? '疑似半目' : '2枚'}/${S.blinkHalfMs}/${S.blinkCloseMs}ms/${S.blinkAlpha}% キー=${S.apiKey ? '設定あり(' + S.apiKey.length + '文字)' : '未設定'}
 素材：背景=${GLOBAL.bg ? (REC.get(GLOBAL.bg) || {}).name : 'なし'} フォント=${GLOBAL.font ? (REC.get(GLOBAL.font) || {}).name + (fontOk ? '(OK)' : '(失敗)') : 'なし'} タップ音=${se ? se.name + (seBuf ? `(${seBuf.duration.toFixed(2)}秒)` : '(未準備)') : 'なし'}(${S.seOn ? 'ON' : 'OFF'} ${S.seVol}%) 音声=${actx ? actx.state : '未作成'}
 キャラ${CHARS.length}人：
   ${chars || 'なし'}

@@ -493,6 +493,29 @@ async function route(key, url, body, env, ctx) {
       await kvSet(env, 'bk:manual', v);
       return json({ ok: true, manual: v });
     }
+    case 'POST /backup/novel-manual': { // ノベル画面の手動バックアップを保存し終えた（素材あり・サイズ）
+      const v = { at: Date.now(), assets: !!body.assets, bytes: Math.max(0, num(body.bytes, 0)) };
+      await kvSet(env, 'bk:novelManual', v);
+      return json({ ok: true, manual: v });
+    }
+    // ---- ノベル画面の会話・設定（素材とAIのキーは入れない）を預かる。kv なので自動バックアップ（R2）に一緒に入る
+    case 'POST /novel/save': {
+      const d = body.data;
+      if (!d || typeof d !== 'object' || !Array.isArray(d.chars) || !Array.isArray(d.rooms)) throw new HttpError(400, 'ノベル画面のデータの形が違います');
+      const txt = JSON.stringify({ at: Date.now(), data: d });
+      if (txt.length > NOVEL_MAX) throw new HttpError(413, `ノベル画面のデータが大きすぎます（${Math.round(txt.length / 1e4) / 100}MB）`);
+      const old = await env.DB.prepare("SELECT v FROM kv WHERE k='novel:data'").first();
+      // 急に大きく減ったときは、前のものを novel:prev に残す（まちがって消したときに戻せるように）
+      if (old && novelLines(JSON.parse(old.v).data) >= 20 && novelLines(d) < novelLines(JSON.parse(old.v).data) / 2) await env.DB.prepare("INSERT INTO kv (k,v) VALUES ('novel:prev',?) ON CONFLICT(k) DO UPDATE SET v=excluded.v").bind(old.v).run();
+      await env.DB.prepare("INSERT INTO kv (k,v) VALUES ('novel:data',?) ON CONFLICT(k) DO UPDATE SET v=excluded.v").bind(txt).run();
+      return json({ ok: true, at: Date.now(), lines: novelLines(d) });
+    }
+    case 'GET /novel/data': {
+      const which = url.searchParams.get('prev') === '1' ? 'novel:prev' : 'novel:data';
+      const r = await env.DB.prepare('SELECT v FROM kv WHERE k=?').bind(which).first();
+      const prev = await env.DB.prepare("SELECT v FROM kv WHERE k='novel:prev'").first();
+      return json({ ...(r ? JSON.parse(r.v) : { at: 0, data: null }), hasPrev: !!prev });
+    }
     case 'POST /backup/step': { await backupStep(env, {}); return json(await bkView(env)); } // アプリを開いているあいだは早めに進める
     case 'POST /backup/now': { // 今の期間（1日用／15日用）の分を今すぐ取る。force=true なら減っていても保存
       needR2(env);
@@ -1876,6 +1899,10 @@ async function groupReply(env, g, hist, key) {
   return out.map((x, i) => ({ id: res[i].meta.last_row_id, charId: key, sender: x.sender, text: x.text, at: t0 + i, ...(x.speaker ? { speaker: x.speaker } : {}), ...(x.face ? { face: x.face } : {}) }));
 }
 
+// ノベル画面のデータ（kv novel:data）。会話の行数で「急に減った」を見る
+const NOVEL_MAX = 1800000; // D1 の1行の上限（2MB）より少し小さく
+function novelLines(d) { return Object.values((d && d.hists) || {}).reduce((n, h) => n + (Array.isArray(h) ? h.length : 0), 0); }
+
 // ================================================================ 表：ユーザーと会う約束（ノベル画面で会う場面）・第39版・試作
 // settings：meetFeature（使うか。既定オフ）、meetOn（会う約束モード・全員）、meetOffChars（モードをオフにしたキャラ）
 // kv appt:<キャラid> = { date, time, place, at, status, n1, n2, created, metAt, doneAt, summary }
@@ -2463,7 +2490,7 @@ async function bkDownload(env, gen, withImages, label) {
 }
 async function bkView(env) { // 設定画面用
   const st = await bkStatus(env);
-  const out = { r2: !!env.BACKUP, last: st.last || null, restoreResult: st.restore || null, slots: {}, job: null, restore: null, lock: !!(await kvGet(env, 'bk:lock', 0)), cycle: null, manual: await kvGet(env, 'bk:manual', null) };
+  const out = { r2: !!env.BACKUP, last: st.last || null, restoreResult: st.restore || null, slots: {}, job: null, restore: null, lock: !!(await kvGet(env, 'bk:lock', 0)), cycle: null, manual: await kvGet(env, 'bk:manual', null), novelManual: await kvGet(env, 'bk:novelManual', null) };
   if (!env.BACKUP) return out;
   const slots = await bkSlots(env);
   for (const k of Object.keys(BK_SLOT_NAME)) if (slots[k]) { const { gen, ...rest } = slots[k]; out.slots[k] = { ...rest, name: BK_SLOT_NAME[k] }; }

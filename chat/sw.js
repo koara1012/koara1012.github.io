@@ -12,7 +12,7 @@ self.addEventListener('push', (e) => {
       renotify: true,
       icon: 'icon-192.png',
       badge: 'icon-192.png',
-      data: { charId: d.charId || null, tl: d.tl || null, postId: d.postId || null },
+      data: { charId: d.charId || null, tl: d.tl || null, postId: d.postId || null, url: d.url || null },
     }),
     self.clients.matchAll({ type: 'window', includeUncontrolled: true })
       .then((cs) => cs.forEach((c) => c.postMessage({ type: 'sync' }))),
@@ -28,6 +28,7 @@ self.addEventListener('notificationclick', (e) => {
   const data = e.notification.data || {};
   const charId = data.charId;
   const tl = data.tl;
+  if (data.url) { e.waitUntil(self.clients.openWindow(data.url)); return; } // 会う約束の通知：ノベル画面（会う場面）を開く
   let path = './';
   if (tl) path = './?tl=' + encodeURIComponent(tl) + (data.postId ? '&post=' + encodeURIComponent(data.postId) : '');
   else if (charId) path = './?chat=' + encodeURIComponent(charId);

@@ -1,6 +1,6 @@
 # トーク（キャラチャット）引き継ぎメモ
 
-最終更新：第37版（2026-10-28 手動バックアップの最終保存日時）
+最終更新：第38版（2026-10-28 裏の返事に立ち絵の表情）
 
 iPhoneのホーム画面に置いて使う、キャラクターとのLINE風チャットアプリ（PWA）です。
 このメモは、次に作業する人（または Claude）が、ここだけ読めば全体をつかめるように書いています。
@@ -79,7 +79,7 @@ iPhone（PWA）  ──HTTPS──▶  Cloudflare Worker「chara-chat」 ──�
 `chars` `groups` `messages` `reads` `kv` `subs` `ura_icons` `me_icons` `tl_posts` `tl_comments` `tl_likes` `tl_jobs` `memories` `char_state` `images` `ai_cost`
 
 - 列の追加は `ensureSchema` の `ALTER TABLE`（失敗は無視）で行います。
-- `messages` の主な列：`sender`（me / char / narr）、`image`、`retracted`、`reaction`、`reply_to`（引用返信）、`kind`（call＝不在着信）、`speaker`（グループで話した子）
+- `messages` の主な列：`sender`（me / char / narr）、`image`、`retracted`、`reaction`、`reply_to`（引用返信）、`kind`（call＝不在着信）、`speaker`（グループで話した子）、`face`（裏のセリフの立ち絵の表情。ノベル画面用・第38版）
 - `char_state`：キャラごとの毎日の様子を JSON で持っています。
   - 気分、予定表 `plan`、日記、`story`、`project`（長く続けていること）、`condition`（数日続く体調）、ひとこと `statusMsg`／`statusEmoji` など
 
@@ -88,6 +88,7 @@ iPhone（PWA）  ──HTTPS──▶  Cloudflare Worker「chara-chat」 ──�
 - 予約：`reply:` `replygo:` `proj:` `projLast` `ps:`
 - スタンプ：`usleep:` `ulater:`
 - キャラの性質：`rhythm:`（生活リズム・毎週の習慣）、`jealous:`、`meet:<日付>`（キャラ同士の約束）
+- 立ち絵の表情：`faces:<キャラid>` = [{ name, desc }]（ノベル画面が `POST /faces` で登録。2つ以上のときだけ。画像は持たない）
 - ニュース：`newsKw:` `news:` `newsUsed:`
 - AIのクレジット切れ：`aiAlert:gemini` `aiAlert:grok`（料金まわりのエラーで作られ、次に呼び出しが成功すると消える）
 - 天気・災害：`weather` `forecast` `air` `dis:state` `disjob:`
@@ -100,6 +101,7 @@ iPhone（PWA）  ──HTTPS──▶  Cloudflare Worker「chara-chat」 ──�
 - TL：`GET /tl`、`POST /tl/post`（写真可） `/tl/comment` `/tl/like` `/tl/delete` `/tl/clear`
 - くらし：`GET /life`、`POST /memory/delete`、`GET/POST /world`、`GET /disaster`、`POST /outage`
 - 写真：`GET /img`、`POST /img/replace`（キャラの写真のPNGをJPEGに差し替え）
+- 立ち絵の表情（ノベル画面から）：`POST /faces` { charId, faces:[{name, desc}] }（1つ以下なら消す）
 - バックアップ：`GET /export`、`/backup/*`（status・check・step・now・cancel・restore・upload・download）
 - 通知：`GET /vapid`、`POST /subscribe`、`POST /test-push`、`POST /test-bark`、`GET /bark/status`
 - テスト用：`POST /poke`、`POST /tl/poke`、`POST /disaster/test`
@@ -160,6 +162,7 @@ node --no-warnings tests/run-all.mjs t_group     # 名前で絞る
 - ノベル風アプリ（`akari.html`）との連携：LINEで会う約束→ノベル画面で会う→まとめを記憶に戻す。試作中（`lab/index.html` が本番 `chat/index.html` 第37版のコピー。保存は `lab.*`、通知なし）。**`chat/index.html` を直したら、試作版にも同じ直しが要るか確かめる**。詳しくは `AKARI_HANDOVER.md` §9
 
 ## 9. 更新履歴（新しい順）
+- **第38版**：裏の返事に立ち絵の表情（ノベル画面用）。ノベル画面が `POST /faces` で表情の名前・説明を登録したキャラだけ、裏の返事（1人・グループ）でAIにセリフの先頭へ《表情名》を付けてもらい、保存時に外して `messages.face` に入れる（`/sync`・`/reply` で返す。次の会話ではAIに《》付きで渡す）。表情が無いキャラ・表は今までどおり。LINE風の画面には出ない。テスト `t_faces`
 - **第37版**：手動バックアップの欄に「最後に手動で保存した日時」を表示（保存し終えたときにサーバーへ記録）
 - **第36版**：見回りをキャラごとに13分の中でずらす（投稿・スタンプ・もらいそびれた返事が重なりにくく）。TLの反応は毎分実行
 - **第35版**：裏のグループに「グループ設定（AIだけが読む）」と「メンバーごとの立場」を追加（グループ側を優先）

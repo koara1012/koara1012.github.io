@@ -14,7 +14,7 @@
 //    ・Cron トリガー  * * * * *  （毎分。実際に動くのは13分おき）
 // =====================================================================
 
-const VERSION = '第37版（2026-10-28 17:10:00 更新・手動バックアップの最終保存日時）';
+const VERSION = '第38版（2026-10-28 19:37:00 更新・裏の返事に立ち絵の表情）';
 const DEFAULT_MODEL = 'gemini-flash-latest';
 const DEFAULT_GROK_MODEL = 'grok-4.7';                 // X（Twitter）の Grok と同じ最新世代
 const FALLBACK_GROK_MODEL = 'grok-4-fast-non-reasoning'; // 上が使えないときの予備
@@ -107,7 +107,7 @@ async function ensureSchema(env) {
     env.DB.prepare('CREATE TABLE IF NOT EXISTS ai_cost (world TEXT NOT NULL, month TEXT NOT NULL, usd REAL NOT NULL DEFAULT 0, calls INTEGER NOT NULL DEFAULT 0, tin INTEGER NOT NULL DEFAULT 0, tout INTEGER NOT NULL DEFAULT 0, images INTEGER NOT NULL DEFAULT 0, PRIMARY KEY (world, month))'), // AIの利用料金（目安）
   ]);
   // 既存の messages に写真・送信取り消し用の列を足す（2回目以降は「もうある」で失敗するので無視）
-  for (const col of ['image TEXT', 'alt TEXT', 'retracted INTEGER NOT NULL DEFAULT 0', 'retract_at INTEGER', 'reaction TEXT', 'reacted_at INTEGER', 'reply_to INTEGER', 'kind TEXT', 'speaker TEXT']) {
+  for (const col of ['image TEXT', 'alt TEXT', 'retracted INTEGER NOT NULL DEFAULT 0', 'retract_at INTEGER', 'reaction TEXT', 'reacted_at INTEGER', 'reply_to INTEGER', 'kind TEXT', 'speaker TEXT', 'face TEXT']) {
     try { await env.DB.prepare('ALTER TABLE messages ADD COLUMN ' + col).run(); } catch (_) {}
   }
   // TLの投稿に写真を付けられるようにする
@@ -305,8 +305,8 @@ async function getChar(env, id) {
 const rowToMsg = (r) => ({ id: r.id, charId: r.char_id, sender: r.sender, text: r.retracted ? '' : r.text, at: r.at,
   ...(r.image && !r.retracted ? { image: r.image } : {}), ...(r.alt ? { alt: r.alt } : {}), ...(r.retracted ? { retracted: 1, origText: r.text } : {}),
   ...(r.reaction ? { reaction: r.reaction, reactedAt: r.reacted_at || 0 } : {}),
-  ...(r.reply_to ? { replyTo: r.reply_to } : {}), ...(r.kind ? { kind: r.kind } : {}), ...(r.speaker ? { speaker: r.speaker } : {}) });
-const MSG_COLS = 'id,char_id,sender,text,at,image,alt,retracted,reaction,reacted_at,reply_to,kind,speaker';
+  ...(r.reply_to ? { replyTo: r.reply_to } : {}), ...(r.kind ? { kind: r.kind } : {}), ...(r.speaker ? { speaker: r.speaker } : {}), ...(r.face ? { face: r.face } : {}) });
+const MSG_COLS = 'id,char_id,sender,text,at,image,alt,retracted,reaction,reacted_at,reply_to,kind,speaker,face';
 
 // ---------------------------------------------------------------- スタンプ（表のトークだけ）
 // キャラの吹き出しにはユーザーが、ユーザーの吹き出しにはキャラが付ける（1つのメッセージに1つ）
@@ -403,6 +403,16 @@ async function route(key, url, body, env, ctx) {
         for (const r of ss) if (r.m || r.e) status[r.char_id] = { msg: r.m || '', emoji: r.e || '' };
       }
       return json({ chars, groups: await loadGroups(env), aiAlerts: await aiAlerts(env), messages, more, reads, charRead, reactions, status, cost: await costSummary(env).catch(() => null), outage: dis && dis.outage ? dis.outage : null, retracted: rt.map((r) => r.id), settings: await getSettings(env), now: Date.now(), version: VERSION });
+    }
+
+    // ---- 立ち絵の表情（ノベル画面から。裏の返事でAIが選ぶ候補。画像は受け取らない）
+    case 'POST /faces': {
+      const id = String(body.charId || '');
+      if (!(await loadChars(env)).some((c) => c.id === id)) throw new HttpError(404, 'キャラが見つかりません');
+      const faces = normFaces(body.faces);
+      if (faces.length > 1) await kvSet(env, 'faces:' + id, faces);
+      else await env.DB.prepare('DELETE FROM kv WHERE k=?').bind('faces:' + id).run(); // 1つ以下なら選ぶ必要がないので、今までどおり
+      return json({ ok: true, faces: faces.length > 1 ? faces : [] });
     }
 
     // ---- 裏のグループ
@@ -604,7 +614,7 @@ async function route(key, url, body, env, ctx) {
       await noteUserDelete(env);
       await env.DB.batch([
         env.DB.prepare('DELETE FROM chars WHERE id=?').bind(id),
-        env.DB.prepare('DELETE FROM kv WHERE k IN (?,?,?,?,?)').bind('reply:' + id, 'rhythm:' + id, 'jealous:' + id, 'proj:' + id, 'ps:' + id),
+        env.DB.prepare('DELETE FROM kv WHERE k IN (?,?,?,?,?,?)').bind('reply:' + id, 'rhythm:' + id, 'jealous:' + id, 'proj:' + id, 'ps:' + id, 'faces:' + id),
         env.DB.prepare('DELETE FROM messages WHERE char_id=? OR char_id=?').bind(id, id + URA),
         env.DB.prepare('DELETE FROM reads WHERE char_id=? OR char_id=?').bind(id, id + URA),
         env.DB.prepare('DELETE FROM ura_icons WHERE char_id=?').bind(id),
@@ -1249,14 +1259,14 @@ ${situation(d, hist, now)}${d.night ? '\n' + nightNote(now) : ''}${d.mode === 'r
 出力は {"messages": ["吹き出し1", "吹き出し2"]} の形のJSONのみ。`;
 }
 
-function buildContents(hist, world = 'omote', images = {}) {
+function buildContents(hist, world = 'omote', images = {}, faces = null) {
   const turns = [];
   for (const m of hist) {
     const role = m.sender === 'me' ? 'user' : 'model';
     let body = m.retracted ? `（送信を取り消したメッセージ：${m.origText || ''}）` : m.kind === 'call' ? '（電話をかけたが、ユーザーは出なかった）' : m.text;
     if (m.image || (m.alt && !m.retracted)) body = (m.sender === 'me' ? '（写真を送りました）' : `（写真を送った：${m.alt || ''}）`) + (body ? ' ' + body : '');
     // 裏は現実の時刻とは別の時間軸なので時刻は付けない。ナレーションは「＊」付きで渡す
-    const line = world === 'ura' ? (m.sender === 'narr' ? '＊' + body : body) : `[${fmtTime(m.at)}] ${body}`;
+    const line = world === 'ura' ? (m.sender === 'narr' ? '＊' + body : (faces && m.face && m.sender === 'char' ? `《${m.face}》` : '') + body) : `[${fmtTime(m.at)}] ${body}`;
     const t = turns[turns.length - 1];
     const parts = [];
     if (m.image && images[m.image]) parts.push({ inlineData: { mimeType: images[m.image].mime, data: images[m.image].b64 } });
@@ -1287,7 +1297,38 @@ function buildContents(hist, world = 'omote', images = {}) {
 }
 
 // 裏：実際に会っている場面のロールプレイ（表のSNSとは完全に別の時間軸・別の記憶）
-function buildUraSystem(c, tlInfo = '') {
+// ---------------------------------------------------------------- 裏：立ち絵の表情（ノベル画面のため）
+// kv faces:<キャラid> = [{ name, desc }]（ノベル画面が登録。2つ以上あるときだけ）。セリフの先頭に《表情名》を付けてもらい、保存時に外して face 列へ
+function normFaces(a) {
+  const out = [];
+  for (const f of Array.isArray(a) ? a : []) {
+    const name = String((f && f.name) || '').replace(/[《》\n]/g, '').trim().slice(0, 20);
+    if (!name || out.some((x) => x.name === name)) continue;
+    out.push({ name, desc: String((f && f.desc) || '').replace(/\n/g, ' ').trim().slice(0, 80) });
+    if (out.length >= 24) break;
+  }
+  return out;
+}
+async function facesOf(env, id) {
+  const f = await kvGet(env, 'faces:' + id, null).catch(() => null);
+  return Array.isArray(f) && f.length > 1 ? f : null;
+}
+const faceList = (faces) => faces.map((f) => `${f.name}${f.desc ? '（' + f.desc + '）' : ''}`).join('、');
+function faceRuleSingle(faces) {
+  return faces ? `- セリフの吹き出しの先頭に、そのときの表情を《表情名》の形で1つだけ付ける（例：《${faces[0].name}》……）。表情名は次の中から、セリフの気持ちに一番合うものを選ぶ：${faceList(faces)}
+- ナレーション（＊）の吹き出しには《》を付けない。《》はセリフの言葉には含めない。
+` : '';
+}
+// 先頭の《表情名》を外す。候補にある名前なら face として返す
+function takeFace(text, faces) {
+  text = faces ? String(text).replace(/^(\s*「)\s*(《[^》\n]{1,20}》)/, '$2$1') : text; // 「《照れ》…」→《照れ》「…」
+  const m = faces && String(text).match(/^\s*《([^》\n]{1,20})》\s*/);
+  if (!m) return { text, face: null };
+  const name = m[1].trim();
+  return { text: String(text).slice(m[0].length), face: faces.some((f) => f.name === name) ? name : null };
+}
+
+function buildUraSystem(c, tlInfo = '', faceRule = '') {
   const own = c.uraCharPrompt && c.uraCharPrompt.trim();
   const alias = !own && c.uraName && c.uraName !== c.name ? `\n（キャラクター設定では「${c.name}」と書かれていますが、この場面では「${c.uraName}」として振る舞います）` : '';
   const len = c.uraLength || 'normal';
@@ -1324,7 +1365,7 @@ ${tlInfo}
 # ルール（キャラクター設定に別の指示があればそちらを優先）
 - 返答は1〜${c.uraMaxSplit}個の吹き出しに分ける。
 ${narr}
-- ユーザーの発言のうち（ ）で書かれた部分は、ユーザーの行動や状況の描写として受け取る。
+${faceRule}- ユーザーの発言のうち（ ）で書かれた部分は、ユーザーの行動や状況の描写として受け取る。
 - ユーザーの行動・発言・気持ちを勝手に決めて書かない。ユーザーが次にどうするかの余地を残す。
 - 自分がAIであることには触れない。
 - キャラクターが未成年の設定である場合、性的な内容や描写は一切しない。
@@ -1581,10 +1622,11 @@ async function generateAndStore(env, c, d, hist, lastRead, world = 'omote') {
   const key = ura ? c.id + URA : c.id;
   // 同じ世界のタイムラインでの出来事も伝える（トークとTLはつながっている）
   const tlInfo = await tlContextForTalk(env, c, world).catch(() => '');
-  let texts, rich = null;
+  let texts, rich = null, uraFaces = null;
   if (ura) {
     const wb = await worldBlock(env, c.prompt + '\n' + (c.uraCharPrompt || '') + '\n' + (c.uraScene || '') + '\n' + hist.slice(-20).map((m) => m.text).join('\n'));
-    texts = (await callAI(env, 'ura', wb + buildUraSystem(c, tlInfo), buildContents(hist, 'ura'), c.uraMaxSplit + 4, c.uraLength === 'long' ? { effort: 'medium' } : null))
+    uraFaces = await facesOf(env, c.id);
+    texts = (await callAI(env, 'ura', wb + buildUraSystem(c, tlInfo, faceRuleSingle(uraFaces)), buildContents(hist, 'ura', {}, uraFaces), c.uraMaxSplit + 4, c.uraLength === 'long' ? { effort: 'medium' } : null))
       .flatMap((t) => t.split(/\n(?=\s*[＊*])/)); // ナレーションとセリフが1つにまとまっていたら分ける
   } else {
     const st = await getSettings(env);
@@ -1637,7 +1679,10 @@ async function generateAndStore(env, c, d, hist, lastRead, world = 'omote') {
   // 裏では「＊」で始まる吹き出しをナレーションとして保存する
   const items = texts.map((t) => {
     const m = ura && t.match(/^\s*[＊*]+\s*([\s\S]*)$/);
-    return m ? { sender: 'narr', text: m[1].trim() } : { sender: 'char', text: ura ? t.replace(/^「([\s\S]*)」$/, '$1') : t };
+    if (m) return { sender: 'narr', text: takeFace(m[1].trim(), uraFaces).text.trim() };
+    if (!ura) return { sender: 'char', text: t };
+    const f = takeFace(t, uraFaces);
+    return { sender: 'char', text: f.text.trim().replace(/^「([\s\S]*)」$/, '$1'), ...(f.face ? { face: f.face } : {}) };
   }).filter((x) => x.text);
   // スタンプ（表）：ユーザーの最後のメッセージに付ける
   if (rich && rich.stamp) {
@@ -1664,8 +1709,8 @@ async function generateAndStore(env, c, d, hist, lastRead, world = 'omote') {
   }
   const t0 = Date.now();
   const res = await env.DB.batch(items.map((x, i) =>
-    env.DB.prepare('INSERT INTO messages (char_id,sender,text,at,image,alt,reply_to) VALUES (?,?,?,?,?,?,?)').bind(key, x.sender, x.text, t0 + i, x.image || null, x.alt || null, x.replyTo || null)));
-  const out = items.map((x, i) => ({ id: res[i].meta.last_row_id, charId: key, sender: x.sender, text: x.text, at: t0 + i, ...(x.image ? { image: x.image, alt: x.alt } : {}), ...(x.replyTo ? { replyTo: x.replyTo } : {}) }));
+    env.DB.prepare('INSERT INTO messages (char_id,sender,text,at,image,alt,reply_to,face) VALUES (?,?,?,?,?,?,?,?)').bind(key, x.sender, x.text, t0 + i, x.image || null, x.alt || null, x.replyTo || null, x.face || null)));
+  const out = items.map((x, i) => ({ id: res[i].meta.last_row_id, charId: key, sender: x.sender, text: x.text, at: t0 + i, ...(x.image ? { image: x.image, alt: x.alt } : {}), ...(x.replyTo ? { replyTo: x.replyTo } : {}), ...(x.face ? { face: x.face } : {}) }));
   // 追伸：数分後に、思い出したように一言
   if (rich && rich.postscript && !ura) await kvSet(env, 'ps:' + key, { texts: [rich.postscript], due: Date.now() + (2 + Math.random() * 5) * MIN, after: out[out.length - 1].id });
   // 送信取り消し（数分後に取り消す）
@@ -1683,7 +1728,7 @@ const GROUP_SCHEMA = {
   required: ['messages'], additionalProperties: false,
 };
 const NARR_WHO = ['ナレーション', 'narration', 'narr', '地の文', '＊', '*'];
-function buildGroupSystem(g, members, st, start) {
+function buildGroupSystem(g, members, st, start, faces = {}) {
   const nm = (c) => c.uraName || c.name;
   const narr = g.narration
     ? { short: '- 情景・動作・表情の描写（ナレーション）は who を "ナレーション" にして、三人称・現在形で1〜3文。セリフは短めに。',
@@ -1714,7 +1759,9 @@ ${g.synopsis || '（特になし。これまでの流れやユーザーの言動
 - 「このグループの設定」や「このグループでの立場」が、各キャラクター設定と食い違うときは、このグループの中ではそちら（グループ側）を優先する（関係・立場・ルールなど）。食い違わない部分（口調・一人称・性格など）は、各キャラクター設定に従う。
 ${narr}
 - セリフの text には、その人が口にする言葉だけを書く（「」や（ ）書きは付けない）。
-- ユーザーの発言のうち（ ）で書かれた部分は、ユーザーの行動や状況の描写として受け取る。
+${members.some((c) => faces[c.id]) ? `- 次の人のセリフの text の先頭には、そのときの表情を《表情名》の形で1つだけ付ける（例：《${faces[members.find((c) => faces[c.id]).id][0].name}》……）。表情名はその人の候補から、セリフの気持ちに一番合うものを選ぶ。ナレーションには付けない。
+${members.filter((c) => faces[c.id]).map((c) => `  - ${nm(c)}：${faceList(faces[c.id])}`).join('\n')}
+` : ''}- ユーザーの発言のうち（ ）で書かれた部分は、ユーザーの行動や状況の描写として受け取る。
 - ユーザーの行動・発言・気持ちを勝手に決めて書かない。ユーザーが次にどうするかの余地を残す。
 - 自分がAIであることには触れない。
 - 登場人物が未成年の設定である場合、性的な内容や描写は一切しない。
@@ -1722,12 +1769,12 @@ ${start ? '\n# 今回\nまだ物語は始まっていません。あらすじを
 
 出力は {"messages": [{"who": "ナレーション", "text": "…"}, {"who": "${members[0] ? nm(members[0]) : '名前'}", "text": "…"}]} の形のJSONのみ。`;
 }
-function buildGroupContents(hist, members, st) {
+function buildGroupContents(hist, members, st, faces = {}) {
   const nameOf = (id) => { const c = members.find((x) => x.id === id); return c ? c.uraName || c.name : '（もういない人）'; };
   const turns = [];
   for (const m of hist) {
     const role = m.sender === 'me' ? 'user' : 'model';
-    const line = m.sender === 'me' ? (m.image ? '（写真を見せた）' : '') + m.text : m.sender === 'narr' ? '＊' + m.text : `【${nameOf(m.speaker)}】${m.text}`;
+    const line = m.sender === 'me' ? (m.image ? '（写真を見せた）' : '') + m.text : m.sender === 'narr' ? '＊' + m.text : `【${nameOf(m.speaker)}】${m.face && faces[m.speaker] ? `《${m.face}》` : ''}${m.text}`;
     const t = turns[turns.length - 1];
     if (t && t.role === role) t.parts[0].text += '\n' + line;
     else turns.push({ role, parts: [{ text: line }] });
@@ -1741,25 +1788,30 @@ async function groupReply(env, g, hist, key) {
   if (!members.length) throw new HttpError(400, 'このグループにはメンバーがいません');
   const start = !hist.length;
   const wb = await worldBlock(env, members.map((c) => c.prompt).join('\n') + '\n' + g.synopsis + '\n' + (g.prompt || '') + '\n' + Object.values(g.roles || {}).join('\n') + '\n' + hist.slice(-20).map((m) => m.text).join('\n'));
-  const r = await callAIObj(env, 'ura', wb + buildGroupSystem(g, members, st, start), buildGroupContents(hist, members, st), GROUP_SCHEMA, 'group_reply', g.length === 'long' ? { effort: 'medium' } : null);
+  const faces = {};
+  for (const c of members) { const f = await facesOf(env, c.id); if (f) faces[c.id] = f; }
+  const r = await callAIObj(env, 'ura', wb + buildGroupSystem(g, members, st, start, faces), buildGroupContents(hist, members, st, faces), GROUP_SCHEMA, 'group_reply', g.length === 'long' ? { effort: 'medium' } : null);
   const byName = (w) => {
     const s = String(w || '').trim().replace(/^[【「]|[】」]$/g, '');
     return members.find((c) => s === (c.uraName || c.name) || s === c.name) || members.find((c) => s && (s.includes(c.uraName || c.name) || (c.uraName || c.name).includes(s)));
   };
   const items = [];
   for (const x of (r && r.messages) || []) {
-    const text = String(x.text || '').trim().replace(/^「([\s\S]*)」$/, '$1');
-    if (!text) continue;
+    const raw = String(x.text || '').trim();
     const who = String(x.who || '').trim();
+    const c = NARR_WHO.includes(who) ? null : byName(who);
+    const anyFaces = Object.values(faces).flat();
+    const tf = takeFace(raw, c && faces[c.id] ? faces[c.id] : (anyFaces.length ? anyFaces : null)); // 表情の印《》は外す
+    const text = tf.text.trim().replace(/^「([\s\S]*)」$/, '$1');
+    if (!text) continue;
     if (NARR_WHO.includes(who) || /^[＊*]/.test(text)) { items.push({ sender: 'narr', text: text.replace(/^[＊*]+\s*/, '') }); continue; }
-    const c = byName(who);
-    items.push(c ? { sender: 'char', text, speaker: c.id } : { sender: 'narr', text: `${who}「${text}」` }); // 登場人物にいない名前は、地の文として残す
+    items.push(c ? { sender: 'char', text, speaker: c.id, ...(tf.face && faces[c.id] ? { face: tf.face } : {}) } : { sender: 'narr', text: `${who}「${text}」` }); // 登場人物にいない名前は、地の文として残す
   }
   const out = items.slice(0, Math.min(g.maxSplit, 12) + 2);
   if (!out.length) throw new Error('返答が空でした');
   const t0 = Date.now();
-  const res = await env.DB.batch(out.map((x, i) => env.DB.prepare('INSERT INTO messages (char_id,sender,text,at,speaker) VALUES (?,?,?,?,?)').bind(key, x.sender, x.text, t0 + i, x.speaker || null)));
-  return out.map((x, i) => ({ id: res[i].meta.last_row_id, charId: key, sender: x.sender, text: x.text, at: t0 + i, ...(x.speaker ? { speaker: x.speaker } : {}) }));
+  const res = await env.DB.batch(out.map((x, i) => env.DB.prepare('INSERT INTO messages (char_id,sender,text,at,speaker,face) VALUES (?,?,?,?,?,?)').bind(key, x.sender, x.text, t0 + i, x.speaker || null, x.face || null)));
+  return out.map((x, i) => ({ id: res[i].meta.last_row_id, charId: key, sender: x.sender, text: x.text, at: t0 + i, ...(x.speaker ? { speaker: x.speaker } : {}), ...(x.face ? { face: x.face } : {}) }));
 }
 
 // 引用返信の候補：最近のユーザーのメッセージ（続けて2つ以上送られたときや、少し前の話があるとき）

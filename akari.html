@@ -162,6 +162,8 @@ table.parts td,table.parts th{border:1px solid #3e3344;padding:3px 6px}
       <div class="row"><label>ログでのあなたの名前</label><input type="text" id="sUser"></div>
       <div class="row"><label>名前欄の表示</label><input type="text" id="sName"></div>
       <div class="row"><label>文字の速さ（ms/字）</label><input type="number" id="sSpeed" min="0" max="300"></div>
+      <div class="row"><label>タップ音</label><label style="min-width:0"><input type="checkbox" id="sSeOn"> 鳴らす</label><label style="min-width:0">音量（%）</label><input type="number" id="sSeVol" min="0" max="200" step="5"></div>
+      <p class="note">タップ音は画面タップでの文字送り・ページ送りのときだけ鳴ります。iPhoneの消音モード中は鳴らないことがあります。</p>
       <h4>立ち絵の位置</h4>
       <div class="row"><label>大きさ（画面高さの%）</label><input type="number" id="sScale" step="0.5"></div>
       <div class="row"><label>上の位置（%）</label><input type="number" id="sTop" step="0.2"></div>
@@ -177,10 +179,13 @@ table.parts td,table.parts th{border:1px solid #3e3344;padding:3px 6px}
       <div class="row"><label>立ち絵ベース</label><button class="b" data-pick="base">選ぶ</button><span id="aBase" class="note"></span><button class="b d" data-del="base">消す</button></div>
       <div class="row"><label>表情パーツ（複数可）</label><button class="b" data-pick="parts">追加する</button><span id="aParts" class="note"></span><button class="b d" data-del="parts">全部消す</button></div>
       <div class="row"><label>フォント</label><button class="b" data-pick="font">選ぶ</button><span id="aFont" class="note"></span><button class="b d" data-del="font">消す</button></div>
+      <div class="row"><label>タップ音</label><button class="b" data-pick="se">選ぶ</button><span id="aSe" class="note"></span><button class="b" id="seTest">鳴らす</button><button class="b d" data-del="se">消す</button></div>
+      <p class="note">タップ音は m4a / mp3 / wav（iPhoneならmovの画面録画も可）。前の無音は自動で切り、音量も自動でそろえます。</p>
       <input type="file" class="hidefile" id="fBg" accept="image/*">
       <input type="file" class="hidefile" id="fBase" accept="image/png,image/webp">
       <input type="file" class="hidefile" id="fParts" accept="image/png,image/webp" multiple>
       <input type="file" class="hidefile" id="fFont" accept=".ttf,.otf,.woff,.woff2,font/*,application/octet-stream">
+      <input type="file" class="hidefile" id="fSe" accept="audio/*,video/*,.m4a,.mp3,.wav,.mov,.mp4,.aac">
       <h4>パーツのファイル名のルール</h4>
       <p class="note">すべて立ち絵ベースと同じキャンバスサイズ（例 923×2104）の透過PNGで、位置はそのまま。表情名は英数字でも日本語でも可（例 normal / sad / 照れ）。<br>
       目：<code>eye_表情_open.png</code> <code>eye_表情_half.png</code> <code>eye_表情_close.png</code><br>
@@ -223,7 +228,7 @@ table.parts td,table.parts th{border:1px solid #3e3344;padding:3px 6px}
 <script>
 'use strict';
 /* ====== 版 ====== */
-const VERSION = { no: 1, at: '2026-10-28 14:09:16' };
+const VERSION = { no: 2, at: '2026-10-28 14:44:34' };
 const VERSION_TEXT = `第${VERSION.no}回（${VERSION.at} 更新）`;
 
 /* ====== 改善ログ（他のAIへの引き継ぎ用）======
@@ -248,10 +253,20 @@ const DEV_LOG = `# 伊達朱里ノベル風チャット 改善ログ
 - 口パク：文字送り中に約100msで open/close（halfがあれば混ぜる）、句読点で閉じて間を置く。
 - 保存先：localStorage「akari.settings」（設定・APIキー）「akari.logs」（動作記録 最大300件）／IndexedDB「akariNovel」kv：assets, history
 - 会話履歴：[{role:'user',text,t}|{role:'akari',lines,t}]。直近N往復を送信（設定）。
-- 困ったとき：エラー時にトースト→ワンタップで診断情報（版・端末・設定・直近の送受信・記録）をコピー。
+- 困ったとき：エラー時にトースト→ワンタップで診断情報（版・端末・設定・直近の送受信・記録・開き方・画像方式）をコピー。
+- タップ音：素材「タップ音」で読み込み（assets.se）。Web Audioでデコード→前後の無音を自動カット・ピーク0.9に正規化。画面タップでの文字送り（全文表示）・ページ送りの時だけ鳴る（▷|・オート・入力欄を開くタップ・メニューでは鳴らない）。設定 seOn / seVol。
+- 画像表示：blob URL で表示できない環境では自動で data URL に切り替え。表示できない画像はエラー通知。
+- 公開場所：https://koara1012.github.io/akari.html（リポジトリ koara1012/koara1012.github.io の akari.html。index.html・voice.html は別アプリなので上書きしないこと）
 - バックアップ：JSON書き出し（素材・APIキーは任意で同梱）／復元。
 
-## 第1回（${VERSION.at}）
+## 第2回（2026-10-28 14:44:34）
+- タップ音を追加（文字送り・ページ送りの画面タップ時のみ）。前の無音カット・音量自動調整・設定でON/OFFと音量・素材画面に「鳴らす」テスト。
+- 原因対応：Claudeアプリのプレビュー画面で開くと立ち絵が出なかった（blob URLが禁止され、空の枠だけ表示）。→ blob が使えなければ data URL に自動切り替え。画像が出せなければエラー通知と診断コピーを出すように。
+- プレビュー画面や埋め込み表示など、制限のある場所で開かれたら「Safariで開いて」と案内。
+- advance() の呼び出し元を 'tap'/'skip'/'auto' で区別するように変更。
+- バックアップにタップ音も含めるように。
+
+## 第1回（2026-10-28 14:09:16）
 - 新規作成。上記の機能一式を実装。
 - 未実装（今後の候補）：ボイス（感情タグで短い声を再生）、長期記憶（会話の要約）、背景の時間帯切り替え、複数キャラ。
 `;
@@ -277,11 +292,11 @@ window.addEventListener('error', e => log('error', 'JSエラー：' + e.message,
 window.addEventListener('unhandledrejection', e => log('error', 'Promiseエラー：' + (e.reason && e.reason.message || e.reason), e.reason && e.reason.stack));
 
 let toastTimer = 0;
-function toast(msg, isErr){
+function toast(msg, isErr, ms){
   const t = $('#toast'); $('#toastMsg').textContent = msg;
   t.classList.toggle('ok', !isErr); $('#toastBtn').style.display = isErr ? '' : 'none';
   t.classList.add('show'); clearTimeout(toastTimer);
-  toastTimer = setTimeout(() => t.classList.remove('show'), isErr ? 15000 : 2500);
+  toastTimer = setTimeout(() => t.classList.remove('show'), ms || (isErr ? 15000 : 2500));
 }
 async function copyText(t){
   try{ await navigator.clipboard.writeText(t); return true; }catch(e){}
@@ -306,7 +321,7 @@ const DEFAULT_PROMPT = `あなたは「伊達朱里（だて あかり）」と�
 const DEFAULTS = {
   apiKey:'', endpoint:'https://api.x.ai/v1/chat/completions', model:'grok-4.6', temperature:0.9, turns:30,
   callName:'転校生さん', userName:'あなた', dispName:'伊達　朱里', speed:45,
-  scale:146.5, top:1.2, xpos:50, auto:false, prompt:DEFAULT_PROMPT, faceDesc:{}
+  scale:146.5, top:1.2, xpos:50, auto:false, seOn:true, seVol:80, prompt:DEFAULT_PROMPT, faceDesc:{}
 };
 const FACE_HINTS = { normal:'いつもの暗く自信のない顔', smile:'控えめに少しだけ笑う', sad:'しょんぼり・落ち込む', panic:'慌てる・焦る',
   blush:'照れる・恥ずかしい', cry:'泣きそう', surprise:'驚く', angry:'むっとする', troubled:'困る', closed:'目を閉じる・うつむく' };
@@ -327,11 +342,21 @@ const idb = {
 };
 
 /* ====== 素材 ====== */
-let ASSETS = { bg:null, base:null, font:null, parts:[] };   // {name,type,buf}
+let ASSETS = { bg:null, base:null, font:null, se:null, parts:[] };   // {name,type,buf}
 let FACES = {}, FACE_LIST = ['normal'], UNKNOWN = [], baseRatio = 923/2104;
-const URLS = new Map();
-function urlOf(a){ if(!a) return ''; if(!URLS.has(a)){ URLS.set(a, URL.createObjectURL(new Blob([a.buf],{type:a.type||'image/png'}))); } return URLS.get(a); }
-function freeUrls(){ for(const u of URLS.values()) URL.revokeObjectURL(u); URLS.clear(); }
+const URLS = new Map(), DATAURLS = new Map();
+let useData = false;   // blob: が使えない画面では data: に切り替える
+function imgType(a){ if (a.type && a.type.startsWith('image/')) return a.type; return /\.jpe?g$/i.test(a.name) ? 'image/jpeg' : /\.webp$/i.test(a.name) ? 'image/webp' : 'image/png'; }
+function urlOf(a){
+  if (!a) return '';
+  if (useData && DATAURLS.has(a)) return DATAURLS.get(a);
+  if (!URLS.has(a)){ try{ URLS.set(a, URL.createObjectURL(new Blob([a.buf],{type:imgType(a)}))); }catch(e){ return DATAURLS.get(a) || ''; } }
+  return URLS.get(a);
+}
+function toData(a){ if (DATAURLS.has(a)) return Promise.resolve(DATAURLS.get(a));
+  return new Promise((res,rej) => { const fr = new FileReader(); fr.onload = () => { DATAURLS.set(a, fr.result); res(fr.result); }; fr.onerror = () => rej(fr.error); fr.readAsDataURL(new Blob([a.buf],{type:imgType(a)})); }); }
+function freeUrls(){ for(const u of URLS.values()) URL.revokeObjectURL(u); URLS.clear(); DATAURLS.clear(); }
+function loadImg(u){ return new Promise(r => { if (!u) return r(null); const i = new Image(); i.onload = () => r(i); i.onerror = () => r(null); i.src = u; }); }
 
 const STATE_MAP = { open:'open', half:'half', close:'close', closed:'close', '開':'open', '半':'half', '閉':'close' };
 function parseParts(){
@@ -354,20 +379,36 @@ function parseParts(){
   for (const k of FACE_LIST){ if (S.faceDesc[k] == null) S.faceDesc[k] = FACE_HINTS[k] || ''; }
 }
 async function loadAssets(){
-  try{ const a = await idb.get('assets'); if (a) ASSETS = Object.assign({ bg:null, base:null, font:null, parts:[] }, a); }
+  try{ const a = await idb.get('assets'); if (a) ASSETS = Object.assign({ bg:null, base:null, font:null, se:null, parts:[] }, a); }
   catch(e){ log('error','素材の読み込みに失敗：' + e.message); }
-  freeUrls(); parseParts(); await applyAssets();
+  freeUrls(); parseParts(); await applyAssets(); prepareSE();
 }
 async function saveAssets(){ try{ await idb.set('assets', ASSETS); }catch(e){ log('error','素材を保存できませんでした：' + e.message); } }
 let fontOk = false;
 async function applyAssets(){
-  $('#bg').style.backgroundImage = ASSETS.bg ? `url("${urlOf(ASSETS.bg)}")` : '';
-  if (ASSETS.base){
-    const img = new Image(); img.src = urlOf(ASSETS.base);
-    try{ await img.decode(); baseRatio = img.naturalWidth / img.naturalHeight; }catch(e){ log('warn','立ち絵の読み込みに失敗', e.message); }
+  const imgs = [ASSETS.bg, ASSETS.base, ...ASSETS.parts].filter(Boolean);
+  // 一時アドレス（blob:）が使えるか確かめ、だめなら data: に切り替える
+  if (imgs.length && !useData && !(await loadImg(urlOf(imgs[0])))){
+    try{
+      if (await loadImg(await toData(imgs[0]))){
+        useData = true; log('warn','この画面では一時アドレス（blob）で画像を出せないため、別の方法（data URL）に切り替えました');
+      }
+    }catch(e){}
   }
-  // パーツを先読みしてちらつきを防ぐ
-  for (const p of ASSETS.parts){ const i = new Image(); i.src = urlOf(p); i.decode && i.decode().catch(()=>{}); }
+  if (useData) for (const a of imgs){ try{ await toData(a); }catch(e){} }
+  const bad = [];
+  if (ASSETS.bg){
+    if (await loadImg(urlOf(ASSETS.bg))) $('#bg').style.backgroundImage = `url("${urlOf(ASSETS.bg)}")`;
+    else { $('#bg').style.backgroundImage = ''; bad.push('背景 ' + ASSETS.bg.name); }
+  } else $('#bg').style.backgroundImage = '';
+  if (ASSETS.base){
+    const img = await loadImg(urlOf(ASSETS.base));
+    if (img) baseRatio = img.naturalWidth / img.naturalHeight; else bad.push('立ち絵ベース ' + ASSETS.base.name);
+  }
+  // パーツを先読みしてちらつきを防ぐ（表示できないものは記録）
+  const pr = await Promise.all(ASSETS.parts.map(p => loadImg(urlOf(p)).then(i => i ? null : p.name)));
+  pr.filter(Boolean).forEach(n => bad.push('パーツ ' + n));
+  if (bad.length) log('error', `画像を表示できませんでした：${bad.join('、')}` + (envBad ? '。制限のある画面で開いているためです。Safariで開いてください' : '（ファイルが壊れているか、形式に非対応の可能性）'));
   if (ASSETS.font && !fontOk){
     try{ const ff = new FontFace('AkariFont', ASSETS.font.buf); await ff.load(); document.fonts.add(ff); fontOk = true; }
     catch(e){ log('error','フォントを読み込めませんでした：' + e.message); }
@@ -393,7 +434,11 @@ addEventListener('orientationchange', () => setTimeout(layout, 300));
 /* ====== 表情・瞬き・口パク ====== */
 let curFace = 'normal', eyeState = 'open', mouthState = 'close';
 function partFor(face, kind){ const f = FACES[face]; if (f && f[kind]) return f[kind]; if (kind === 'extra') return null; const n = FACES.normal; return n && n[kind] || null; }
-function setImg(el, a){ const u = a ? urlOf(a) : ''; if (el.dataset.u !== u){ el.dataset.u = u; if (u) el.src = u; } el.style.display = u ? 'block' : 'none'; }
+function setImg(el, a){
+  const u = a ? urlOf(a) : '';
+  if (el.dataset.u !== u){ el.dataset.u = u; if (u){ el.onerror = () => { el.style.display = 'none'; log('error', `画像を表示できませんでした：${a.name}`); }; el.src = u; } }
+  el.style.display = u ? 'block' : 'none';
+}
 function render(all){
   if (all) setImg($('#lBase'), ASSETS.base);
   const e = partFor(curFace,'eye'); setImg($('#lEye'), e ? (e[eyeState] || (eyeState==='half' ? e.close : null) || e.open || e.close) : null);
@@ -415,6 +460,51 @@ setInterval(() => {
   if (speaking) next = mouthState === 'close' ? ((m.half && Math.random() < .4) ? 'half' : 'open') : 'close';
   if (next !== mouthState){ mouthState = next; render(); }
 }, 100);
+
+/* ====== タップ音 ====== */
+let actx = null, seBuf = null;
+function ensureCtx(){
+  if (!actx){ const C = window.AudioContext || window.webkitAudioContext; if (!C) return null; try{ actx = new C(); }catch(e){ return null; } }
+  if (actx.state !== 'running') actx.resume().catch(()=>{});
+  return actx;
+}
+// iPhoneは最初のタップで音を有効にする必要がある
+['touchend','click'].forEach(ev => document.addEventListener(ev, () => {
+  const c = ensureCtx(); if (!c || c._unlocked) return;
+  try{ const b = c.createBuffer(1,1,22050), s = c.createBufferSource(); s.buffer = b; s.connect(c.destination); s.start(0); c._unlocked = true; }catch(e){}
+}, { passive:true }));
+function decodeAudio(c, buf){ return new Promise((res,rej) => { const p = c.decodeAudioData(buf, res, rej); if (p && p.then) p.then(res, rej); }); }
+function trimNorm(c, b){   // 前後の無音を切り、ピークを0.9にそろえる
+  const ch = b.numberOfChannels, n = b.length, sr = b.sampleRate; let peak = 0;
+  for (let k = 0; k < ch; k++){ const d = b.getChannelData(k); for (let i = 0; i < n; i++){ const v = Math.abs(d[i]); if (v > peak) peak = v; } }
+  if (peak < 1e-5) return null;
+  let st = n, en = 0;
+  for (let k = 0; k < ch; k++){ const d = b.getChannelData(k);
+    for (let i = 0; i < n; i++) if (Math.abs(d[i]) > peak*.06){ st = Math.min(st, i); break; }
+    for (let i = n-1; i >= 0; i--) if (Math.abs(d[i]) > peak*.01){ en = Math.max(en, i); break; } }
+  st = Math.max(0, st - Math.round(sr*.004)); en = Math.min(n, en + Math.round(sr*.03));
+  const len = Math.max(1, en - st), g = Math.min(40, .9/peak), fade = Math.min(len, Math.round(sr*.015));
+  const out = c.createBuffer(ch, len, sr);
+  for (let k = 0; k < ch; k++){ const d = b.getChannelData(k), o = out.getChannelData(k);
+    for (let i = 0; i < len; i++){ let v = d[st+i]*g; if (i > len-fade) v *= (len-i)/fade; o[i] = v; } }
+  return out;
+}
+async function prepareSE(){
+  seBuf = null; if (!ASSETS.se) return;
+  const c = ensureCtx(); if (!c){ log('warn','この端末は効果音（Web Audio）に対応していません'); return; }
+  try{
+    const raw = await decodeAudio(c, ASSETS.se.buf.slice(0));
+    seBuf = trimNorm(c, raw);
+    if (!seBuf) log('warn','タップ音のファイルが無音でした：' + ASSETS.se.name);
+    else log('info', `タップ音を準備：${ASSETS.se.name}（${raw.duration.toFixed(2)}秒→${seBuf.duration.toFixed(2)}秒）`);
+  }catch(e){ log('error', `タップ音を読み込めませんでした：${ASSETS.se.name}（形式に非対応の可能性。m4a・mp3・wavを試してください）`); }
+  refreshAssetUI();
+}
+function playSE(){
+  if (!S.seOn || !seBuf) return; const c = ensureCtx(); if (!c) return;
+  try{ const s = c.createBufferSource(), g = c.createGain(); s.buffer = seBuf; g.gain.value = Math.max(0, S.seVol)/100; s.connect(g); g.connect(c.destination); s.start(0); }
+  catch(e){ log('warn','タップ音を鳴らせませんでした', e.message); }
+}
 
 /* ====== 文字送り ====== */
 const textEl = $('#text'), hintEl = $('#hint');
@@ -466,7 +556,7 @@ async function playPage(){
   const p = pages[pageIdx]; const ok = await typePage(p); if (!ok) return;
   if (pageIdx < pages.length - 1){
     state = 'pageDone'; showHint('next');
-    if (S.auto) autoTimer = setTimeout(() => { if (state === 'pageDone') advance(); }, 1000 + [...p.text].length*60);
+    if (S.auto) autoTimer = setTimeout(() => { if (state === 'pageDone') advance('auto'); }, 1000 + [...p.text].length*60);
   } else { state = 'idle'; showHint('end'); }
 }
 function showLines(lines){ pages = paginate(lines); pageIdx = 0; if (!pages.length) pages = [{face:'normal',text:'……'}]; return playPage(); }
@@ -476,12 +566,12 @@ function jumpEnd(){
   pageIdx = pages.length - 1; setFace(pages[pageIdx].face); textEl.textContent = pages[pageIdx].text;
   state = 'idle'; showHint('end');
 }
-function advance(fromSkip){
+function advance(src){   // src: 'tap'（画面タップ）/'skip'（▷|）/'auto'（オート）
   clearTimeout(autoTimer);
-  if (state === 'typing'){ skipType = true; return; }
-  if (state === 'pageDone'){ pageIdx++; playPage(); return; }
-  if (state === 'error'){ send(null); return; }
-  if (state === 'idle' && !fromSkip) openInput();
+  if (state === 'typing'){ if (src === 'tap') playSE(); skipType = true; return; }
+  if (state === 'pageDone'){ if (src === 'tap') playSE(); pageIdx++; playPage(); return; }
+  if (state === 'error'){ if (src !== 'auto') send(null); return; }
+  if (state === 'idle' && src === 'tap') openInput();
 }
 
 /* ====== 会話 ====== */
@@ -603,10 +693,10 @@ $('#msg').addEventListener('keydown', e => { if (e.key === 'Enter' && !e.isCompo
 $('#inputOv').addEventListener('click', e => { if (e.target.id === 'inputOv') closeInput(); });
 
 /* ====== 操作 ====== */
-$('#app').addEventListener('click', e => { if (e.target.closest('#ctrls')) return; advance(); });
-$('#bSkip').onclick = () => advance(true);
+$('#app').addEventListener('click', e => { if (e.target.closest('#ctrls')) return; advance('tap'); });
+$('#bSkip').onclick = () => advance('skip');
 $('#bFast').onclick = jumpEnd;
-$('#bAuto').onclick = () => { S.auto = !S.auto; saveS(); drawAuto(); if (S.auto && state === 'pageDone') advance(); };
+$('#bAuto').onclick = () => { S.auto = !S.auto; saveS(); drawAuto(); if (S.auto && state === 'pageDone') advance('auto'); };
 function drawAuto(){
   const b = $('#bAuto'); b.classList.toggle('on', S.auto);
   b.innerHTML = S.auto
@@ -637,9 +727,10 @@ $('#clearHist').onclick = async () => {
   HISTORY = []; await saveHist(); renderLog(); startGreeting(); toast('会話を消しました');
 };
 const FIELDS = { sKey:'apiKey', sEnd:'endpoint', sModel:'model', sTemp:'temperature', sTurns:'turns', sCall:'callName', sUser:'userName',
-  sName:'dispName', sSpeed:'speed', sScale:'scale', sTop:'top', sX:'xpos', sPrompt:'prompt' };
-const NUMS = ['temperature','turns','speed','scale','top','xpos'];
-function fillSettings(){ for (const [id,k] of Object.entries(FIELDS)) $('#'+id).value = S[k]; }
+  sName:'dispName', sSpeed:'speed', sSeVol:'seVol', sScale:'scale', sTop:'top', sX:'xpos', sPrompt:'prompt' };
+const NUMS = ['temperature','turns','speed','scale','top','xpos','seVol'];
+function fillSettings(){ for (const [id,k] of Object.entries(FIELDS)) $('#'+id).value = S[k]; $('#sSeOn').checked = !!S.seOn; }
+$('#sSeOn').addEventListener('change', e => { S.seOn = e.target.checked; saveS(); });
 for (const [id,k] of Object.entries(FIELDS)){
   $('#'+id).addEventListener('input', e => {
     let v = e.target.value; if (NUMS.includes(k)){ v = parseFloat(v); if (isNaN(v)) return; } else if (k !== 'prompt') v = v.trim();
@@ -660,7 +751,7 @@ $('#getModels').onclick = async () => {
 };
 
 /* 素材UI */
-const pickMap = { bg:'#fBg', base:'#fBase', parts:'#fParts', font:'#fFont' };
+const pickMap = { bg:'#fBg', base:'#fBase', parts:'#fParts', font:'#fFont', se:'#fSe' };
 document.querySelectorAll('[data-pick]').forEach(b => b.onclick = () => $(pickMap[b.dataset.pick]).click());
 async function readFile(f){ return { name:f.name, type:f.type || '', buf: await f.arrayBuffer() }; }
 async function onPick(kind, files){
@@ -673,6 +764,7 @@ async function onPick(kind, files){
       if (kind === 'font') fontOk = false;
     }
     await saveAssets(); freeUrls(); parseParts(); saveS(); await applyAssets(); renderFaces();
+    if (kind === 'se'){ await prepareSE(); if (seBuf) toast('タップ音を読み込みました'); return; }
     if (kind === 'parts' && ASSETS.base){
       const sizes = await Promise.all([...files].map(f => new Promise(r => { const i = new Image(); const u = URL.createObjectURL(f); i.onload = () => { r([f.name,i.naturalWidth,i.naturalHeight]); URL.revokeObjectURL(u); }; i.onerror = () => r([f.name,0,0]); i.src = u; })));
       const bi = $('#lBase'); const bw = bi.naturalWidth, bh = bi.naturalHeight;
@@ -682,17 +774,19 @@ async function onPick(kind, files){
     } else toast('読み込みました');
   }catch(e){ log('error','素材を読み込めませんでした：' + e.message); }
 }
-['bg','base','parts','font'].forEach(k => $(pickMap[k]).addEventListener('change', e => { const fs = [...e.target.files]; e.target.value = ''; onPick(k, fs); }));
+['bg','base','parts','font','se'].forEach(k => $(pickMap[k]).addEventListener('change', e => { const fs = [...e.target.files]; e.target.value = ''; onPick(k, fs); }));
 document.querySelectorAll('[data-del]').forEach(b => b.onclick = async () => {
   const k = b.dataset.del; if (!confirm('消しますか？')) return;
   if (k === 'parts') ASSETS.parts = []; else ASSETS[k] = null;
   if (k === 'font'){ toast('フォントは次に開いたときから元に戻ります'); }
-  await saveAssets(); freeUrls(); parseParts(); await applyAssets(); renderFaces();
+  await saveAssets(); freeUrls(); parseParts(); await applyAssets(); renderFaces(); if (k === 'se') prepareSE();
 });
+$('#seTest').onclick = () => { if (!seBuf) toast('タップ音が読み込まれていません', true, 3000); else { const o = S.seOn; S.seOn = true; playSE(); S.seOn = o; } };
 const kb = n => (n/1024 > 1024 ? (n/1048576).toFixed(1)+'MB' : Math.round(n/1024)+'KB');
 function refreshAssetUI(){
   const d = (a) => a ? `${esc(a.name)}（${kb(a.buf.byteLength)}）` : '未設定';
   $('#aBg').innerHTML = d(ASSETS.bg); $('#aBase').innerHTML = d(ASSETS.base); $('#aFont').innerHTML = d(ASSETS.font) + (ASSETS.font ? (fontOk ? ' ✓' : ' ✗') : '');
+  $('#aSe').innerHTML = d(ASSETS.se) + (ASSETS.se ? (seBuf ? ` ✓ ${seBuf.duration.toFixed(2)}秒` : ' ✗') : '');
   $('#aParts').textContent = ASSETS.parts.length ? `${ASSETS.parts.length}件` : '未設定';
   const rows = Object.keys(FACES).sort().map(f => { const x = FACES[f], st = o => o ? ['open','half','close'].filter(k => o[k]).join('/') : '—';
     return `<tr><td>${esc(f)}</td><td>${st(x.eye)}</td><td>${st(x.mouth)}</td><td>${x.brow?'○':'—'}</td><td>${x.extra?'○':'—'}</td></tr>`; }).join('');
@@ -714,7 +808,7 @@ $('#bkExport').onclick = async () => {
     const data = { app:'akari-novel', version:VERSION_TEXT, exportedAt:new Date().toISOString(), settings:set, history:HISTORY };
     if ($('#bkAssets').checked){
       const enc = async a => a ? { name:a.name, type:a.type, b64: await b64(a.buf) } : null;
-      data.assets = { bg: await enc(ASSETS.bg), base: await enc(ASSETS.base), font: await enc(ASSETS.font), parts: await Promise.all(ASSETS.parts.map(enc)) };
+      data.assets = { bg: await enc(ASSETS.bg), base: await enc(ASSETS.base), font: await enc(ASSETS.font), se: await enc(ASSETS.se), parts: await Promise.all(ASSETS.parts.map(enc)) };
     }
     const d = new Date(), st = `${d.getFullYear()}${String(d.getMonth()+1).padStart(2,'0')}${String(d.getDate()).padStart(2,'0')}-${String(d.getHours()).padStart(2,'0')}${String(d.getMinutes()).padStart(2,'0')}`;
     const name = `akari-backup-${st}.json`, blob = new Blob([JSON.stringify(data)], { type:'application/json' });
@@ -738,7 +832,7 @@ $('#fBak').addEventListener('change', async e => {
     HISTORY = Array.isArray(data.history) ? data.history : []; await saveHist();
     if (data.assets){
       const dec = a => a ? { name:a.name, type:a.type, buf:unb64(a.b64) } : null;
-      ASSETS = { bg:dec(data.assets.bg), base:dec(data.assets.base), font:dec(data.assets.font), parts:(data.assets.parts||[]).map(dec).filter(Boolean) };
+      ASSETS = { bg:dec(data.assets.bg), base:dec(data.assets.base), font:dec(data.assets.font), se:dec(data.assets.se), parts:(data.assets.parts||[]).map(dec).filter(Boolean) };
       await saveAssets();
     }
     log('info','バックアップから復元しました'); location.reload();
@@ -756,7 +850,8 @@ function diagText(){
 端末：${navigator.userAgent}
 画面：${innerWidth}×${innerHeight} dpr${devicePixelRatio} / ${st} / 状態:${state}
 設定：endpoint=${S.endpoint} model=${S.model} 温度=${S.temperature} 往復=${S.turns} 速さ=${S.speed} 立ち絵=${S.scale}%/${S.top}%/${S.xpos}% キー=${S.apiKey ? '設定あり(' + S.apiKey.length + '文字)' : '未設定'}
-素材：背景=${ASSETS.bg ? ASSETS.bg.name : 'なし'} ベース=${ASSETS.base ? ASSETS.base.name : 'なし'} フォント=${ASSETS.font ? ASSETS.font.name + (fontOk?'(OK)':'(失敗)') : 'なし'} パーツ=${ASSETS.parts.length}件
+素材：背景=${ASSETS.bg ? ASSETS.bg.name : 'なし'} ベース=${ASSETS.base ? ASSETS.base.name : 'なし'} フォント=${ASSETS.font ? ASSETS.font.name + (fontOk?'(OK)':'(失敗)') : 'なし'} パーツ=${ASSETS.parts.length}件 タップ音=${ASSETS.se ? ASSETS.se.name + (seBuf ? `(${seBuf.duration.toFixed(2)}秒)` : '(未準備)') : 'なし'}(${S.seOn ? 'ON' : 'OFF'} ${S.seVol}%) 音声=${actx ? actx.state : '未作成'}
+開き方：${location.protocol}//${location.host}${location.pathname}${envBad ? '（制限のある画面）' : ''} 画像方式=${useData ? 'data' : 'blob'}
 表情：${parts || 'なし'}${UNKNOWN.length ? '\n未分類ファイル：' + UNKNOWN.join(', ') : ''}
 会話：${HISTORY.length}件
 直近の送信：${lastReq ? JSON.stringify(lastReq) : 'なし'}
@@ -770,6 +865,17 @@ $('#copyDiag').onclick = copyDiag; $('#toastBtn').onclick = copyDiag; $('#toastX
 $('#clearLogs').onclick = () => { if (!confirm('動作の記録を消しますか？')) return; LOGS = []; lastError = null; lsSet('akari.logs','[]'); renderHelp(); };
 function renderHelp(){ $('#logView').textContent = diagText(); }
 $('#copyDev').onclick = async () => { const ok = await copyText(DEV_LOG); toast(ok ? '改善ログをコピーしました' : 'コピーできませんでした', !ok); };
+
+/* ====== 開いている場所の確認 ====== */
+let envBad = false;
+(function envCheck(){
+  let framed = false; try{ framed = window.top !== window.self; }catch(e){ framed = true; }
+  if (!/^https?:$/.test(location.protocol) || framed){
+    envBad = true;
+    log('warn', `制限のある画面で開かれています（${location.protocol}${framed ? '／埋め込み表示' : ''}）`);
+    setTimeout(() => toast('プレビュー画面では画像や保存が制限されます。Safariで https://koara1012.github.io/akari.html を開いてください', false, 12000), 600);
+  }
+})();
 
 /* ====== 起動 ====== */
 function startGreeting(){

@@ -154,4 +154,11 @@ DB.raw.prepare("INSERT INTO images (id,part,mime,data) VALUES ('img2',0,'image/p
 ok((await call('POST', '/img/replace', { id: 'img2', data: 'data:image/jpeg;base64,/9j/QUJDREVGR0g=' })).skip === 'not-smaller', 'larger JPEG ignored');
 e = ''; try { await call('POST', '/img/replace', { id: 'img2', data: 'data:image/jpeg;base64,QUJD' }); } catch (x) { e = x.message; }
 ok(/JPEG/.test(e), 'non-JPEG data rejected');
+// 手動のバックアップを保存した日時（第37版）
+ok((await call('GET', '/backup/status')).manual === null, 'no manual backup recorded yet');
+const mb = await call('POST', '/backup/manual', { photos: true, bytes: 12345678, messages: 100 });
+st = await call('GET', '/backup/status');
+ok(st.manual && st.manual.at === mb.manual.at && st.manual.photos === true && st.manual.bytes === 12345678, 'last manual backup time is remembered');
+const ex2 = JSON.parse(await (await raw('GET', '/export')).text());
+ok(!ex2.tables.kv.some((x) => x.k === 'bk:manual'), 'the record itself is not inside backups');
 console.log(fails ? fails + ' FAILED' : 'ALL PASSED');

@@ -722,6 +722,7 @@ body.ura #list.tlMode{background:#efe9f0}
       <label class="chk" style="margin-top:6px"><input type="checkbox" id="bkPhotos"> 写真も含める（ファイルが大きくなります）</label>
       <button class="btn sub" id="bkExport" style="margin-top:6px">全データを書き出す</button>
       <div class="hint bkInfo" id="bkInfo"></div>
+      <div class="hint" id="bkLast" style="margin-top:8px"></div>
     </div>
 
     <div class="sec">自動バックアップ（毎月1日・15日）</div>
@@ -2486,14 +2487,20 @@ async function bkSaveFile(f) {
 async function bkTwoStep(key, btn, info, idle, fetcher) {
   if (bkPend[key]) {
     const f = bkPend[key].file;
-    try { await bkSaveFile(f); delete bkPend[key]; btn.textContent = idle; info.textContent = '保存しました：' + f.name; }
+    try {
+      await bkSaveFile(f); const meta = bkPend[key].meta; delete bkPend[key]; btn.textContent = idle; info.textContent = '保存しました：' + f.name;
+      if (key === 'manual') { // 最後に手動で保存した日時を、サーバーに覚えておく
+        const r = await api('POST', '/backup/manual', { photos: meta && meta.photos, bytes: f.size, messages: meta && meta.messages }).catch(() => null);
+        if (r) { bkView = { ...(bkView || {}), manual: r.manual }; renderBkLast(); }
+      }
+    }
     catch (e) { if (e.name !== 'AbortError') toast('保存できませんでした：' + e.message); }
     return;
   }
   btn.disabled = true; btn.textContent = '準備中…'; info.textContent = ''; info.classList.remove('bkWarn');
   try {
-    const { file, msg } = await fetcher();
-    bkPend[key] = { file, msg }; info.textContent = msg; btn.textContent = '保存する（ファイルに保存）';
+    const { file, msg, meta } = await fetcher();
+    bkPend[key] = { file, msg, meta }; info.textContent = msg; btn.textContent = '保存する（ファイルに保存）';
   } catch (e) {
     logDiag('バックアップ: ' + e.message); info.textContent = '⚠ ' + e.message; info.classList.add('bkWarn'); btn.textContent = idle;
   } finally { btn.disabled = false; }
@@ -2510,8 +2517,16 @@ $('bkExport').onclick = () => bkTwoStep('manual', $('bkExport'), $('bkInfo'), '�
     const bad = [...ck.problems, ...ck.warnings];
     msg += bad.length ? '\n⚠ ' + bad.join('\n⚠ ') : '\n✓ データの中身にも問題はありません' + (ck.quick === 'ok' ? '（データベースの検査も正常）' : '');
   }
-  return { file, msg };
+  return { file, msg, meta: { photos: !!d.images, messages: (d.tables.messages || []).length } };
 });
+// 最後に手動で保存した日時
+function renderBkLast() {
+  const m = bkView && bkView.manual, el = $('bkLast');
+  if (!m) { el.textContent = '最後に手動で保存：まだありません'; return; }
+  const d = new Date(m.at), p2 = (n) => String(n).padStart(2, '0');
+  const days = Math.floor((Date.now() - m.at) / 864e5);
+  el.textContent = `最後に手動で保存：${d.getFullYear()}/${p2(d.getMonth() + 1)}/${p2(d.getDate())} ${p2(d.getHours())}:${p2(d.getMinutes())}（${days <= 0 ? '今日' : days + '日前'}・${m.photos ? '写真あり' : '写真なし'}${m.bytes ? '・' + fmtMB(m.bytes) : ''}）`;
+}
 
 async function bkRefresh() {
   try { bkView = await api('GET', '/backup/status'); renderBk(); if (bkView.job || bkView.restore) bkPump(); }
@@ -2520,6 +2535,7 @@ async function bkRefresh() {
 const RS_PHASE = { verify: '戻す元のバックアップを確かめています', snapshot: '今の状態を「戻す前の状態」に保存しています', wipe: '入れ替えています', insert: '入れ直しています', finish: '仕上げています' };
 function renderBk() {
   const v = bkView; if (!v) return;
+  renderBkLast();
   const el = $('bkAutoBody');
   if (!v.r2) { el.innerHTML = '<div class="hint bkWarn">⚠ 置き場所（Cloudflare R2）がまだつながっていません。つながると自動で動き始めます。</div>'; document.querySelectorAll('.rsBox').forEach((x) => { x.hidden = true; }); return; }
   document.querySelectorAll('.rsBox').forEach((x) => { x.hidden = false; });

@@ -1,6 +1,6 @@
 # トーク（キャラチャット）引き継ぎメモ
 
-最終更新：第36版（2026-10-28 キャラごとに見回りの時刻をずらす）
+最終更新：第37版（2026-10-28 手動バックアップの最終保存日時）
 
 iPhoneのホーム画面に置いて使う、キャラクターとのLINE風チャットアプリ（PWA）です。
 このメモは、次に作業する人（または Claude）が、ここだけ読めば全体をつかめるように書いています。
@@ -91,7 +91,7 @@ iPhone（PWA）  ──HTTPS──▶  Cloudflare Worker「chara-chat」 ──�
 - ニュース：`newsKw:` `news:` `newsUsed:`
 - AIのクレジット切れ：`aiAlert:gemini` `aiAlert:grok`（料金まわりのエラーで作られ、次に呼び出しが成功すると消える）
 - 天気・災害：`weather` `forecast` `air` `dis:state` `disjob:`
-- バックアップ：`bk:job` `bk:restore` `bk:lock` `bk:status` `bk:upload` `bk:userdel` `bk:lease`
+- バックアップ：`bk:job` `bk:restore` `bk:lock` `bk:status` `bk:upload` `bk:userdel` `bk:lease` `bk:manual`（最後に手動で保存した日時）
 
 ### 主なAPI（すべて `X-App-Token` が必要。`/icon/<id>/<署名>.png` だけは公開）
 - 同期：`GET /sync`
@@ -146,6 +146,7 @@ node --no-warnings tests/run-all.mjs t_group     # 名前で絞る
 - ノベル風アプリ（`akari.html`）との連携：LINEで会う約束→ノベル画面で会う→まとめを記憶に戻す、という構想を相談中（未着手）。詳しくは `AKARI_HANDOVER.md` §9
 
 ## 9. 更新履歴（新しい順）
+- **第37版**：手動バックアップの欄に「最後に手動で保存した日時」を表示（保存し終えたときにサーバーへ記録）
 - **第36版**：見回りをキャラごとに13分の中でずらす（投稿・スタンプ・もらいそびれた返事が重なりにくく）。TLの反応は毎分実行
 - **第35版**：裏のグループに「グループ設定（AIだけが読む）」と「メンバーごとの立場」を追加（グループ側を優先）
 - **第34版**：AIのクレジット切れ・利用上限を見つけたら、一覧とトーク画面に赤い帯で表示し、1日1回通知（直れば自動で消える）

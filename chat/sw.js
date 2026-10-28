@@ -2,6 +2,14 @@
 self.addEventListener('install', () => self.skipWaiting());
 self.addEventListener('activate', (e) => e.waitUntil(self.clients.claim()));
 
+// 画面（HTML）は毎回サーバーに新しいかを確かめて開く。GitHub Pages は10分ほどキャッシュさせるので、
+// 公開した直後にホーム画面のアプリが古い画面のままになるのを防ぐ（つながらないときは今までどおり）
+self.addEventListener('fetch', (e) => {
+  const r = e.request;
+  if (r.mode !== 'navigate' || r.method !== 'GET') return;
+  e.respondWith(fetch(r.url, { cache: 'no-cache', credentials: 'same-origin' }).catch(() => fetch(r)));
+});
+
 self.addEventListener('push', (e) => {
   let d = {};
   try { d = e.data ? e.data.json() : {}; } catch (_) { d = { title: '新着メッセージ', body: e.data ? e.data.text() : '' }; }

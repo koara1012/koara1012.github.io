@@ -134,6 +134,7 @@ node --no-warnings tests/run-all.mjs t_group     # 名前で絞る
 - 表のトークが急に動かなくなったら、まず設定の「診断情報をコピー」の「サーバーの記録」を見ます。
   - `Gemini 402 … prepayment credits are depleted` などは、AIのクレジット切れです。プログラムの不具合ではありません。
   - 第34版から、一覧とトーク画面の上に赤い帯が出て、1日1回通知も届きます。チャージすれば自動で元に戻ります。
+- GitHub Pages は HTML を10分ほどキャッシュさせます。公開直後にホーム画面のアプリが古いままになるので、`chat/sw.js` で画面の読み込み（navigate）だけ毎回サーバーに確かめる（`cache: 'no-cache'`）ようにしました（第40版の補足）。新しい sw.js が効くのは、入ったあと次にアプリを開いたときからです。
 - `hidden` 属性は、CSSで `display` を指定した要素には効きません。そのため `[hidden]{display:none!important}` を入れてあります。
 - テストに日付を直書きすると、日がたつと落ちます。時刻は「今」から相対で作るか、全部固定します。
 - 文字列の中の改行は、`\n` と書きます（本物の改行を入れると文法エラーになります）。
@@ -168,6 +169,7 @@ node --no-warnings tests/run-all.mjs t_group     # 名前で絞る
 - ノベル画面との統合は第40版で済み（`AKARI_HANDOVER.md` §9）。`akari.html`（単独のノベル画面）は残してある
 
 ## 9. 更新履歴（新しい順）
+- **第40版の補足**：`chat/sw.js` で画面（HTML）を毎回サーバーに確かめて開く（公開直後に古い画面が出るのを防ぐ）
 - **第40版**：LINE風とノベル画面の統合（段階4）。`chat/novel.html` を追加（試作 `lab/` と同じファイル）。LINE風にも［立ち絵］ボタン・会う約束の帯と設定。通知のタップ先 `MEET_URL` を `chat/novel.html` に（`sw.js` はアプリが開いていればその画面で開き直す）。ノベル画面の会話・設定（素材・AIのキー・合言葉は除く）を `POST /novel/save` で kv `novel:data` に預かる（自動バックアップに入る。急に減ったら `novel:prev` に前のもの）・`GET /novel/data`。ノベルの手動バックアップの記録 `POST /backup/novel-manual`（`bk:novelManual`、`/backup/status` の `novelManual`）。テスト `t_novel`
 - **第39版**：会う約束（試作・設定 `meetFeature`、既定オフ）。表の返事を作るとき、ユーザーが話した直後なら `meet_status/date/time/place` も答えてもらい `appt:` に記録（`callOmoteRich` の `opt.meet`）。表のプロンプトに約束の状態（約束あり・忙しくて保留・延期で決め直し・来なかった・会っている・会った内容）を足す（`apptContext`）。会う約束モードは全員（`meetOn`）とキャラごと（`meetOffChars`）。オンに戻すと延期中の約束を `replan` に。二段の通知（`runAppointments`）。会う場面（ノベル画面の表トーク）の返事は表のAIで、トークの最近の会話・くらしを渡す（`meetReply`）。終えたら要約を記憶に（`meetEnd`）。`chat/sw.js` は通知の `url` を開く。画面は `lab/index.html`（帯・設定）と `lab/novel.html`（表トーク）だけ。テスト `t_meet`
 - **第38版**：裏の返事に立ち絵の表情（ノベル画面用）。ノベル画面が `POST /faces` で表情の名前・説明を登録したキャラだけ、裏の返事（1人・グループ）でAIにセリフの先頭へ《表情名》を付けてもらい、保存時に外して `messages.face` に入れる（`/sync`・`/reply` で返す。次の会話ではAIに《》付きで渡す）。表情が無いキャラ・表は今までどおり。LINE風の画面には出ない。テスト `t_faces`

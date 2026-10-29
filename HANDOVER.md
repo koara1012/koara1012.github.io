@@ -1,6 +1,6 @@
 # トーク（キャラチャット）引き継ぎメモ
 
-最終更新：第40版（2026-10-28 LINE風とノベル画面の統合）
+最終更新：第41版（2026-10-29 会っている途中の自動終了）
 
 iPhoneのホーム画面に置いて使う、キャラクターとのLINE風チャットアプリ（PWA）です。
 このメモは、次に作業する人（または Claude）が、ここだけ読めば全体をつかめるように書いています。
@@ -170,6 +170,7 @@ node --no-warnings tests/run-all.mjs t_group     # 名前で絞る
 - ノベル画面との統合は第40版で済み（`AKARI_HANDOVER.md` §9）。`akari.html`（単独のノベル画面）は残してある
 
 ## 9. 更新履歴（新しい順）
+- **第41版**：会う約束を「使わない」にしていても、会っている途中（`meeting`）のものは6時間で自動で終える（帯がずっと「会っています」のままになっていた）。ノベルのトーク削除の2回押しを修正
 - **第40版の補足**：`chat/sw.js` で画面（HTML）を毎回サーバーに確かめて開く（公開直後に古い画面が出るのを防ぐ）
 - **第40版**：LINE風とノベル画面の統合（段階4）。`chat/novel.html` を追加（試作 `lab/` と同じファイル）。LINE風にも［立ち絵］ボタン・会う約束の帯と設定。通知のタップ先 `MEET_URL` を `chat/novel.html` に（`sw.js` はアプリが開いていればその画面で開き直す）。ノベル画面の会話・設定（素材・AIのキー・合言葉は除く）を `POST /novel/save` で kv `novel:data` に預かる（自動バックアップに入る。急に減ったら `novel:prev` に前のもの）・`GET /novel/data`。ノベルの手動バックアップの記録 `POST /backup/novel-manual`（`bk:novelManual`、`/backup/status` の `novelManual`）。テスト `t_novel`
 - **第39版**：会う約束（試作・設定 `meetFeature`、既定オフ）。表の返事を作るとき、ユーザーが話した直後なら `meet_status/date/time/place` も答えてもらい `appt:` に記録（`callOmoteRich` の `opt.meet`）。表のプロンプトに約束の状態（約束あり・忙しくて保留・延期で決め直し・来なかった・会っている・会った内容）を足す（`apptContext`）。会う約束モードは全員（`meetOn`）とキャラごと（`meetOffChars`）。オンに戻すと延期中の約束を `replan` に。二段の通知（`runAppointments`）。会う場面（ノベル画面の表トーク）の返事は表のAIで、トークの最近の会話・くらしを渡す（`meetReply`）。終えたら要約を記憶に（`meetEnd`）。`chat/sw.js` は通知の `url` を開く。画面は `lab/index.html`（帯・設定）と `lab/novel.html`（表トーク）だけ。テスト `t_meet`

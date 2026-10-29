@@ -780,7 +780,7 @@ body.ura #list.tlMode{background:#efe9f0}
 // 置き場所で切り替える：/lab/（試作）と /chat/（本番）で同じファイルを使う
 // 試作は本番と同じサイトなので、保存の名前に「lab.」を付けて本番の chat.* には書き込まない。通知も登録しない
 const IS_LAB = /\/lab\//.test(location.pathname);
-const APP_VERSION = '第40版（2026-10-28 22:30:00 更新・LINE風とノベル画面の統合）' + (IS_LAB ? '【試作】' : '');
+const APP_VERSION = '第41版（2026-10-29 17:30:00 更新・会っている途中の自動終了・トーク削除の修正）' + (IS_LAB ? '【試作】' : '');
 if (IS_LAB) { document.title = '【試作】トーク（統合）'; const mt = document.querySelector('meta[name=apple-mobile-web-app-title]'); if (mt) mt.content = 'トーク試作'; }
 const $ = (id) => document.getElementById(id);
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));

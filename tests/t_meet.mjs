@@ -141,6 +141,11 @@ setAppt(c.id, { place: '公園', at: 0, status: 'meeting', metAt: Date.now() - 7
 DB.raw.prepare('INSERT INTO kv (k,v) VALUES (?,?)').run('meetlog:' + c.id, JSON.stringify([{ who: 'me', text: 'やあ' }, { who: 'char', text: 'こんにちは' }]));
 await X.runAppointments(env);
 ok((await getAppt(c.id)).status === 'done', 'meeting auto-ended after 6h');
+await call('POST', '/settings', { settings: { meetFeature: false } });
+setAppt(c.id, { place: '', at: 0, status: 'meeting', metAt: Date.now() - 7 * 3600e3 });
+await X.runAppointments(env);
+ok((await getAppt(c.id)).status === 'done', 'meeting auto-ended even when feature off');
+await call('POST', '/settings', { settings: { meetFeature: true } });
 // キャラを消すと片付く
 await call('DELETE', '/char?id=' + c.id);
 ok(!DB.raw.prepare('SELECT k FROM kv WHERE k IN (?,?,?)').all('appt:' + c.id, 'facesO:' + c.id, 'meetlog:' + c.id).length, 'char delete cleans kv');

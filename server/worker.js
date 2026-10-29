@@ -14,7 +14,7 @@
 //    ・Cron トリガー  * * * * *  （毎分。実際に動くのは13分おき）
 // =====================================================================
 
-const VERSION = '第40版（2026-10-28 22:30:00 更新・LINE風とノベル画面の統合）';
+const VERSION = '第41版（2026-10-29 17:30:00 更新・会っている途中の自動終了・トーク削除の修正）';
 const DEFAULT_MODEL = 'gemini-flash-latest';
 const DEFAULT_GROK_MODEL = 'grok-4.7';                 // X（Twitter）の Grok と同じ最新世代
 const FALLBACK_GROK_MODEL = 'grok-4-fast-non-reasoning'; // 上が使えないときの予備
@@ -1961,11 +1961,18 @@ async function applyMeet(env, c, m, now) {
 // 毎分：そろそろ（20分前）・時間です（ちょうど）の二段の通知。モードがオフのまま時刻を過ぎたら延期、通知したのに2時間来なければ「来なかった」
 async function runAppointments(env) {
   const st = await getSettings(env);
-  if (!st.meetFeature) return 0;
   await ensureSchema(env);
   const { results } = await env.DB.prepare("SELECT k,v FROM kv WHERE k >= 'appt:' AND k < 'appt;'").all();
   if (!results.length) return 0;
   const now = Date.now(), chars = await loadChars(env);
+  if (!st.meetFeature) { // 使うのをやめていても、会っている途中のものは6時間で終える（ずっと「会っています」のままにならないように）
+    for (const row of results) {
+      let a; try { a = JSON.parse(row.v); } catch (_) { continue; }
+      const c = chars.find((x) => x.id === row.k.slice(5));
+      if (c && a.status === 'meeting' && now - (a.metAt || 0) > MEET_AUTO_END) await meetEnd(env, c, now);
+    }
+    return 0;
+  }
   let n = 0;
   for (const row of results) {
     let a; try { a = JSON.parse(row.v); } catch (_) { continue; }

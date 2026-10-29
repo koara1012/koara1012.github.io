@@ -267,13 +267,16 @@ body.rotmode #rotwrap{transform:var(--RT)}
 <script>
 'use strict';
 /* ====== 版 ====== */
-const VERSION = { no: 10, at: '2026-10-29 04:20:00' };
+const VERSION = { no: 11, at: '2026-10-29 17:30:00' };
 const VERSION_TEXT = `${/\/lab\//.test(location.pathname) ? '試作・' : ''}統合 第${VERSION.no}回（${VERSION.at} 更新・akari.html 第6回がもと）`;
 
 /* ====== 改善ログ（他のAIへの引き継ぎ用）======
    改善のたびに「## 第〜回」を先頭側へ追記し、概要も最新に保つ */
 const DEV_LOG = `# 朱里ノベル 統合の試作（lab/novel.html） 改善ログ
 ※ 本番 akari.html 第6回をもとにした試作。保存先は本番と分けている（localStorage lab.settings / lab.logs、IndexedDB akariLab）。
+## 統合 第11回（2026-10-29 17:30:00）
+- トークの［削除］を iPhone で続けて2回押すと「undefined is not an object (evaluating 'r.name')」になっていたのを修正（もう無いトークなら一覧を描き直すだけ）。書き出しも同じく。
+
 ## 統合 第10回（2026-10-29 04:20:00）
 - 縦向きロックのまま横で使う（寝ながら向け。iPhoneのWebアプリは画面の向きを固定できないため）：S.rotMode = 'cw'（カメラを左にして持つ）／'ccw'（右）。画面が縦長のとき、画面ぜんぶ（#rotwrap）を90°回して表示し、幅と高さを入れ替えて layout する（applyRot）。fixed の要素は回した #rotwrap の中で並ぶ。縦向きのお知らせ画面にボタン、設定に「画面の向き」。
 
@@ -1269,7 +1272,10 @@ function renderRooms(){
   $('#roomList').querySelectorAll('[data-redit]').forEach(b => b.onclick = () => roomForm(b.dataset.redit));
   $('#roomList').querySelectorAll('[data-rexp]').forEach(b => b.onclick = () => exportRoom(b.dataset.rexp));
   $('#roomList').querySelectorAll('[data-rdel]').forEach(b => b.onclick = async () => {
-    const r = ROOMS.find(x => x.id === b.dataset.rdel); if (!confirm(`トーク「${r.name}」と、その会話を全部消しますか？`)) return;
+    const r = ROOMS.find(x => x.id === b.dataset.rdel);
+    if (!r){ renderRooms(); return; }   // iPhoneで続けて2回押されたとき（1回目で消えている）
+    if (!confirm(`トーク「${r.name}」と、その会話を全部消しますか？`)) return;
+    if (!ROOMS.includes(r)) return;
     ROOMS = ROOMS.filter(x => x !== r); await saveRooms(); try{ await idb.del('hist:' + r.id); }catch(e){}
     if (ROOM === r){ ROOM = null; HIST = []; S.room = null; saveS(); menuDirty = true; }
     renderRooms();
@@ -1623,7 +1629,7 @@ $('#bkSyncNow').onclick = () => syncNovel(true);
 $('#bkFromSrv').onclick = () => restoreFromServer(false);
 $('#bkFromPrev').onclick = () => restoreFromServer(true);
 async function exportRoom(id){
-  const r = ROOMS.find(x => x.id === id); const hist = (await idb.get('hist:' + r.id)) || [];
+  const r = ROOMS.find(x => x.id === id); if (!r) return; const hist = (await idb.get('hist:' + r.id)) || [];
   const names = {}; r.members.forEach(m => names[m] = (charById(m) || {}).name);
   await saveFile(`akari-talk-${r.name}-${stamp()}.json`, { app:'akari-room', version:VERSION_TEXT, exportedAt:new Date().toISOString(), room:r, names, hist });
 }

@@ -1,0 +1,399 @@
+<!doctype html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="パーツ切り抜き">
+<link rel="apple-touch-icon" href="akari-icon.png">
+<title>パーツ切り抜き</title>
+<!--
+  パーツ切り抜き（parts.html）— 立ち絵の全身差分から、目・口のパーツを自動で切り抜く道具
+  ・基本の立ち絵と、表情ごとの6欄（目：開き・半目・閉じ／口：開き・半開き・閉じ）に入れた全身画像を比べ、
+    違うところ（目・口）を見つけて、そのまわりの肌ごと切り抜く。出力は基本の立ち絵と同じ大きさの透過PNG。
+  ・目と口の境目は、違うところの縦の並びのすき間から自動で決める（スライダーで直せる。動かすと boundManual、［自動］で戻る）。
+  ・範囲は「どれかの差分で違ったところ」を境目の上下で目・口に分け、肌の広さ（pad）ぶん広げてふちをぼかし、境目で切る。同じ範囲で全部の欄を切るので、同じ種類のパーツは形がそろう。
+  ・名前は「（キャラ名_）表情名_口開き.png」。共有メニューの「画像を保存」で写真へ。
+  ・画像は端末の中だけ（IndexedDB partsCutter）。サーバーにもリポジトリにも送らない。
+  ・トーク（chat/）・ノベル画面（novel.html）とは別アプリ。
+-->
+<style>
+:root{--bg:#121016;--card:#1d1922;--line:#3a3242;--sub:#a99fb3;--acc:#d86ad5;--ff:'Hiragino Sans','Hiragino Kaku Gothic ProN','Noto Sans JP',sans-serif}
+*{box-sizing:border-box;-webkit-tap-highlight-color:transparent}
+html,body{margin:0;background:var(--bg);color:#eee;font:15px/1.5 var(--ff);-webkit-text-size-adjust:100%}
+body{padding:calc(env(safe-area-inset-top) + 10px) calc(env(safe-area-inset-right) + 12px) calc(env(safe-area-inset-bottom) + 40px) calc(env(safe-area-inset-left) + 12px);max-width:760px;margin:0 auto}
+h1{font-size:19px;margin:4px 0 2px}
+h2{font-size:15px;margin:18px 0 8px;color:#f0c6ef}
+.note{font-size:12.5px;color:var(--sub)}
+.card{background:var(--card);border:1px solid var(--line);border-radius:12px;padding:12px;margin:10px 0}
+.row{display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin:6px 0}
+input[type=text]{flex:1;min-width:0;background:#0d0b10;color:#fff;border:1px solid var(--line);border-radius:8px;padding:8px 10px;font:inherit}
+button{font:inherit;border:1px solid var(--line);background:#2a2430;color:#fff;border-radius:9px;padding:7px 12px}
+button.p{background:var(--acc);border-color:#f3b4f1}
+button.d{background:#5a2a2e;border-color:#8a4a4e}
+button:disabled{opacity:.45}
+.grid{display:grid;grid-template-columns:auto repeat(3,1fr);gap:8px 8px;align-items:center}
+.grid b{color:#f0c6ef;font-weight:600;font-size:14px}
+.slot{position:relative;aspect-ratio:1;border:1.5px dashed #5a4f63;border-radius:10px;display:grid;place-items:center;color:#8a7f95;font-size:26px;background:#0d0b10;overflow:hidden}
+.slot.full{border-style:solid;border-color:#7a6a85}
+.slot.bad{border-color:#e05555}
+.slot img{width:100%;height:100%;object-fit:contain}
+.slot .x{position:absolute;right:3px;top:3px;width:24px;height:24px;border-radius:50%;background:#5a2a2e;border:1px solid #a05a5e;color:#fff;font-size:13px;line-height:22px;text-align:center;padding:0}
+.slot .msg{position:absolute;left:2px;right:2px;bottom:2px;font-size:10px;line-height:1.25;color:#ffb3b3;text-align:center;background:rgba(0,0,0,.6);border-radius:4px}
+.lbl{font-size:11.5px;color:var(--sub);text-align:center;margin-top:-4px}
+.basebox{display:flex;gap:12px;align-items:center}
+.basebox .slot{width:96px;aspect-ratio:auto;height:150px;flex:none;font-size:30px}
+#prev{width:100%;max-width:360px;display:block;margin:6px auto;border-radius:8px;background:#0d0b10}
+input[type=range]{flex:1}
+#toast{position:fixed;left:50%;transform:translateX(-50%);bottom:calc(env(safe-area-inset-bottom) + 18px);background:#2b2431;border:1px solid #6a5a75;border-radius:10px;padding:9px 14px;font-size:13.5px;max-width:92vw;display:none;z-index:9}
+#toast.on{display:block}
+#busy{position:fixed;inset:0;background:rgba(0,0,0,.55);display:none;place-items:center;z-index:8;font-size:15px}
+#busy.on{display:grid}
+.hidefile{display:none}
+</style>
+</head>
+<body>
+<h1>パーツ切り抜き</h1>
+<p class="note">全身の差分画像から、目と口のパーツを自動で切り抜きます。画像はこの端末の中だけで処理し、どこにも送りません。<span id="ver"></span></p>
+
+<div class="card">
+  <div class="row"><label style="flex:none">キャラ名（任意）</label><input type="text" id="charName" placeholder="例：伊達朱里（ファイル名の先頭に付きます）"></div>
+  <h2 style="margin-top:8px">基本の立ち絵</h2>
+  <div class="basebox">
+    <div class="slot" id="baseSlot">＋</div>
+    <p class="note" id="baseInfo">いつもの顔の全身画像を入れてください。ほかの画像は、これと比べて違うところ（目・口）を切り抜きます。差分画像は、すべてこれと同じ大きさにしてください。</p>
+  </div>
+</div>
+
+<h2>表情</h2>
+<p class="note">表情ごとに、目の欄には「その目になっている全身画像」、口の欄には「その口になっている全身画像」を入れます。同じ画像を目と口の両方に入れても大丈夫です（目の欄からは目だけ、口の欄からは口だけを取ります）。空の欄は作りません。</p>
+<div id="exprs"></div>
+<div class="row"><input type="text" id="newName" placeholder="表情の名前（例：通常、喜ぶ、困る）"><button class="p" id="addExpr">＋表情を追加</button></div>
+
+<h2>切り抜く範囲</h2>
+<div class="card">
+  <canvas id="prev"></canvas>
+  <p class="note" id="rangeInfo">差分画像を入れると、青＝目・ピンク＝口 の切り抜く範囲が出ます。</p>
+  <div class="row"><label style="width:7.5em">目と口の境目</label><input type="range" id="sBound" min="0" max="1000" step="1"><button id="autoBound">自動</button></div>
+  <div class="row"><label style="width:7.5em">肌の広さ</label><input type="range" id="sPad" min="4" max="80" step="1"><span class="note" id="vPad"></span></div>
+  <div class="row"><label style="width:7.5em">ふちのぼかし</label><input type="range" id="sFeather" min="0" max="30" step="1"><span class="note" id="vFeather"></span></div>
+</div>
+
+<h2>保存</h2>
+<div class="card">
+  <div class="row"><button class="p" id="saveAll">全部を写真に保存</button><button class="d" id="resetAll">はじめからにする</button></div>
+  <p class="note">共有メニューが開いたら「画像を保存」を選ぶと、写真に入ります（PNGのまま、透明も残ります）。写真アプリで編集（トリミングなど）すると透明が消えることがあるので、そのまま使ってください。名前は「キャラ名_表情名_口開き.png」のようになります。</p>
+</div>
+
+<input type="file" class="hidefile" id="fPick" accept="image/png,image/*">
+<div id="toast"></div>
+<div id="busy"><div id="busyMsg">切り抜いています…</div></div>
+
+<script>
+'use strict';
+const VERSION = '第1回（2026-10-30 13:30:00 作成）';
+const $ = (id) => document.getElementById(id);
+const esc = (s) => String(s == null ? '' : s).replace(/[&<>"]/g, (c) => ({ '&':'&amp;', '<':'&lt;', '>':'&gt;', '"':'&quot;' }[c]));
+const uid = () => Date.now().toString(36) + Math.random().toString(36).slice(2, 8);
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+$('ver').textContent = '（' + VERSION + '）';
+let toastT = 0;
+function toast(m, ms = 3200) { const t = $('toast'); t.textContent = m; t.classList.add('on'); clearTimeout(toastT); toastT = setTimeout(() => t.classList.remove('on'), ms); }
+function busy(m) { $('busyMsg').textContent = m || ''; $('busy').classList.toggle('on', !!m); }
+
+// 6つの欄：目（開き・半目・閉じ）／口（開き・半開き・閉じ）。並びはノベル画面と同じ
+const SLOTS = [
+  ['eo', 'eye', '開き', '目開き'], ['eh', 'eye', '半目', '目半目'], ['ec', 'eye', '閉じ', '目閉じ'],
+  ['mo', 'mouth', '開き', '口開き'], ['mh', 'mouth', '半開き', '口半開き'], ['mc', 'mouth', '閉じ', '口閉じ'],
+];
+
+/* ====== 保存（IndexedDB：画像は Blob のまま） ====== */
+const idb = {
+  db: null,
+  open() { return new Promise((res, rej) => { const r = indexedDB.open('partsCutter', 1); r.onupgradeneeded = () => r.result.createObjectStore('kv'); r.onsuccess = () => { this.db = r.result; res(); }; r.onerror = () => rej(r.error); }); },
+  tx(mode, fn) { return new Promise((res, rej) => { const tx = this.db.transaction('kv', mode), st = tx.objectStore('kv'); let out; const q = fn(st); if (q) q.onsuccess = () => { out = q.result; }; tx.oncomplete = () => res(out); tx.onerror = () => rej(tx.error); }); },
+  get(k) { return this.tx('readonly', (s) => s.get(k)); },
+  set(k, v) { return this.tx('readwrite', (s) => { s.put(v, k); }); },
+  del(k) { return this.tx('readwrite', (s) => { s.delete(k); }); },
+};
+let P = { charName: '', base: null, exprs: [], bound: null, boundManual: false, pad: 28, feather: 8 };
+async function saveP() { try { await idb.set('project', P); } catch (e) {} }
+const BLOBS = new Map();   // id -> Blob
+async function blobOf(id) { if (!id) return null; if (BLOBS.has(id)) return BLOBS.get(id); const b = await idb.get('img:' + id).catch(() => null); if (b) BLOBS.set(id, b); return b; }
+async function putBlob(file) { const id = uid(); const b = file.slice(0, file.size, file.type || 'image/png'); BLOBS.set(id, b); await idb.set('img:' + id, b); return id; }
+function usedIds() { const s = new Set([P.base]); for (const e of P.exprs) for (const [k] of SLOTS) if (e.slots[k]) s.add(e.slots[k]); s.delete(null); s.delete(undefined); return s; }
+async function cleanBlobs(oldId) { if (oldId && !usedIds().has(oldId)) { BLOBS.delete(oldId); await idb.del('img:' + oldId).catch(() => {}); DECODED.delete(oldId); } }
+
+/* ====== 画像を読む（ImageData。大きいので必要なときだけ） ====== */
+const DECODED = new Map();   // id -> { w, h, data }（少しだけ持っておく）
+async function decode(id) {
+  if (DECODED.has(id)) return DECODED.get(id);
+  const b = await blobOf(id); if (!b) throw new Error('画像が見つかりません');
+  let bmp; try { bmp = await createImageBitmap(b); } catch (e) { bmp = await new Promise((res, rej) => { const i = new Image(); i.onload = () => res(i); i.onerror = () => rej(new Error('画像を読めませんでした')); i.src = URL.createObjectURL(b); }); }
+  const w = bmp.width, h = bmp.height, c = document.createElement('canvas'); c.width = w; c.height = h;
+  const g = c.getContext('2d', { willReadFrequently: true }); g.drawImage(bmp, 0, 0);
+  const d = { w, h, data: g.getImageData(0, 0, w, h).data };
+  if (bmp.close) bmp.close();
+  DECODED.set(id, d);
+  if (DECODED.size > 3) for (const k of DECODED.keys()) { if (k !== P.base && DECODED.size > 3) DECODED.delete(k); }   // 基本の立ち絵以外は3枚まで
+  return d;
+}
+
+/* ====== 違うところを探す ====== */
+// A：結果（基本の立ち絵の大きさ）。diffU＝どれかの差分で違ったところ（0/1）、rows＝行ごとの違う数、slotBad＝大きさ違い
+let A = null, analyzing = false, again = false;
+const DIFF_T = 22;
+function diffInto(base, img, U, rows) {
+  const b = base.data, d = img.data, n = base.w * base.h; let cnt = 0;
+  for (let i = 0, p = 0; i < n; i++, p += 4) {
+    const ab = b[p + 3], ad = d[p + 3];
+    if (ab < 8 && ad < 8) continue;
+    const m = Math.max(Math.abs(b[p] - d[p]), Math.abs(b[p + 1] - d[p + 1]), Math.abs(b[p + 2] - d[p + 2]), Math.abs(ab - ad));
+    if (m > DIFF_T) { if (!U[i]) { U[i] = 1; } rows[(i / base.w) | 0]++; cnt++; }
+  }
+  return cnt;
+}
+async function analyze() {
+  if (analyzing) { again = true; return; }
+  analyzing = true;
+  try {
+    do {
+      again = false;
+      if (!P.base) { A = null; break; }
+      busy('違うところを探しています…');
+      const base = await decode(P.base);
+      const U = new Uint8Array(base.w * base.h), rows = new Uint32Array(base.h), slotBad = {}, seen = new Map();
+      for (const id of usedIds()) {
+        if (id === P.base) continue;
+        const img = await decode(id).catch(() => null);
+        if (!img) { slotBad[id] = '読めませんでした'; continue; }
+        if (img.w !== base.w || img.h !== base.h) { slotBad[id] = `大きさが違います（${img.w}×${img.h}）`; continue; }
+        seen.set(id, diffInto(base, img, U, rows));
+        await sleep(0);
+      }
+      A = { w: base.w, h: base.h, U, rows, slotBad, auto: autoBound(rows, base.h) };
+      if (!P.boundManual) P.bound = A.auto;   // 自分で動かしていなければ、毎回自動の境目を使う
+      buildRegions();
+    } while (again);
+  } catch (e) { toast('切り抜きの準備でエラー：' + e.message, 6000); }
+  finally { analyzing = false; busy(''); }
+  renderAll();
+}
+// 目と口の境目：違う行の並びの、いちばん大きなすき間の真ん中
+function autoBound(rows, h) {
+  const act = []; for (let y = 0; y < h; y++) if (rows[y] >= 2) act.push(y);
+  if (act.length < 2) return null;
+  let best = 0, at = null;
+  for (let i = 1; i < act.length; i++) { const g = act[i] - act[i - 1]; if (g > best) { best = g; at = (act[i] + act[i - 1]) >> 1; } }
+  return best >= 6 ? at : null;
+}
+// 範囲：境目の上＝目、下＝口。違うところを「肌の広さ」ぶん広げ、ふちをぼかす（0〜255）
+let REG = null;
+function buildRegions() {
+  if (!A) { REG = null; return; }
+  const { w, h, U } = A, by = P.bound == null ? h : P.bound;
+  const eye = new Uint8Array(w * h), mouth = new Uint8Array(w * h);
+  for (let i = 0; i < U.length; i++) if (U[i]) { if (((i / w) | 0) < by) eye[i] = 255; else mouth[i] = 255; }
+  REG = { eye: grow(eye, w, h, P.pad, P.feather), mouth: grow(mouth, w, h, P.pad, P.feather) };
+  // 広げた範囲が境目をこえないように切る（目のパーツに口が、口のパーツに目が入らないように）
+  if (P.bound != null) { if (REG.eye) REG.eye.fill(0, by * w); if (REG.mouth) REG.mouth.fill(0, 0, by * w); }
+  REG.eyeBox = bbox(REG.eye, w, h); REG.mouthBox = bbox(REG.mouth, w, h);
+}
+function maxFilter(src, w, h, r, horiz) {   // 1方向の最大値（広げる）
+  const out = new Uint8Array(src.length);
+  const len = horiz ? w : h, lines = horiz ? h : w, nx = new Int32Array(len);
+  const at = horiz ? (l, k) => l * w + k : (l, k) => k * w + l;
+  for (let l = 0; l < lines; l++) {   // いちばん近い「違うところ」までの距離が r 以内なら 255
+    let next = 1e9; for (let k = len - 1; k >= 0; k--) { if (src[at(l, k)]) next = k; nx[k] = next; }
+    let last = -1e9; for (let k = 0; k < len; k++) { if (src[at(l, k)]) last = k; out[at(l, k)] = (k - last <= r || nx[k] - k <= r) ? 255 : 0; }
+  }
+  return out;
+}
+function boxBlur(src, w, h, r) {   // ぼかし（横→縦）
+  if (r <= 0) return src;
+  const tmp = new Float32Array(src.length), out = new Uint8Array(src.length), k = 2 * r + 1;
+  for (let y = 0; y < h; y++) { const o = y * w; let s = 0; for (let x = -r; x <= r; x++) s += src[o + Math.min(w - 1, Math.max(0, x))]; for (let x = 0; x < w; x++) { tmp[o + x] = s / k; s += src[o + Math.min(w - 1, x + r + 1)] - src[o + Math.max(0, x - r)]; } }
+  for (let x = 0; x < w; x++) { let s = 0; for (let y = -r; y <= r; y++) s += tmp[Math.min(h - 1, Math.max(0, y)) * w + x]; for (let y = 0; y < h; y++) { out[y * w + x] = s / k; s += tmp[Math.min(h - 1, y + r + 1) * w + x] - tmp[Math.max(0, y - r) * w + x]; } }
+  return out;
+}
+function grow(m, w, h, pad, feather) {
+  let any = false; for (let i = 0; i < m.length; i++) if (m[i]) { any = true; break; }
+  if (!any) return null;
+  let g = maxFilter(maxFilter(m, w, h, pad, true), w, h, pad, false);
+  if (feather > 0) { g = maxFilter(maxFilter(g, w, h, feather, true), w, h, feather, false); g = boxBlur(boxBlur(g, w, h, feather), w, h, Math.max(1, feather >> 1)); }   // ぼかしても内側が薄くならないよう、先に少し広げる
+  return g;
+}
+function bbox(m, w, h) {
+  if (!m) return null; let x0 = w, y0 = h, x1 = -1, y1 = -1;
+  for (let y = 0; y < h; y++) { const o = y * w; for (let x = 0; x < w; x++) if (m[o + x] > 4) { if (x < x0) x0 = x; if (x > x1) x1 = x; if (y < y0) y0 = y; if (y > y1) y1 = y; } }
+  return x1 < 0 ? null : { x: x0, y: y0, w: x1 - x0 + 1, h: y1 - y0 + 1 };
+}
+
+/* ====== パーツを作る ====== */
+async function makePart(id, kind) {   // → canvas（基本の立ち絵と同じ大きさ）
+  if (!A || !REG || !REG[kind]) return null;
+  const img = await decode(id); if (img.w !== A.w || img.h !== A.h) return null;
+  const c = document.createElement('canvas'); c.width = A.w; c.height = A.h;
+  const g = c.getContext('2d'), out = g.createImageData(A.w, A.h), o = out.data, s = img.data, m = REG[kind];
+  for (let i = 0, p = 0; i < m.length; i++, p += 4) { const a = m[i]; if (!a) continue; o[p] = s[p]; o[p + 1] = s[p + 1]; o[p + 2] = s[p + 2]; o[p + 3] = (s[p + 3] * a / 255) | 0; }
+  g.putImageData(out, 0, 0);
+  return c;
+}
+const THUMBS = new Map();   // key -> dataURL
+async function thumbOf(id, kind) {
+  const box = REG && REG[kind + 'Box']; if (!box) return null;
+  const key = `${id}|${kind}|${P.bound}|${P.pad}|${P.feather}`;
+  if (THUMBS.has(key)) return THUMBS.get(key);
+  const c = await makePart(id, kind); if (!c) return null;
+  const S = 120, t = document.createElement('canvas'); t.width = S; t.height = S;
+  const sc = Math.min(S / box.w, S / box.h), dw = box.w * sc, dh = box.h * sc;
+  t.getContext('2d').drawImage(c, box.x, box.y, box.w, box.h, (S - dw) / 2, (S - dh) / 2, dw, dh);
+  const u = t.toDataURL('image/png'); THUMBS.set(key, u); return u;
+}
+const fileName = (e, s) => `${P.charName ? P.charName.trim() + '_' : ''}${(e.name || '表情').trim()}_${s[3]}.png`.replace(/[\\/:*?"<>|]/g, '_');
+function canvasBlob(c) { return new Promise((res) => c.toBlob(res, 'image/png')); }
+async function filesFor(list) {   // list: [{expr, slot}]
+  const files = [];
+  for (const { e, s } of list) {
+    busy(`切り抜いています…（${files.length + 1}/${list.length}）`);
+    const c = await makePart(e.slots[s[0]], s[1]); if (!c) continue;
+    files.push(new File([await canvasBlob(c)], fileName(e, s), { type: 'image/png' }));
+    await sleep(0);
+  }
+  return files;
+}
+async function saveFiles(list) {
+  if (!A) { toast('先に基本の立ち絵と差分を入れてください'); return; }
+  const ok = list.filter(({ e, s }) => e.slots[s[0]] && !A.slotBad[e.slots[s[0]]] && REG && REG[s[1]]);
+  if (!ok.length) { toast('保存できるパーツがありません'); return; }
+  try {
+    const files = await filesFor(ok); busy('');
+    if (navigator.canShare && navigator.canShare({ files })) {
+      try { await navigator.share({ files }); toast(`${files.length}枚を渡しました（「画像を保存」で写真へ）`); return; }
+      catch (e) { if (e.name === 'AbortError') return; }
+    }
+    for (const f of files) { const a = document.createElement('a'); a.href = URL.createObjectURL(f); a.download = f.name; document.body.appendChild(a); a.click(); a.remove(); await sleep(300); }
+    toast(`${files.length}枚を保存しました`);
+  } catch (e) { busy(''); toast('保存できませんでした：' + e.message, 6000); }
+}
+
+/* ====== 画面 ====== */
+let pickCb = null;
+function pick(cb) { pickCb = cb; $('fPick').value = ''; $('fPick').click(); }
+$('fPick').addEventListener('change', async (e) => { const f = e.target.files && e.target.files[0]; const cb = pickCb; pickCb = null; if (f && cb) await cb(f); });
+
+async function renderBase() {
+  const el = $('baseSlot');
+  if (!P.base) { el.className = 'slot'; el.innerHTML = '＋'; $('baseInfo').textContent = 'いつもの顔の全身画像を入れてください。ほかの画像は、これと比べて違うところ（目・口）を切り抜きます。差分画像は、すべてこれと同じ大きさにしてください。'; return; }
+  const b = await blobOf(P.base); el.className = 'slot full'; el.innerHTML = `<img alt=""><button class="x" data-x="1">×</button>`;
+  el.querySelector('img').src = URL.createObjectURL(b);
+  el.querySelector('[data-x]').onclick = async (ev) => { ev.stopPropagation(); if (!confirm('基本の立ち絵を外しますか？')) return; const o = P.base; P.base = null; P.bound = null; P.boundManual = false; await saveP(); await cleanBlobs(o); THUMBS.clear(); analyze(); };
+  $('baseInfo').textContent = A ? `大きさ：${A.w}×${A.h}（差分画像も同じ大きさにしてください）` : '';
+}
+$('baseSlot').onclick = () => pick(async (f) => { const o = P.base; P.base = await putBlob(f); P.bound = null; P.boundManual = false; await saveP(); await cleanBlobs(o); THUMBS.clear(); DECODED.clear(); analyze(); });
+
+function renderExprs() {
+  $('exprs').innerHTML = P.exprs.map((e, i) => `<div class="card" data-e="${e.id}">
+    <div class="row"><input type="text" data-name="${e.id}" value="${esc(e.name)}" placeholder="表情の名前"><button class="p" data-save="${e.id}">この表情を写真に保存</button></div>
+    <div class="grid">
+      <b>目</b>${SLOTS.slice(0, 3).map((s) => `<div class="slot" data-slot="${e.id}|${s[0]}">＋</div>`).join('')}
+      <span></span>${SLOTS.slice(0, 3).map((s) => `<div class="lbl">${s[2]}</div>`).join('')}
+      <b>口</b>${SLOTS.slice(3).map((s) => `<div class="slot" data-slot="${e.id}|${s[0]}">＋</div>`).join('')}
+      <span></span>${SLOTS.slice(3).map((s) => `<div class="lbl">${s[2]}</div>`).join('')}
+    </div>
+    <div class="row">${i > 0 ? `<button data-up="${e.id}">↑上へ</button>` : ''}<button class="d" data-del="${e.id}">この表情を消す</button></div>
+  </div>`).join('') || '<p class="note">まだ表情がありません。下の「＋表情を追加」から作ってください。</p>';
+  document.querySelectorAll('[data-name]').forEach((i) => i.addEventListener('input', () => { P.exprs.find((x) => x.id === i.dataset.name).name = i.value.trim(); saveP(); }));
+  document.querySelectorAll('[data-save]').forEach((b) => b.onclick = () => { const e = P.exprs.find((x) => x.id === b.dataset.save); saveFiles(SLOTS.map((s) => ({ e, s }))); });
+  document.querySelectorAll('[data-up]').forEach((b) => b.onclick = async () => { const i = P.exprs.findIndex((x) => x.id === b.dataset.up); if (i > 0) { [P.exprs[i - 1], P.exprs[i]] = [P.exprs[i], P.exprs[i - 1]]; await saveP(); renderExprs(); fillSlots(); } });
+  document.querySelectorAll('[data-del]').forEach((b) => b.onclick = async () => {
+    const e = P.exprs.find((x) => x.id === b.dataset.del); if (!confirm(`表情「${e.name || '（名前なし）'}」を消しますか？`)) return;
+    P.exprs = P.exprs.filter((x) => x !== e); await saveP(); for (const [k] of SLOTS) await cleanBlobs(e.slots[k]); renderExprs(); analyze();
+  });
+  document.querySelectorAll('[data-slot]').forEach((el) => el.onclick = (ev) => {
+    const [eid, k] = el.dataset.slot.split('|'), e = P.exprs.find((x) => x.id === eid);
+    if (ev.target.closest('[data-x]')) return;
+    if (!P.base) { toast('先に「基本の立ち絵」を入れてください'); return; }
+    pick(async (f) => { const o = e.slots[k]; e.slots[k] = await putBlob(f); await saveP(); await cleanBlobs(o); analyze(); });
+  });
+  fillSlots();
+}
+async function fillSlots() {
+  for (const el of document.querySelectorAll('[data-slot]')) {
+    const [eid, k] = el.dataset.slot.split('|'), e = P.exprs.find((x) => x.id === eid); if (!e) continue;
+    const id = e.slots[k], s = SLOTS.find((x) => x[0] === k);
+    if (!id) { el.className = 'slot'; el.innerHTML = '＋'; continue; }
+    const bad = A && A.slotBad[id];
+    el.className = 'slot full' + (bad ? ' bad' : '');
+    let src = null;
+    if (!bad && A) src = await thumbOf(id, s[1]).catch(() => null);
+    if (!src) { const b = await blobOf(id); src = b ? URL.createObjectURL(b) : ''; }
+    el.innerHTML = `<img alt="" src="${src}"><button class="x" data-x="1">×</button>${bad ? `<div class="msg">${esc(bad)}</div>` : (A && !REG[s[1]] ? `<div class="msg">${s[1] === 'eye' ? '目' : '口'}の違いが見つかりません</div>` : '')}`;
+    el.querySelector('[data-x]').onclick = async (ev) => { ev.stopPropagation(); const o = e.slots[k]; e.slots[k] = null; await saveP(); await cleanBlobs(o); analyze(); };
+  }
+}
+$('addExpr').onclick = async () => {
+  const n = $('newName').value.trim(); if (!n) { toast('表情の名前を入れてください'); return; }
+  P.exprs.push({ id: uid(), name: n, slots: {} }); $('newName').value = ''; await saveP(); renderExprs();
+};
+$('charName').addEventListener('input', (e) => { P.charName = e.target.value.trim(); saveP(); });
+
+// 範囲の見本：顔のまわりを大きく、青＝目・ピンク＝口、黄色い線＝境目
+async function renderPreview() {
+  const cv = $('prev'), g = cv.getContext('2d');
+  if (!A || !P.base) { cv.width = 360; cv.height = 120; g.fillStyle = '#0d0b10'; g.fillRect(0, 0, 360, 120); return; }
+  const base = await decode(P.base), boxes = [REG && REG.eyeBox, REG && REG.mouthBox].filter(Boolean);
+  let x0, y0, x1, y1;
+  if (boxes.length) { x0 = Math.min(...boxes.map((b) => b.x)); y0 = Math.min(...boxes.map((b) => b.y)); x1 = Math.max(...boxes.map((b) => b.x + b.w)); y1 = Math.max(...boxes.map((b) => b.y + b.h)); }
+  else { x0 = 0; y0 = 0; x1 = A.w; y1 = Math.min(A.h, A.w); }
+  const m = Math.round((x1 - x0) * 0.25); x0 = Math.max(0, x0 - m); y0 = Math.max(0, y0 - m); x1 = Math.min(A.w, x1 + m); y1 = Math.min(A.h, y1 + m);
+  const cw = x1 - x0, ch = y1 - y0, sc = Math.min(1, 720 / cw);
+  cv.width = Math.round(cw * sc); cv.height = Math.round(ch * sc);
+  const t = document.createElement('canvas'); t.width = cw; t.height = ch;
+  const tg = t.getContext('2d'), im = tg.createImageData(cw, ch), o = im.data, s = base.data;
+  for (let y = 0; y < ch; y++) for (let x = 0; x < cw; x++) {
+    const i = (y + y0) * A.w + (x + x0), p = i * 4, q = (y * cw + x) * 4;
+    let r = s[p], gg = s[p + 1], b = s[p + 2]; const a = s[p + 3] / 255;
+    r = r * a + 13 * (1 - a); gg = gg * a + 11 * (1 - a); b = b * a + 16 * (1 - a);
+    const e = REG && REG.eye ? REG.eye[i] / 255 * 0.45 : 0, mo = REG && REG.mouth ? REG.mouth[i] / 255 * 0.45 : 0;
+    r = r * (1 - e - mo) + 60 * e + 255 * mo; gg = gg * (1 - e - mo) + 150 * e + 90 * mo; b = b * (1 - e - mo) + 255 * e + 200 * mo;
+    o[q] = r; o[q + 1] = gg; o[q + 2] = b; o[q + 3] = 255;
+  }
+  tg.putImageData(im, 0, 0);
+  g.drawImage(t, 0, 0, cv.width, cv.height);
+  if (P.bound != null && P.bound >= y0 && P.bound <= y1) { g.strokeStyle = '#ffd84a'; g.lineWidth = 2; g.setLineDash([6, 4]); const yy = (P.bound - y0) * sc; g.beginPath(); g.moveTo(0, yy); g.lineTo(cv.width, yy); g.stroke(); }
+  const nb = Object.keys(A.slotBad).length;
+  $('rangeInfo').textContent = !boxes.length ? '違うところが見つかりません。差分画像を入れてください。'
+    : `青＝目・ピンク＝口 の範囲を切り抜きます。黄色い線が境目です${A.auto == null ? '（自動で見つからなかったので、スライダーで合わせてください）' : ''}。${nb ? `大きさの違う画像が${nb}枚あります（赤い欄）。` : ''}`;
+}
+function renderRange() {
+  $('sBound').max = A ? A.h : 1000; $('sBound').value = P.bound == null ? (A ? A.h : 0) : P.bound;
+  $('sPad').value = P.pad; $('vPad').textContent = P.pad + 'px'; $('sFeather').value = P.feather; $('vFeather').textContent = P.feather + 'px';
+}
+let rT = 0;
+function changed() { clearTimeout(rT); rT = setTimeout(async () => { THUMBS.clear(); buildRegions(); await saveP(); renderAll(); }, 250); }
+$('sBound').addEventListener('input', (e) => { P.bound = +e.target.value; P.boundManual = true; changed(); });
+$('sPad').addEventListener('input', (e) => { P.pad = +e.target.value; $('vPad').textContent = P.pad + 'px'; changed(); });
+$('sFeather').addEventListener('input', (e) => { P.feather = +e.target.value; $('vFeather').textContent = P.feather + 'px'; changed(); });
+$('autoBound').onclick = () => { if (!A || A.auto == null) { toast('自動では見つかりませんでした'); return; } P.bound = A.auto; P.boundManual = false; changed(); };
+$('saveAll').onclick = () => saveFiles(P.exprs.flatMap((e) => SLOTS.map((s) => ({ e, s }))));
+$('resetAll').onclick = async () => {
+  if (!confirm('入れた画像と表情を全部消して、はじめからにしますか？（写真に保存したものは消えません）')) return;
+  for (const id of usedIds()) await idb.del('img:' + id).catch(() => {});
+  P = { charName: '', base: null, exprs: [], bound: null, boundManual: false, pad: 28, feather: 8 }; BLOBS.clear(); DECODED.clear(); THUMBS.clear(); A = null; REG = null;
+  await saveP(); $('charName').value = ''; renderAll(); renderExprs();
+};
+async function renderAll() { await renderBase(); renderRange(); await renderPreview(); await fillSlots(); }
+
+(async function start() {
+  try { await idb.open(); const p = await idb.get('project'); if (p) P = Object.assign(P, p); } catch (e) { toast('この端末に保存できません（プライベートブラウズなど）。閉じると消えます', 6000); idb.db = null; }
+  if (!idb.db) { idb.get = async () => null; idb.set = async () => {}; idb.del = async () => {}; }
+  $('charName').value = P.charName || '';
+  renderExprs();
+  await analyze();
+})();
+</script>
+</body>
+</html>

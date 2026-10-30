@@ -267,13 +267,16 @@ body.rotmode #rotwrap{transform:var(--RT)}
 <script>
 'use strict';
 /* ====== 版 ====== */
-const VERSION = { no: 13, at: '2026-10-31 03:50:00' };
+const VERSION = { no: 14, at: '2026-10-31 04:40:00' };
 const VERSION_TEXT = `${/\/lab\//.test(location.pathname) ? '試作・' : ''}統合 第${VERSION.no}回（${VERSION.at} 更新・akari.html 第6回がもと）`;
 
 /* ====== 改善ログ（他のAIへの引き継ぎ用）======
    改善のたびに「## 第〜回」を先頭側へ追記し、概要も最新に保つ */
 const DEV_LOG = `# 朱里ノベル 統合の試作（lab/novel.html） 改善ログ
 ※ 本番 akari.html 第6回をもとにした試作。保存先は本番と分けている（localStorage lab.settings / lab.logs、IndexedDB akariLab）。
+## 統合 第14回（2026-10-31 04:40:00）
+- LINE参照トークだけの「追加プロンプト」（room.extra）。トークの編集で入れる。1人ならそのキャラへの追加設定、複数人なら全員共通の設定（各キャラ設定より優先・口調など食い違わないところは各キャラのまま。LINE風の裏のグループ設定と同じ考え方）。
+
 ## 統合 第13回（2026-10-31 03:50:00）
 - 4つ目のトークの種類「LINE参照」（kind 'ref'）：ふつうと同じく独立したお話（会話は端末の中・AIは端末のキーで Grok/Gemini）。話すたびに LINE風の表の記憶（GET /life の memories・today）と最近のやり取り（GET /sync の表のメッセージ 直近40件）を読み、プロンプトの「これまでのこと（参考）」に入れる（loadRefContext・3分キャッシュ）。ここでの会話は LINE風に一切送らない（ユーザーの希望）。ノベルのキャラ設定が空なら LINE風のキャラ設定を使う。表情の「使うトーク」は「ふつう」と同じ扱い。
 
@@ -856,7 +859,11 @@ function nowText(){
 }
 const faceListText = c => usableFaces(c, roomKind(ROOM)).map(n => { const f = faceObj(c, n); return `  - ${n}${f && f.desc ? '：' + f.desc : ''}`; }).join('\n');
 function systemPrompt(ms){
-  return systemPromptBase(ms) + (ROOM && ROOM.kind === 'ref' && REF_CTX ? '\n\n' + REF_CTX : '');
+  const ex = ROOM && ROOM.kind === 'ref' && (ROOM.extra || '').trim();
+  const extra = ex ? (ms.length > 1
+    ? `\n\n# このトークの設定（全員共通。各キャラクターの設定と食い違うところは、このトークの中ではこちらを優先する。口調・一人称など食い違わないところは各キャラクターの設定のまま）\n${ex}`
+    : `\n\n# このトークでの追加設定（キャラクター設定と食い違うところは、このトークの中ではこちらを優先する）\n${ex}`) : '';
+  return systemPromptBase(ms) + extra + (ROOM && ROOM.kind === 'ref' && REF_CTX ? '\n\n' + REF_CTX : '');
 }
 const promptOf = c => c.prompt || (ROOM && ROOM.kind === 'ref' && c.lineId && REF_PROMPT[c.lineId]) || '';   // LINE参照：ノベルのキャラ設定が空なら LINE風のキャラ設定を使う
 function systemPromptBase(ms){
@@ -1338,6 +1345,8 @@ function roomForm(id){
     <div class="row"><label>トーク名</label><input type="text" id="rfName" value="${esc(r ? r.name : '')}" placeholder="空ならメンバー名"></div>
     <div class="row"><label>トークの種類</label><select id="rfKind"><option value="">ふつう（このアプリだけ）</option><option value="ura" ${r && r.kind === 'ura' ? 'selected' : ''}>裏（LINE風アプリの裏と会話を共有）</option><option value="ref" ${r && r.kind === 'ref' ? 'selected' : ''}>LINE参照（LINE風の記憶を引き継ぐ・会話は同期しない）</option></select></div>
     <p class="note" id="rfRefNote">LINE参照：ふつうのトークと同じく、このアプリだけの独立したお話です。話すたびに LINE風アプリの表の記憶・最近のやり取りを読んで参考にしますが、ここでの会話は LINE風には送りません。メンバーは「キャラ」で「LINE風のキャラ」とつないでおいてください。</p>
+    <div id="rfExtraRow"><div class="row"><label>このトークの追加プロンプト</label><span class="note">LINE参照トークだけで使います。複数人のときは全員共通の設定になります（各キャラ設定より優先）</span></div>
+    <textarea id="rfExtra" placeholder="例：今日は二人で夏祭りに来ている。浴衣を着ている。">${esc(r && r.extra || '')}</textarea></div>
     <div class="row" id="rfUraRow"><label>LINE風の裏の相手</label><select id="rfTarget">${LINE.ok ? [...LINE.chars.filter(c => true).map(c => [c.id + '#ura', lineName(c)]), ...LINE.groups.map(g => [g.id + '#ura', 'グループ：' + g.name])].map(([v,l]) => `<option value="${esc(v)}" ${r && r.target === v ? 'selected' : ''}>${esc(l)}</option>`).join('') : '<option value="">（設定で「つないでみる」を押してください）</option>'}</select></div>
     <div class="row"><label>このトークのAI</label><select id="rfAi">${[['','共通の設定に従う'],['grok','Grok'],['gemini','Gemini']].map(([v,l]) => `<option value="${v}" ${(r && r.ai || '') === v ? 'selected' : ''}>${l}</option>`).join('')}</select></div>
     <div class="row"><label>前の列（左→右）</label>${[0,1,2].map(i => `<select class="rfm">${opt(m[i], i > 0)}</select>`).join('')}</div>
@@ -1345,7 +1354,7 @@ function roomForm(id){
     <p class="note">1人なら中央、2人なら左右、3人なら左・中央・右。4人目からは後ろの列に少し小さく並び、後ろの人が話すと、前の列でいちばん長く黙っている人と入れ替わります（最大${MAX_MEMBERS}人）。同じメンバーで複数のトークを作れます。</p>
     <div class="row"><button class="b p" id="rfOk">${r ? '保存' : '作る'}</button><button class="b" id="rfNo">やめる</button></div></div>`;
   $('#rfNo').onclick = () => { $('#roomEdit').innerHTML = ''; };
-  const kindUi = () => { const u = $('#rfKind').value === 'ura'; $('#rfUraRow').style.display = u ? '' : 'none'; $('#rfRefNote').style.display = $('#rfKind').value === 'ref' ? '' : 'none'; document.querySelectorAll('#roomEdit .rfm').forEach(x => x.closest('.row').style.display = u ? 'none' : ''); };
+  const kindUi = () => { const u = $('#rfKind').value === 'ura'; $('#rfUraRow').style.display = u ? '' : 'none'; $('#rfRefNote').style.display = $('#rfExtraRow').style.display = $('#rfKind').value === 'ref' ? '' : 'none'; document.querySelectorAll('#roomEdit .rfm').forEach(x => x.closest('.row').style.display = u ? 'none' : ''); };
   $('#rfKind').onchange = kindUi; kindUi();
   if (!LINE.ok && S.srvUrl) loadLine(false).then(() => { if ($('#rfKind')) roomForm(id); }).catch(() => {});
   $('#rfOk').onclick = async () => {
@@ -1365,8 +1374,9 @@ function roomForm(id){
     const name = $('#rfName').value.trim() || mem.map(x => charById(x).name.replace(/[\s　]/g,'')).join('・');
     const ai = $('#rfAi').value, ref = $('#rfKind').value === 'ref';
     if (ref){ const miss = mem.map(charById).filter(c => !c.lineId).map(c => c.name); if (miss.length) toast(`${miss.join('、')} は「LINE風のキャラ」とつながっていないので、LINE風の記憶は使えません（「キャラ」でつなげます）`, true, 7000); }
-    if (r){ r.name = name; r.members = mem; r.ai = ai; if (ref) r.kind = 'ref'; else delete r.kind; delete r.target; if (ROOM === r) menuDirty = true; refRoom = null; }
-    else { const nr = { id:uid(), name, members:mem, ai, updated:Date.now(), last:null }; if (ref) nr.kind = 'ref'; ROOMS.push(nr); }
+    const extra = ref ? $('#rfExtra').value.trim().slice(0, 20000) : '';
+    if (r){ r.name = name; r.members = mem; r.ai = ai; if (ref){ r.kind = 'ref'; r.extra = extra; } else { delete r.kind; delete r.extra; } delete r.target; if (ROOM === r) menuDirty = true; refRoom = null; }
+    else { const nr = { id:uid(), name, members:mem, ai, updated:Date.now(), last:null }; if (ref){ nr.kind = 'ref'; nr.extra = extra; } ROOMS.push(nr); }
     await saveRooms(); $('#roomEdit').innerHTML = ''; renderRooms(); toast(r ? 'トークを保存しました' : 'トークを作りました。「開く」で話せます');
   };
 }

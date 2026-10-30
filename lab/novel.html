@@ -267,13 +267,16 @@ body.rotmode #rotwrap{transform:var(--RT)}
 <script>
 'use strict';
 /* ====== 版 ====== */
-const VERSION = { no: 12, at: '2026-10-31 00:05:00' };
+const VERSION = { no: 13, at: '2026-10-31 03:50:00' };
 const VERSION_TEXT = `${/\/lab\//.test(location.pathname) ? '試作・' : ''}統合 第${VERSION.no}回（${VERSION.at} 更新・akari.html 第6回がもと）`;
 
 /* ====== 改善ログ（他のAIへの引き継ぎ用）======
    改善のたびに「## 第〜回」を先頭側へ追記し、概要も最新に保つ */
 const DEV_LOG = `# 朱里ノベル 統合の試作（lab/novel.html） 改善ログ
 ※ 本番 akari.html 第6回をもとにした試作。保存先は本番と分けている（localStorage lab.settings / lab.logs、IndexedDB akariLab）。
+## 統合 第13回（2026-10-31 03:50:00）
+- 4つ目のトークの種類「LINE参照」（kind 'ref'）：ふつうと同じく独立したお話（会話は端末の中・AIは端末のキーで Grok/Gemini）。話すたびに LINE風の表の記憶（GET /life の memories・today）と最近のやり取り（GET /sync の表のメッセージ 直近40件）を読み、プロンプトの「これまでのこと（参考）」に入れる（loadRefContext・3分キャッシュ）。ここでの会話は LINE風に一切送らない（ユーザーの希望）。ノベルのキャラ設定が空なら LINE風のキャラ設定を使う。表情の「使うトーク」は「ふつう」と同じ扱い。
+
 ## 統合 第12回（2026-10-31 00:05:00）
 - 表情の並べ替え：［↑上へ］［↓下へ］［⤒いちばん上］［⤓いちばん下］（前は［↑上へ］だけ）。動かしたあと、その表情が見える位置までスクロール。
 
@@ -735,7 +738,7 @@ function defaultFace(c){ const f = faceObj(c,'通常') || c.faces[0]; return f ?
 function faceNames(c){ const n = c.faces.map(f => f.name); return n.length ? n : ['通常']; }
 /* 表情の表示・非表示（トークの種類ごと）：f.off = { normal, ura, omote }（true＝そのトークでは使わない）。既定の表情（「通常」）は外せない */
 const KINDS = [['normal','ふつう'],['ura','裏'],['omote','表']];
-const roomKind = r => (r && r.kind) || 'normal';
+const roomKind = r => (r && (r.kind === 'ura' || r.kind === 'omote')) ? r.kind : 'normal';   // LINE参照（ref）の表情は「ふつう」と同じ
 function usableFaces(c, kind){
   const def = defaultFace(c);
   const n = c.faces.filter(f => f.name === def || !(f.off && f.off[kind])).map(f => f.name);
@@ -853,10 +856,14 @@ function nowText(){
 }
 const faceListText = c => usableFaces(c, roomKind(ROOM)).map(n => { const f = faceObj(c, n); return `  - ${n}${f && f.desc ? '：' + f.desc : ''}`; }).join('\n');
 function systemPrompt(ms){
+  return systemPromptBase(ms) + (ROOM && ROOM.kind === 'ref' && REF_CTX ? '\n\n' + REF_CTX : '');
+}
+const promptOf = c => c.prompt || (ROOM && ROOM.kind === 'ref' && c.lineId && REF_PROMPT[c.lineId]) || '';   // LINE参照：ノベルのキャラ設定が空なら LINE風のキャラ設定を使う
+function systemPromptBase(ms){
   const rule = `JSONだけを返す。前後に説明文やコードブロック記号を付けない。`;
   if (ms.length === 1){
     const c = ms[0];
-    return `${c.prompt || `あなたは「${c.name}」として、相手と会話する。`}
+    return `${promptOf(c) || `あなたは「${c.name}」として、相手と会話する。`}
 
 # 今の状況
 - 現在日時：${nowText()}（日本時間）
@@ -874,7 +881,7 @@ ${faceListText(c)}`;
   return `これは ${names.join('・')} の${ms.length}人と、相手（ユーザー）がその場にいる会話です。あなたは${ms.length}人全員を、それぞれの設定どおりに演じ分ける。
 
 ${ms.map(c => `# ${c.name} の設定
-${c.prompt || `（${c.name}として自然に話す）`}
+${promptOf(c) || `（${c.name}として自然に話す）`}
 - ${c.name}から相手への呼び方：「${c.callName}」
 - ${c.name}の使える表情：
 ${faceListText(c)}`).join('\n\n')}
@@ -1000,6 +1007,7 @@ async function send(text){
   if (text){ HIST.push({ role:'user', text, t:Date.now() }); await saveHist(); }
   startThinking();
   try{
+    if (room.kind === 'ref') await loadRefContext(room);   // LINE風のこれまでを読むだけ（ここでの会話は LINE風に送らない）
     const c = await callAI();
     if (room !== ROOM) return;
     const lines = parseReply(c);
@@ -1172,6 +1180,41 @@ $('#endMeet').onclick = async () => {
   catch(e){ toast('終えられませんでした：' + e.message, true, 6000); log('error', e.message); }
 };
 
+/* ====== LINE参照トーク（ref）：ふつうと同じく独立したお話。LINE風の表のこれまで（記憶・最近のやり取り）を読んで引き継ぐが、
+   ここでの会話は LINE風には一切送らない（読むのは GET /sync と GET /life だけ） ====== */
+let REF_CTX = '', REF_PROMPT = {}, refAt = 0, refRoom = null;
+async function loadRefContext(room){
+  if (refRoom === room.id && Date.now() - refAt < 3 * 60e3) return;   // 3分以内なら前に読んだものを使う
+  REF_CTX = ''; REF_PROMPT = {};
+  const ms = room.members.map(charById).filter(c => c && c.lineId);
+  if (!ms.length){ log('warn', 'LINE参照：LINE風のキャラとつながったメンバーがいないので、これまでの記憶は使えません'); return; }
+  if (!S.srvUrl){ log('warn', 'LINE参照：LINE風アプリのサーバーが未設定なので、これまでの記憶は使えません'); return; }
+  try{
+    const j = await srv('GET', '/sync?since=0');
+    const parts = [];
+    for (const c of ms){
+      const lc = (j.chars || []).find(x => x.id === c.lineId); if (!lc) continue;
+      if (lc.prompt) REF_PROMPT[c.lineId] = lc.prompt;
+      let life = null; try{ life = await srv('GET', '/life?charId=' + encodeURIComponent(c.lineId)); }catch(e){}
+      const mems = (life && life.memories) || [];
+      const facts = mems.filter(m => m.kind === 'fact').slice(0, 25).map(m => '- ' + m.text);
+      const jokes = mems.filter(m => m.kind === 'joke').slice(0, 8).map(m => '- ' + m.text);
+      const open = mems.filter(m => m.status === 'open' && !['fact','joke','user_state'].includes(m.kind)).slice(0, 10).map(m => `- [${m.label || m.kind}] ${m.text}${m.due ? '（' + m.due + '）' : ''}`);
+      const t = life && life.today;
+      const talk = (j.messages || []).filter(m => m.charId === c.lineId && !m.retracted && (m.text || m.image)).sort((a, b) => a.id - b.id).slice(-40)
+        .map(m => { const d = new Date(m.at), p = n => String(n).padStart(2, '0'); return `[${d.getMonth()+1}/${d.getDate()} ${p(d.getHours())}:${p(d.getMinutes())}] ${m.sender === 'me' ? '相手' : c.name}: ${m.text || '（写真）'}`; });
+      parts.push(`## ${c.name}
+${facts.length ? '### 覚えていること\n' + facts.join('\n') + '\n' : ''}${jokes.length ? '### 二人だけの内輪ネタ\n' + jokes.join('\n') + '\n' : ''}${open.length ? '### まだ結果を聞いていない予定・約束など\n' + open.join('\n') + '\n' : ''}${t ? `### 最近の様子\n- 気分：${t.mood || ''}${t.moodReason ? '（' + t.moodReason + '）' : ''}\n${t.today ? '- 今日していること：' + t.today + '\n' : ''}${t.condition && t.condition.text ? '- 体調：' + t.condition.text + '\n' : ''}` : ''}${talk.length ? '### 最近のメッセージのやり取り（古い順）\n' + talk.join('\n') : ''}`);
+    }
+    REF_CTX = parts.length ? `# これまでのこと（参考）
+相手とは、ふだんスマホのメッセージアプリでもやり取りしている。下はそのアプリでの記憶と最近のやり取り。覚えていることとして自然に会話に生かしてよい（毎回持ち出さなくてよい）。
+この会話は、メッセージアプリとは別の時間・場所の出来事として続ける。
+
+${parts.join('\n\n')}` : '';
+    refAt = Date.now(); refRoom = room.id;
+  }catch(e){ log('warn', 'LINE参照：LINE風のこれまでを読めませんでした（記憶なしで返事します）：' + e.message); }
+}
+
 /* ====== LINE風のトーク画面から来たとき：その裏トークを探す（無ければ作る） ====== */
 async function uraRoomFor(target, lineP){
   const hit = ROOMS.find(r => r.kind === 'ura' && r.target === target);
@@ -1255,6 +1298,7 @@ $('#toLine').onclick = () => {   // 試作：LINE風アプリ（lab/index.html�
   let q = '';
   if (ROOM && ROOM.kind === 'ura' && ROOM.target) q = '?chat=' + encodeURIComponent(ROOM.target.replace(/#ura$/,'')) + '&w=ura';
   else if (ROOM && ROOM.kind === 'omote' && ROOM.target) q = '?chat=' + encodeURIComponent(ROOM.target);
+  else if (ROOM && ROOM.kind === 'ref'){ const c = ROOM.members.map(charById).find(x => x && x.lineId); if (c) q = '?chat=' + encodeURIComponent(c.lineId); }
   else if (QS.get('back')) q = '?chat=' + encodeURIComponent(QS.get('back'));
   location.href = 'index.html' + q;
 };
@@ -1267,7 +1311,7 @@ function renderRooms(){
   $('#roomList').innerHTML = list.length ? list.map(r => {
     const mem = r.members.map(id => (charById(id) || {}).name || '？').join('・');
     const last = r.last ? `${esc(((charById(r.last.who) || {}).name || '').replace(/[\s　]/g,''))}：${esc(r.last.text)}` : '（まだ会話がありません）';
-    return `<div class="it ${ROOM && ROOM.id === r.id ? 'cur' : ''}"><div class="main"><div class="t">${esc(r.name)} <span class="note">${r.kind === 'ura' ? '裏・LINE風と共有 ' : r.kind === 'omote' ? '表・会う場面 ' : ''}${r.members.length > 1 ? 'グループ ' : ''}${esc(mem)}・${r.kind === 'ura' || r.kind === 'omote' ? 'LINE風のAI' : provName(provOf(r))}</span></div><div class="sub">${last}</div></div>
+    return `<div class="it ${ROOM && ROOM.id === r.id ? 'cur' : ''}"><div class="main"><div class="t">${esc(r.name)} <span class="note">${r.kind === 'ura' ? '裏・LINE風と共有 ' : r.kind === 'omote' ? '表・会う場面 ' : r.kind === 'ref' ? 'LINE参照 ' : ''}${r.members.length > 1 ? 'グループ ' : ''}${esc(mem)}・${r.kind === 'ura' || r.kind === 'omote' ? 'LINE風のAI' : provName(provOf(r))}</span></div><div class="sub">${last}</div></div>
       <span class="note">${fmtTime(r.updated)}</span>
       <button class="b p s" data-ropen="${r.id}">開く</button>${r.kind === 'omote' ? '' : `<button class="b s" data-redit="${r.id}">編集</button><button class="b s" data-rexp="${r.id}">書き出す</button>`}<button class="b d s" data-rdel="${r.id}">削除</button></div>`;
   }).join('') : '<p class="note">トークがありません。「＋トークを作る」から作ってください。</p>';
@@ -1292,7 +1336,8 @@ function roomForm(id){
   const m = r ? r.members : [];
   $('#roomEdit').innerHTML = `<div class="card"><b>${r ? 'トークを編集' : '新しいトーク'}</b>
     <div class="row"><label>トーク名</label><input type="text" id="rfName" value="${esc(r ? r.name : '')}" placeholder="空ならメンバー名"></div>
-    <div class="row"><label>トークの種類</label><select id="rfKind"><option value="">ふつう（このアプリだけ）</option><option value="ura" ${r && r.kind === 'ura' ? 'selected' : ''}>裏（LINE風アプリの裏と会話を共有）</option></select></div>
+    <div class="row"><label>トークの種類</label><select id="rfKind"><option value="">ふつう（このアプリだけ）</option><option value="ura" ${r && r.kind === 'ura' ? 'selected' : ''}>裏（LINE風アプリの裏と会話を共有）</option><option value="ref" ${r && r.kind === 'ref' ? 'selected' : ''}>LINE参照（LINE風の記憶を引き継ぐ・会話は同期しない）</option></select></div>
+    <p class="note" id="rfRefNote">LINE参照：ふつうのトークと同じく、このアプリだけの独立したお話です。話すたびに LINE風アプリの表の記憶・最近のやり取りを読んで参考にしますが、ここでの会話は LINE風には送りません。メンバーは「キャラ」で「LINE風のキャラ」とつないでおいてください。</p>
     <div class="row" id="rfUraRow"><label>LINE風の裏の相手</label><select id="rfTarget">${LINE.ok ? [...LINE.chars.filter(c => true).map(c => [c.id + '#ura', lineName(c)]), ...LINE.groups.map(g => [g.id + '#ura', 'グループ：' + g.name])].map(([v,l]) => `<option value="${esc(v)}" ${r && r.target === v ? 'selected' : ''}>${esc(l)}</option>`).join('') : '<option value="">（設定で「つないでみる」を押してください）</option>'}</select></div>
     <div class="row"><label>このトークのAI</label><select id="rfAi">${[['','共通の設定に従う'],['grok','Grok'],['gemini','Gemini']].map(([v,l]) => `<option value="${v}" ${(r && r.ai || '') === v ? 'selected' : ''}>${l}</option>`).join('')}</select></div>
     <div class="row"><label>前の列（左→右）</label>${[0,1,2].map(i => `<select class="rfm">${opt(m[i], i > 0)}</select>`).join('')}</div>
@@ -1300,7 +1345,7 @@ function roomForm(id){
     <p class="note">1人なら中央、2人なら左右、3人なら左・中央・右。4人目からは後ろの列に少し小さく並び、後ろの人が話すと、前の列でいちばん長く黙っている人と入れ替わります（最大${MAX_MEMBERS}人）。同じメンバーで複数のトークを作れます。</p>
     <div class="row"><button class="b p" id="rfOk">${r ? '保存' : '作る'}</button><button class="b" id="rfNo">やめる</button></div></div>`;
   $('#rfNo').onclick = () => { $('#roomEdit').innerHTML = ''; };
-  const kindUi = () => { const u = $('#rfKind').value === 'ura'; $('#rfUraRow').style.display = u ? '' : 'none'; document.querySelectorAll('#roomEdit .rfm').forEach(x => x.closest('.row').style.display = u ? 'none' : ''); };
+  const kindUi = () => { const u = $('#rfKind').value === 'ura'; $('#rfUraRow').style.display = u ? '' : 'none'; $('#rfRefNote').style.display = $('#rfKind').value === 'ref' ? '' : 'none'; document.querySelectorAll('#roomEdit .rfm').forEach(x => x.closest('.row').style.display = u ? 'none' : ''); };
   $('#rfKind').onchange = kindUi; kindUi();
   if (!LINE.ok && S.srvUrl) loadLine(false).then(() => { if ($('#rfKind')) roomForm(id); }).catch(() => {});
   $('#rfOk').onclick = async () => {
@@ -1318,9 +1363,10 @@ function roomForm(id){
     const mem = [...document.querySelectorAll('#roomEdit .rfm')].map(x => x.value).filter(Boolean);
     if (new Set(mem).size !== mem.length){ toast('同じキャラを2回選んでいます', true, 4000); return; }
     const name = $('#rfName').value.trim() || mem.map(x => charById(x).name.replace(/[\s　]/g,'')).join('・');
-    const ai = $('#rfAi').value;
-    if (r){ r.name = name; r.members = mem; r.ai = ai; delete r.kind; delete r.target; if (ROOM === r) menuDirty = true; }
-    else { const nr = { id:uid(), name, members:mem, ai, updated:Date.now(), last:null }; ROOMS.push(nr); }
+    const ai = $('#rfAi').value, ref = $('#rfKind').value === 'ref';
+    if (ref){ const miss = mem.map(charById).filter(c => !c.lineId).map(c => c.name); if (miss.length) toast(`${miss.join('、')} は「LINE風のキャラ」とつながっていないので、LINE風の記憶は使えません（「キャラ」でつなげます）`, true, 7000); }
+    if (r){ r.name = name; r.members = mem; r.ai = ai; if (ref) r.kind = 'ref'; else delete r.kind; delete r.target; if (ROOM === r) menuDirty = true; refRoom = null; }
+    else { const nr = { id:uid(), name, members:mem, ai, updated:Date.now(), last:null }; if (ref) nr.kind = 'ref'; ROOMS.push(nr); }
     await saveRooms(); $('#roomEdit').innerHTML = ''; renderRooms(); toast(r ? 'トークを保存しました' : 'トークを作りました。「開く」で話せます');
   };
 }
@@ -1591,7 +1637,7 @@ function showManual(m){
 /* 自動バックアップ：会話・設定（素材・AIのキー・合言葉は除く）をサーバーに預ける。LINE風アプリと一緒に R2 へ自動で保存される */
 async function novelData(){
   const set = Object.assign({}, S); for (const k of ['apiKey','geminiKey','srvToken','srvUrl']) delete set[k];
-  const hists = {}; for (const r of ROOMS) if (!r.kind){ const h = await idb.get('hist:' + r.id); if (h && h.length) hists[r.id] = h; }
+  const hists = {}; for (const r of ROOMS) if (!r.kind || r.kind === 'ref'){ const h = await idb.get('hist:' + r.id); if (h && h.length) hists[r.id] = h; }
   return { app:'akari-novel-data', version:VERSION_TEXT, settings:set, global:GLOBAL, chars:CHARS, rooms:ROOMS.map(({ _pending, ...r }) => r), hists, uraFaces:uraFaceCache };
 }
 let novelSyncT = 0, novelReady = false;

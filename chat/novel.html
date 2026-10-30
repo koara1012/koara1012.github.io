@@ -267,13 +267,16 @@ body.rotmode #rotwrap{transform:var(--RT)}
 <script>
 'use strict';
 /* ====== 版 ====== */
-const VERSION = { no: 11, at: '2026-10-29 17:30:00' };
+const VERSION = { no: 12, at: '2026-10-31 00:05:00' };
 const VERSION_TEXT = `${/\/lab\//.test(location.pathname) ? '試作・' : ''}統合 第${VERSION.no}回（${VERSION.at} 更新・akari.html 第6回がもと）`;
 
 /* ====== 改善ログ（他のAIへの引き継ぎ用）======
    改善のたびに「## 第〜回」を先頭側へ追記し、概要も最新に保つ */
 const DEV_LOG = `# 朱里ノベル 統合の試作（lab/novel.html） 改善ログ
 ※ 本番 akari.html 第6回をもとにした試作。保存先は本番と分けている（localStorage lab.settings / lab.logs、IndexedDB akariLab）。
+## 統合 第12回（2026-10-31 00:05:00）
+- 表情の並べ替え：［↑上へ］［↓下へ］［⤒いちばん上］［⤓いちばん下］（前は［↑上へ］だけ）。動かしたあと、その表情が見える位置までスクロール。
+
 ## 統合 第11回（2026-10-29 17:30:00）
 - トークの［削除］を iPhone で続けて2回押すと「undefined is not an object (evaluating 'r.name')」になっていたのを修正（もう無いトークなら一覧を描き直すだけ）。書き出しも同じく。
 
@@ -1372,7 +1375,7 @@ function renderCharEditor(c){
       <div class="row"><label>使うトーク</label>${KINDS.map(([k,l]) => `<label><input type="checkbox" data-foff="${f.id}|${k}" ${f.off && f.off[k] ? '' : 'checked'} ${f.name === defaultFace(c) ? 'disabled' : ''}> ${l}</label>`).join('')}<span class="note">${f.name === defaultFace(c) ? 'いつもの顔なので外せません' : '外すと、そのトークではAIがこの表情を選ばず、ほかの表情から選びます'}</span></div>
       <div class="slots"><div class="grp"><b>目</b>${SLOTS.eye.map(([k,l]) => tileHtml(f.id,'eye',k,l,f.eye[k])).join('')}</div>
       <div class="grp"><b>口</b>${SLOTS.mouth.map(([k,l]) => tileHtml(f.id,'mouth',k,l,f.mouth[k])).join('')}</div></div>
-      <div class="row"><button class="b p s" data-ftry="${f.id}">試す</button>${i > 0 ? `<button class="b s" data-fup="${f.id}">↑上へ</button>` : ''}<button class="b d s" data-fdel="${f.id}">この表情を消す</button></div></div>`).join('') || '<p class="note">まだ表情がありません。</p>'}</div>`;
+      <div class="row"><button class="b p s" data-ftry="${f.id}">試す</button>${i > 0 ? `<button class="b s" data-fmv="${f.id}|top">⤒いちばん上</button><button class="b s" data-fmv="${f.id}|up">↑上へ</button>` : ''}${i < c.faces.length - 1 ? `<button class="b s" data-fmv="${f.id}|down">↓下へ</button><button class="b s" data-fmv="${f.id}|bottom">⤓いちばん下</button>` : ''}<button class="b d s" data-fdel="${f.id}">この表情を消す</button></div></div>`).join('') || '<p class="note">まだ表情がありません。</p>'}</div>`;
   area.querySelectorAll('img[data-th]').forEach(async i => { const u = await thumbOf(i.dataset.th, false); if (u) i.src = u; });
   area.querySelectorAll('img[data-thw]').forEach(async i => { const u = await thumbOf(i.dataset.thw, true); if (u) i.src = u; });
   const bindNum = (id, k) => $('#' + id).addEventListener('input', e => { const v = parseFloat(e.target.value); if (isNaN(v)) return; c[k] = v; saveCharsSoon(); menuDirty = true; });
@@ -1429,8 +1432,15 @@ function renderCharEditor(c){
     textEl.textContent = TRY_LINE + `\n（表情「${f.name}」のお試し${hasMouth ? '' : '・口の「開き」が無いので口パクしません'}${previewChar ? '。タップで戻ります' : ''}）`;
     showHint(null);
   });
-  area.querySelectorAll('[data-fup]').forEach(b => b.onclick = async () => {
-    const i = c.faces.findIndex(x => x.id === b.dataset.fup); if (i > 0){ [c.faces[i-1], c.faces[i]] = [c.faces[i], c.faces[i-1]]; await saveChars(); renderCharEditor(c); }
+  area.querySelectorAll('[data-fmv]').forEach(b => b.onclick = async () => {   // 表情の並べ替え（上へ・下へ・いちばん上・いちばん下）
+    const [fid, how] = b.dataset.fmv.split('|'), i = c.faces.findIndex(x => x.id === fid); if (i < 0) return;
+    const n = c.faces.length, to = how === 'up' ? i - 1 : how === 'down' ? i + 1 : how === 'top' ? 0 : n - 1;
+    if (to < 0 || to >= n || to === i) return;
+    const [f] = c.faces.splice(i, 1); c.faces.splice(to, 0, f);
+    const sc = $('#panels').scrollTop; await saveChars(); menuDirty = true; renderCharEditor(c);
+    const card = document.querySelector(`[data-fmv^="${fid}|"], [data-ftry="${fid}"]`);   // 動かした表情が見えるように
+    if (card) card.closest('.card').scrollIntoView({ block:'center' }); else $('#panels').scrollTop = sc;
+    toast(`「${f.name}」を${to + 1}番目にしました`, false, 2000);
   });
   area.querySelectorAll('[data-fdel]').forEach(b => b.onclick = async () => {
     const f = c.faces.find(x => x.id === b.dataset.fdel); if (!confirm(`表情「${f.name}」と、その画像を消しますか？`)) return;

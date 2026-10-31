@@ -132,8 +132,7 @@ body.ura .pbtn{display:none}
 .meetbar button.sub{background:#fff;color:#8a6a3a;border:1px solid #e3c99a}
 .costbar{flex:none;font-size:11.5px;color:var(--sub);text-align:center;padding:4px 10px;background:#f3f5f8;border-bottom:1px solid var(--line);font-variant-numeric:tabular-nums}
 .costbar:empty{display:none}
-.pausebar{flex:none;display:none;align-items:center;justify-content:space-between;gap:8px;padding:6px 12px;font-size:12.5px;background:#2e2333;color:#e4d6e8;border-bottom:1px solid #43354a}
-body.ura .pausebar{display:flex}
+.pausebar{flex:none;display:flex;align-items:center;justify-content:space-between;gap:8px;padding:6px 12px;font-size:12.5px;background:#2e2333;color:#e4d6e8;border-bottom:1px solid #43354a}
 .pausebar button{flex:none;height:28px;padding:0 12px;border-radius:14px;font-size:12.5px;font-weight:700;background:#5b4466;color:#fff}
 .pausebar.paused{background:#5a2a33;color:#ffd9de}
 .pausebar.paused button{background:#e0524f}
@@ -666,9 +665,11 @@ body.ura #list.tlMode{background:#efe9f0}
       <button class="btn sub" id="stLifeSave" style="margin-top:10px">くらしの設定を保存</button>
     </div>
 
-    <div class="sec">裏の一時停止</div>
+    <div class="sec">AIの一時停止（表・裏）</div>
     <div class="field">
-      <label class="chk"><input type="checkbox" id="stUraPause"> 裏の自動を止める（TLへの投稿・いいね・コメント、トークの返事）</label>
+      <label class="chk"><input type="checkbox" id="stOmotePause"> 表のAIを止める（トークの返事・話しかけ・スタンプ、毎日の様子と記憶の整理、TLへの投稿・反応、災害の連絡、会う場面）</label>
+      <div class="hint">止めているあいだ、表では AI（Gemini）を使いません。送ったメッセージには再開したときに返事が来ます。止めているあいだに予定されていた話しかけ・TLの反応も、再開したあとに届きます。会う約束の通知は届きます。</div>
+      <label class="chk" style="margin-top:8px"><input type="checkbox" id="stUraPause"> 裏の自動を止める（TLへの投稿・いいね・コメント、トークの返事）</label>
       <div class="hint">止めているあいだ、裏では Grok を使いません。トークで送ったメッセージには、再開したときに返事が来ます。止めているあいだに予定されていた TL の反応は、再開したあとに届きます。</div>
     </div>
 
@@ -780,7 +781,7 @@ body.ura #list.tlMode{background:#efe9f0}
 // 置き場所で切り替える：/lab/（試作）と /chat/（本番）で同じファイルを使う
 // 試作は本番と同じサイトなので、保存の名前に「lab.」を付けて本番の chat.* には書き込まない。通知も登録しない
 const IS_LAB = /\/lab\//.test(location.pathname);
-const APP_VERSION = '第41版（2026-10-29 17:30:00 更新・会っている途中の自動終了・トーク削除の修正）' + (IS_LAB ? '【試作】' : '');
+const APP_VERSION = '第42版（2026-10-31 20:30:00 更新・表のAIの停止ボタン）' + (IS_LAB ? '【試作】' : '');
 if (IS_LAB) { document.title = '【試作】トーク（統合）'; const mt = document.querySelector('meta[name=apple-mobile-web-app-title]'); if (mt) mt.content = 'トーク試作'; }
 const $ = (id) => document.getElementById(id);
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
@@ -1020,6 +1021,7 @@ async function requestReply(charId, opt = {}) {
   try {
     // 表：相手が今すぐ読めるかを先に聞く。今は手が離せないなら、既読も付かず、あとで返事が届く
     if (!isUraKey(charId)) {
+      if (S.settings.omotePaused) { toast('表は止めています。再開すると返事が来ます'); return; } // 表を止めているあいだは返事をしない（再開したら返す）
       const dd = await api('POST', '/reply/decide', { charId });
       if (!dd.now) return;
     } else if (S.settings.uraPaused) { // 裏を止めているあいだは返事をしない（再開したら返す）
@@ -1310,23 +1312,28 @@ function renderCost() {
   const c = S.cost && S.cost[S.world === 'ura' ? 'ura' : 'omote'];
   el.textContent = c ? `AIの料金（${S.world === 'ura' ? '裏' : '表'}・目安）　今月 ${yenText(c.month)}　累計 ${yenText(c.total)}` : '';
 }
-function renderPause() {
-  const p = !!S.settings.uraPaused;
+function renderPause() {   // 表・裏それぞれの「AIを止める」（今見ている側の帯を出す）
+  const ura = S.world === 'ura', p = !!(ura ? S.settings.uraPaused : S.settings.omotePaused);
   $('uraPauseBar').classList.toggle('paused', p);
-  $('uraPauseText').textContent = p ? '裏は停止中（TLの投稿・反応、トークの返事を止めています）' : '裏の自動：動いています';
+  $('uraPauseText').textContent = ura
+    ? (p ? '裏は停止中（TLの投稿・反応、トークの返事を止めています）' : '裏の自動：動いています')
+    : (p ? '表は停止中（返事・話しかけ・TL・くらし・会う場面のAIを止めています）' : '表の自動：動いています');
   $('uraPauseBtn').textContent = p ? '再開する' : '止める';
-  if ($('stUraPause')) $('stUraPause').checked = p;
+  if ($('stUraPause')) $('stUraPause').checked = !!S.settings.uraPaused;
+  if ($('stOmotePause')) $('stOmotePause').checked = !!S.settings.omotePaused;
 }
-async function setUraPaused(p) {
+async function setPaused(world, p) {
+  const key = world === 'ura' ? 'uraPaused' : 'omotePaused', nm = world === 'ura' ? '裏' : '表';
   try {
-    const r = await api('POST', '/settings', { settings: { uraPaused: p } });
+    const r = await api('POST', '/settings', { settings: { [key]: p } });
     S.settings = r.settings; renderPause();
-    toast(p ? '裏を止めました' : '裏を再開しました');
+    toast(p ? `${nm}を止めました` : `${nm}を再開しました`);
     if (!p) { // 止めているあいだに送ったメッセージへ、返事をもらう
-      for (const c of S.chars) { const k = c.id + URA; const arr = S.msgs[k] || []; if (arr.length && arr[arr.length - 1].sender === 'me') scheduleReply(k); }
+      for (const c of S.chars) { const k = world === 'ura' ? c.id + URA : c.id; const arr = S.msgs[k] || []; if (arr.length && arr[arr.length - 1].sender === 'me') scheduleReply(k); }
     }
   } catch (e) { toast(e.message); }
 }
+const setUraPaused = (p) => setPaused('ura', p);
 function applyWorld() {
   renderCost(); renderPause();
   document.body.classList.toggle('ura', S.world === 'ura');
@@ -2151,7 +2158,8 @@ $('nfBarkTest').onclick = async () => {
     toast(`Bark に送りました（暗号化：${d.encrypted ? 'オン' : 'オフ'}／アイコン：${d.icon ? 'あり' : 'なし'}／音：${d.sound}）`, 5000);
   } catch (e) { toast(e.message, 5000); }
 };
-$('uraPauseBtn').onclick = () => setUraPaused(!S.settings.uraPaused);
+$('uraPauseBtn').onclick = () => { const w = S.world === 'ura' ? 'ura' : 'omote'; setPaused(w, !S.settings[w + 'Paused']); };
+$('stOmotePause').onchange = () => setPaused('omote', $('stOmotePause').checked);
 $('stUraPause').onchange = () => setUraPaused($('stUraPause').checked);
 $('costSave').onclick = async () => {
   const cost = {};

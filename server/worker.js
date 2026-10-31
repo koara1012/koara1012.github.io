@@ -14,7 +14,7 @@
 //    ・Cron トリガー  * * * * *  （毎分。実際に動くのは13分おき）
 // =====================================================================
 
-const VERSION = '第41版（2026-10-29 17:30:00 更新・会っている途中の自動終了・トーク削除の修正）';
+const VERSION = '第42版（2026-10-31 20:30:00 更新・表のAIの停止ボタン）';
 const DEFAULT_MODEL = 'gemini-flash-latest';
 const DEFAULT_GROK_MODEL = 'grok-4.7';                 // X（Twitter）の Grok と同じ最新世代
 const FALLBACK_GROK_MODEL = 'grok-4-fast-non-reasoning'; // 上が使えないときの予備
@@ -193,7 +193,7 @@ const DEFAULT_SETTINGS = {
   quietEnabled: true, quietStart: 1, quietEnd: 7, omoteProvider: 'gemini', uraProvider: 'grok', grokModel: '',
   meName: '', meNameUra: '', meIconVer: 0, meUraIconVer: 0, // あなたのTLでの名前（表・裏）とアイコンの版
   newsEnabled: true, // 表で話題を切り替えるとき、最近のニュースも話題にする
-  uraPaused: false, lifeEnabled: true, imagesEnabled: true, delayEnabled: true, disasterEnabled: true, quakeMin: '4', notifyVia: 'web', barkSound: '', yen: 150, cost: {}, birthday: '', // くらし（記憶・毎日の様子など）、写真、あなたの誕生日 MM-DD
+  uraPaused: false, omotePaused: false, lifeEnabled: true, imagesEnabled: true, delayEnabled: true, disasterEnabled: true, quakeMin: '4', notifyVia: 'web', barkSound: '', yen: 150, cost: {}, birthday: '', // くらし（記憶・毎日の様子など）、写真、あなたの誕生日 MM-DD
   weatherLat: 35.927, weatherLon: 139.604, weatherPlace: '埼玉県さいたま市北区日進町',
 };
 async function getSettings(env) {
@@ -434,6 +434,7 @@ async function route(key, url, body, env, ctx) {
       if (!a || ['done', 'missed'].includes(a.status)) a = { date: '', time: '', place: '', at: 0, created: now }; // 約束なしで会いに行くこともできる
       if (a.status !== 'meeting') { a.status = 'meeting'; a.metAt = now; await kvSet(env, 'appt:' + c.id, a); }
       let lines = [];
+      if ((await getSettings(env)).omotePaused) return json({ appt: a, lines, log: await kvGet(env, 'meetlog:' + c.id, []), paused: true });
       if (!(await kvGet(env, 'meetlog:' + c.id, [])).length) lines = await meetReply(env, c, true);
       return json({ appt: a, lines, log: await kvGet(env, 'meetlog:' + c.id, []) });
     }
@@ -441,6 +442,7 @@ async function route(key, url, body, env, ctx) {
       const c = await omoteChar(env, body.charId);
       const text = String(body.text || '').trim().slice(0, 2000);
       if (text) { const lg = await kvGet(env, 'meetlog:' + c.id, []); lg.push({ who: 'me', text }); await kvSet(env, 'meetlog:' + c.id, lg.slice(-MEET_LOG_MAX)); }
+      if ((await getSettings(env)).omotePaused) return json({ lines: [], paused: true }); // 話したことは残す（再開したら返事）
       return json({ lines: await meetReply(env, c, false) });
     }
     case 'POST /meet/end': { // 会うのを終える：会った内容をまとめて、表の記憶へ
@@ -815,6 +817,7 @@ async function route(key, url, body, env, ctx) {
       const stamp = world === 'omote' ? lastUserStamp(hist, Date.now()) : null; // スタンプへの返事
       if (!last || (last.sender !== 'me' && !(stamp && (STAMPS[stamp].cont || stamp === '😴')))) return json({ messages: [] });
       if (world === 'ura' && (await getSettings(env)).uraPaused) return json({ messages: [], paused: true }); // 裏は止めている（再開したら返す）
+      if (world === 'omote' && (await getSettings(env)).omotePaused) return json({ messages: [], paused: true }); // 表は止めている（再開したら返す）
       // 表：その子が今していることによって、すぐ返す／あとで返す（あとで返す分はサーバーが毎分確認して送る）
       const d = { mode: 'reply' };
       if (last.sender !== 'me' && stamp) d.stamp = stamp;
@@ -860,6 +863,7 @@ async function route(key, url, body, env, ctx) {
       if (isGroupId(base)) return json({ now: !(await getSettings(env)).uraPaused });
       const c = await getChar(env, base);
       if (world === 'ura' && (await getSettings(env)).uraPaused) return json({ now: false, paused: true });
+      if (world === 'omote' && (await getSettings(env)).omotePaused) return json({ now: false, paused: true });
       if (world !== 'omote' || !delayOn(await getSettings(env))) return json({ now: true });
       const hist = await recent(env, key, 60);
       const last = hist[hist.length - 1];
@@ -907,6 +911,7 @@ async function route(key, url, body, env, ctx) {
       if ('imagesEnabled' in s) v.imagesEnabled = !!s.imagesEnabled;
       if ('delayEnabled' in s) v.delayEnabled = !!s.delayEnabled;
       if ('uraPaused' in s) v.uraPaused = !!s.uraPaused; // 裏の自動（TLの投稿・反応、トークの返事）を止める
+      if ('omotePaused' in s) v.omotePaused = !!s.omotePaused; // 表のAIを止める（返事・話しかけ・くらし・TL・災害の連絡・会う場面）
       if ('notifyVia' in s && ['web', 'bark', 'both'].includes(s.notifyVia)) v.notifyVia = s.notifyVia;
       if ('yen' in s) v.yen = clamp(num(s.yen, 150), 50, 500);
       if (s.cost && typeof s.cost === 'object') { // 単価の上書き（空ならモデルに合わせて自動）
@@ -1179,7 +1184,7 @@ async function tick(env, minute) {
   const allChars = await loadChars(env);
   const due = tickDue(allChars, minute);
   const omoteAll = allChars.filter(inOmote); // 表の話しかけ・くらしは、表に登場する子だけ
-  const chars = omoteAll.filter(due); // この分に担当の子
+  const chars = settings.omotePaused ? [] : omoteAll.filter(due); // この分に担当の子（表を止めているあいだは、くらし・話しかけ・返事をしない）
   const done = [];
   await applyRetracts(env).catch(() => {});
   // くらし：毎日の様子と記憶の整理（話しかける前に）
@@ -1565,6 +1570,7 @@ async function aiJson(env, world, system, userText, schema, schemaName) {
 }
 async function callAIObj(env, world, system, contents, schema, schemaName, opts) {
   const st = await getSettings(env);
+  if (world !== 'ura' && st.omotePaused) throw new HttpError(409, OMOTE_PAUSED_MSG); // 念のため：表を止めているあいだは表のAIを呼ばない
   if (providerFor(st, world) === 'grok') {
     return parseJsonLoose(await grokText(env, grokModelFor(env, st), system, contents, schema, schemaName, { ...(opts || {}), world }), 'Grok');
   }
@@ -1572,8 +1578,10 @@ async function callAIObj(env, world, system, contents, schema, schemaName, opts)
 }
 
 // ---------------------------------------------------------------- 使うAIを選んで呼ぶ
+const OMOTE_PAUSED_MSG = '表のAIは止めています（LINE風アプリで再開できます）';
 async function callAI(env, world, system, contents, maxSplit, opts) {
   const st = await getSettings(env);
+  if (world !== 'ura' && st.omotePaused) throw new HttpError(409, OMOTE_PAUSED_MSG);
   if (providerFor(st, world) === 'grok') return callGrok(env, grokModelFor(env, st), system, contents, maxSplit, { ...(opts || {}), world });
   return callGemini(env, system, contents, maxSplit, world);
 }
@@ -2085,6 +2093,7 @@ function quoteCandidates(hist) {
 }
 // 追伸・不在着信のあとの言葉（毎分確認）。その間にやり取りが進んでいたら送らない
 async function runDuePostscripts(env) {
+  if ((await getSettings(env)).omotePaused) return 0; // 表を止めているあいだは待たせておく
   const now = Date.now();
   const { results } = await env.DB.prepare("SELECT k,v FROM kv WHERE k >= 'ps:' AND k < 'ps;'").all();
   if (!results.length) return 0;
@@ -2687,6 +2696,7 @@ async function planReactions(env, post) {
   const st = await getSettings(env);
   const world = post.world;
   if (world === 'ura' && st.uraPaused) return []; // 裏は止めている（この投稿には反応しない）
+  if (world === 'omote' && st.omotePaused) return []; // 表は止めている
   const chars = await loadChars(env);
   const author = post.author === ME ? null : chars.find((c) => c.id === post.author);
   if (post.author !== ME && !author) return [];
@@ -2896,6 +2906,7 @@ async function shouldCharPost(env, c, world, now, st) {
   const perDay = nz(world === 'ura' ? c.uraTlPerDay : c.tlPerDay, world === 'ura' ? 1 : 2);
   if (perDay <= 0) return false;
   if (world === 'ura' && st.uraPaused) return false; // 裏は止めている
+  if (world === 'omote' && st.omotePaused) return false; // 表は止めている
   const boost = world === 'omote' ? await activityBoost(env, c, st, now).catch(() => ({ f: 1 })) : { f: 1 };
   const last = await env.DB.prepare('SELECT at FROM tl_posts WHERE world=? AND author=? ORDER BY id DESC LIMIT 1').bind(world, c.id).first();
   if (last && now - last.at < 60 * MIN) return false; // 続けて投稿しすぎない
@@ -2929,8 +2940,8 @@ async function runTlJobs(env, limit) {
     try { await planReactions(env, p); } catch (e) { await log(env, 'TL判定: ' + e.message); }
   }
   // 2) 時間が来た いいね・コメント・返信
-  const paused = (await getSettings(env)).uraPaused;
-  const { results: due } = await env.DB.prepare(`SELECT * FROM tl_jobs WHERE due<=? ${paused ? "AND world<>'ura'" : ''} ORDER BY due LIMIT ?`).bind(Date.now(), limit).all(); // 裏を止めているあいだ、裏の反応は待たせておく
+  const pst = await getSettings(env), paused = pst.uraPaused, opaused = pst.omotePaused;
+  const { results: due } = await env.DB.prepare(`SELECT * FROM tl_jobs WHERE due<=? ${paused ? "AND world<>'ura'" : ''} ${opaused ? "AND world<>'omote'" : ''} ORDER BY due LIMIT ?`).bind(Date.now(), limit).all(); // 裏を止めているあいだ、裏の反応は待たせておく
   for (const j of due) {
     const claimed = await env.DB.prepare('DELETE FROM tl_jobs WHERE id=? RETURNING id').bind(j.id).first();
     if (!claimed) continue; // ほかの処理が先に実行した
@@ -3584,6 +3595,7 @@ async function nextProactiveSlot(env, now) {
 }
 async function runDueProactive(env) {
   await ensureSchema(env);
+  if ((await getSettings(env)).omotePaused) return 0; // 表を止めているあいだは待たせておく
   const now = Date.now();
   const { results } = await env.DB.prepare("SELECT k,v FROM kv WHERE k >= 'proj:' AND k < 'proj;'").all();
   const due = results.map((r) => { try { return { k: r.k, ...JSON.parse(r.v) }; } catch (_) { return null; } }).filter((p) => p && p.due <= now).sort((a, b) => a.due - b.due);
@@ -3611,6 +3623,7 @@ async function runDueProactive(env) {
 // 予約していた返事（毎分確認する）
 async function runDueReplies(env) {
   await ensureSchema(env);
+  if ((await getSettings(env)).omotePaused) return 0; // 表を止めているあいだは待たせておく（再開したら返す）
   const now = Date.now();
   const { results } = await env.DB.prepare("SELECT k,v FROM kv WHERE k >= 'reply:' AND k < 'reply;'").all();
   let n = 0;
@@ -4116,6 +4129,7 @@ async function scheduleOutcome(env, s, e, now) {
   }
 }
 async function runDisJobs(env, st, now, limit = 6) {
+  if (st.omotePaused) return 0; // 表を止めているあいだは、災害の連絡も待たせておく
   const { results } = await env.DB.prepare("SELECT k,v FROM kv WHERE k >= 'disjob:' AND k < 'disjob;'").all();
   const dueJobs = results.map((r) => { try { return { k: r.k, ...JSON.parse(r.v) }; } catch (_) { return null; } })
     .filter((j) => j && j.due <= now).sort((a, b) => a.due - b.due).slice(0, limit);

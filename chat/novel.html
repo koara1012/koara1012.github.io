@@ -267,13 +267,16 @@ body.rotmode #rotwrap{transform:var(--RT)}
 <script>
 'use strict';
 /* ====== 版 ====== */
-const VERSION = { no: 14, at: '2026-10-31 04:40:00' };
+const VERSION = { no: 15, at: '2026-10-31 20:30:00' };
 const VERSION_TEXT = `${/\/lab\//.test(location.pathname) ? '試作・' : ''}統合 第${VERSION.no}回（${VERSION.at} 更新・akari.html 第6回がもと）`;
 
 /* ====== 改善ログ（他のAIへの引き継ぎ用）======
    改善のたびに「## 第〜回」を先頭側へ追記し、概要も最新に保つ */
 const DEV_LOG = `# 朱里ノベル 統合の試作（lab/novel.html） 改善ログ
 ※ 本番 akari.html 第6回をもとにした試作。保存先は本番と分けている（localStorage lab.settings / lab.logs、IndexedDB akariLab）。
+## 統合 第15回（2026-10-31 20:30:00）
+- 表トーク（会う場面）：LINE風で表のAIを止めているとき（サーバー第42版の omotePaused）は「お休み中」と出す。話したことは残り、再開後に返事。
+
 ## 統合 第14回（2026-10-31 04:40:00）
 - LINE参照トークだけの「追加プロンプト」（room.extra）。トークの編集で入れる。1人ならそのキャラへの追加設定、複数人なら全員共通の設定（各キャラ設定より優先・口調など食い違わないところは各キャラのまま。LINE風の裏のグループ設定と同じ考え方）。
 
@@ -1141,6 +1144,7 @@ function meetToHist(log, room){
 async function openMeet(room){
   try{
     const r = await srv('POST', '/meet/start', { charId:room.target });
+    if (r.paused) toast('表のAIは今お休み中です。LINE風アプリで再開すると話せます', false, 6000);
     const n = (r.lines || []).length, lg = r.log || [];
     HIST = meetToHist(lg.slice(0, lg.length - n), room);
     room.place = (r.appt && r.appt.place) || ''; room.updated = Date.now(); saveRooms();
@@ -1154,6 +1158,7 @@ async function sendMeet(text){
   try{
     const r = await srv('POST', '/meet/say', { charId:room.target, text:text || '' });
     if (room !== ROOM) return;
+    if (r.paused){ clearInterval(thinkTimer); state = 'idle'; showName(''); textEl.textContent = '（表のAIは今お休み中です。LINE風アプリで再開すると、続きを話せます）'; showHint('end'); return; }
     const lines = meetToHist(r.lines || [], room).flatMap(h => h.lines || []);
     if (!lines.length) throw new Error('返事がありませんでした');
     HIST.push({ role:'chars', lines, t:Date.now() });

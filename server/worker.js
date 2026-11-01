@@ -14,7 +14,7 @@
 //    ・Cron トリガー  * * * * *  （毎分。実際に動くのは13分おき）
 // =====================================================================
 
-const VERSION = '第43版（2026-11-02 01:30:00 更新・状況・指示を送る）';
+const VERSION = '第44版（2026-11-02 03:50:00 更新・ずっと話す）';
 const DEFAULT_MODEL = 'gemini-flash-latest';
 const DEFAULT_GROK_MODEL = 'grok-4.7';                 // X（Twitter）の Grok と同じ最新世代
 const FALLBACK_GROK_MODEL = 'grok-4-fast-non-reasoning'; // 上が使えないときの予備
@@ -443,7 +443,7 @@ async function route(key, url, body, env, ctx) {
       const text = String(body.text || '').trim().slice(0, 2000);
       if (text) { const lg = await kvGet(env, 'meetlog:' + c.id, []); lg.push({ who: 'me', text }); await kvSet(env, 'meetlog:' + c.id, lg.slice(-MEET_LOG_MAX)); }
       if ((await getSettings(env)).omotePaused) return json({ lines: [], paused: true }); // 話したことは残す（再開したら返事）
-      return json({ lines: await meetReply(env, c, false) });
+      return json({ lines: await meetReply(env, c, false, !text && body.cont) });
     }
     case 'POST /meet/end': { // 会うのを終える：会った内容をまとめて、表の記憶へ
       const c = await omoteChar(env, body.charId);
@@ -808,6 +808,7 @@ async function route(key, url, body, env, ctx) {
         if ((await getSettings(env)).uraPaused) return json({ messages: [], paused: true });
         const hist = await recent(env, key, 60);
         const last = hist[hist.length - 1];
+        if (body.cont && hist.length) return json({ messages: await groupReply(env, group, [...hist, contMsg()], key) }); // ずっと話す（ノベル画面）：メッセージは増やさず「続けて」と伝える
         if (!(body.start && !hist.length) && (!last || last.sender !== 'me')) return json({ messages: [] }); // start：あらすじから物語を始める
         return json({ messages: await groupReply(env, group, hist, key) });
       }
@@ -815,8 +816,10 @@ async function route(key, url, body, env, ctx) {
       const hist = await recent(env, key, 60);
       const last = hist[hist.length - 1];
       const stamp = world === 'omote' ? lastUserStamp(hist, Date.now()) : null; // スタンプへの返事
-      if (!last || (last.sender !== 'me' && !(stamp && (STAMPS[stamp].cont || stamp === '😴')))) return json({ messages: [] });
+      const cont = world === 'ura' && body.cont && last; // ずっと話す（ノベル画面の裏）：ユーザーが黙っていても続ける
+      if (!last || (last.sender !== 'me' && !cont && !(stamp && (STAMPS[stamp].cont || stamp === '😴')))) return json({ messages: [] });
       if (world === 'ura' && (await getSettings(env)).uraPaused) return json({ messages: [], paused: true }); // 裏は止めている（再開したら返す）
+      if (cont) return json({ messages: await generateAndStore(env, c, { mode: 'reply' }, [...hist, contMsg()], await getRead(env, key), world) });
       if (world === 'omote' && (await getSettings(env)).omotePaused) return json({ messages: [], paused: true }); // 表は止めている（再開したら返す）
       // 表：その子が今していることによって、すぐ返す／あとで返す（あとで返す分はサーバーが毎分確認して送る）
       const d = { mode: 'reply' };
@@ -1579,6 +1582,9 @@ async function callAIObj(env, world, system, contents, schema, schemaName, opts)
 
 // ---------------------------------------------------------------- 使うAIを選んで呼ぶ
 const OMOTE_PAUSED_MSG = '表のAIは止めています（LINE風アプリで再開できます）';
+// ノベル画面の「ずっと話す」：保存はしない、AIに渡すだけのユーザーの発言（【状況・指示】なので台詞ではないと伝わる）
+const CONT_TEXT = '【状況・指示】ユーザーは何も言わずに見守っている。登場人物たちは、そのまま自然に会話や場面を続ける。同じことのくり返しにならないよう、話題や場面を少しずつ進める。ユーザーに返事を求めて待たない。';
+const contMsg = () => ({ sender: 'me', text: CONT_TEXT, at: Date.now() });
 // ノベル画面の［📝状況］：ユーザーが台詞ではなく、状況の説明や演出の指示を送ったとき（先頭に【状況・指示】）
 const DIR_RULE = '- ユーザーの発言のうち「【状況・指示】」で始まるものは、ユーザーの台詞ではなく、場面の状況の説明や「こうしてほしい」という演出の指示（ナレーション）。その状況になったものとして自然に場面を進め、指示があればそれに沿う。指示があったことや「【状況・指示】」という言葉そのものには触れない。\n';
 async function callAI(env, world, system, contents, maxSplit, opts) {
@@ -2033,7 +2039,7 @@ ${faceRuleSingle(faces)}${DIR_RULE}- ユーザーの発言のうち（ ）で書
 ${start ? '\n# 今回\nユーザーが待ち合わせ場所に来たところ。会えた瞬間の場面から始める（ユーザーが次に話せる余地を残す）。\n' : ''}
 出力は {"messages": ["吹き出し1", "吹き出し2"]} の形のJSONのみ。`;
 }
-async function meetReply(env, c, start) {
+async function meetReply(env, c, start, cont = false) {
   const st = await getSettings(env), now = Date.now();
   const a = await kvGet(env, 'appt:' + c.id, null);
   const lg = await kvGet(env, 'meetlog:' + c.id, []);
@@ -2047,7 +2053,7 @@ async function meetReply(env, c, start) {
     const t = turns[turns.length - 1];
     if (t && t.role === role) t.parts[0].text += '\n' + line; else turns.push({ role, parts: [{ text: line }] });
   }
-  if (!turns.length || turns[turns.length - 1].role !== 'user') turns.push({ role: 'user', parts: [{ text: start ? '（待ち合わせ場所に着いた）' : '（続けてください）' }] });
+  if (!turns.length || turns[turns.length - 1].role !== 'user') turns.push({ role: 'user', parts: [{ text: start ? '（待ち合わせ場所に着いた）' : cont ? CONT_TEXT : '（続けてください）' }] });
   const wb = await worldBlock(env, c.prompt + '\n' + lg.slice(-20).map((m) => m.text).join('\n'));
   const texts = (await callAI(env, 'omote', wb + buildMeetSystem(c, a, lifeInfo, talk, faces, start), turns, 6)).flatMap((t) => t.split(/\n(?=\s*[＊*])/));
   const out = [];

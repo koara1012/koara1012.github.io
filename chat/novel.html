@@ -70,6 +70,9 @@ html,body{margin:0;height:100%;background:#000;color:#fff;overflow:hidden;
   display:flex;gap:8px;background:rgba(20,16,24,.92);padding:8px;border-radius:12px;box-shadow:0 0 0 1px #6e5a74}
 .ibox.dir{box-shadow:0 0 0 2px #e9a23b;background:rgba(40,30,12,.94)}
 .ibox.dir input{border-color:#e9a23b}
+#contBtn.on{background:#5aa9e6;border-color:#a9d8ff;color:#06223a;font-weight:700}
+#contStop{position:absolute;z-index:4;left:50%;transform:translateX(-50%);top:calc(env(safe-area-inset-top) + 8px);display:none;font:14px var(--ff);padding:7px 16px;border-radius:18px;border:1px solid #a9d8ff;background:rgba(20,40,60,.9);color:#fff}
+#contStop.show{display:block}
 #dirBtn.on{background:#e9a23b;border-color:#ffd38a;color:#2a1b05;font-weight:700}
 .ibox input{flex:1;min-width:0;font:16px var(--ff);padding:10px 12px;border-radius:8px;border:1px solid #6e5a74;background:#1a161d;color:#fff;-webkit-user-select:text;user-select:text}
 button.b{font:14px var(--ff);padding:8px 13px;border-radius:8px;border:1px solid #8a7290;background:#3b2f40;color:#fff;cursor:pointer;white-space:nowrap}
@@ -148,10 +151,12 @@ body.rotmode #rotwrap{transform:var(--RT)}
     <button class="cb" id="bFast" aria-label="早送り"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round"><path d="M2.5 5v14l9-7z"/><path d="M12.5 5v14l9-7z"/></svg></button>
   </div>
   <div id="ver"></div>
+  <button id="contStop">■ 止める（ずっと話しています）</button>
 </div>
 
 <div id="inputOv"><div class="ibox">
   <button class="b" id="dirBtn" title="会話ではなく、状況の説明や指示を送る">📝状況</button>
+  <button class="b" id="contBtn" title="止めるまで、キャラたちが自分たちで話し続ける">🔁ずっと</button>
   <input id="msg" type="text" enterkeyhint="send" autocomplete="off" placeholder="話しかける…">
   <button class="b p" id="send">送信</button><button class="b" id="cancel">やめる</button>
 </div></div>
@@ -271,13 +276,16 @@ body.rotmode #rotwrap{transform:var(--RT)}
 <script>
 'use strict';
 /* ====== 版 ====== */
-const VERSION = { no: 16, at: '2026-11-02 01:30:00' };
+const VERSION = { no: 17, at: '2026-11-02 03:50:00' };
 const VERSION_TEXT = `${/\/lab\//.test(location.pathname) ? '試作・' : ''}統合 第${VERSION.no}回（${VERSION.at} 更新・akari.html 第6回がもと）`;
 
 /* ====== 改善ログ（他のAIへの引き継ぎ用）======
    改善のたびに「## 第〜回」を先頭側へ追記し、概要も最新に保つ */
 const DEV_LOG = `# 朱里ノベル 統合の試作（lab/novel.html） 改善ログ
 ※ 本番 akari.html 第6回をもとにした試作。保存先は本番と分けている（localStorage lab.settings / lab.logs、IndexedDB akariLab）。
+## 統合 第17回（2026-11-02 03:50:00）
+- ずっと話す：入力欄の［🔁ずっと］をオンにして送ると（何も書かなくてもよい・［📝状況］と一緒でもよい）、止めるまでキャラたちが自分たちで話し続ける。返事を見せ終わると、ページはオートで送り、少し待って次を頼む（contMode・contNext）。ふつう・LINE参照は CONT_TEXT をAIにだけ渡す（会話ログに残さない）。裏はサーバー（第44版）の /reply {cont:true}、会う場面は /meet/say {cont:true}（どちらもユーザーのメッセージは増えない）。画面上の［■ 止める］・メニューを開く・トークを変える・画面を消す・エラー・お休み中で止まる。入力欄を開いているあいだは待ち、送ったら続く。
+
 ## 統合 第16回（2026-11-02 01:30:00）
 - 入力欄に［📝状況］：会話ではなく、ナレーター風に状況の説明や指示を送る（先頭に DIR＝【状況・指示】を付けて送る）。ふつう・LINE参照はこのアプリのプロンプトに DIR_RULE を足す。裏・会う場面はサーバー（第43版）のプロンプトに同じ決まりを足した。会話ログでは「📝 状況：」と出す。送ったあとは会話に戻る。
 
@@ -847,8 +855,8 @@ async function playPage(){
   const p = pages[pageIdx]; const ok = await typePage(p); if (!ok) return;
   if (pageIdx < pages.length - 1){
     state = 'pageDone'; showHint('next');
-    if (S.auto) autoTimer = setTimeout(() => { if (state === 'pageDone') advance('auto'); }, 1000 + [...p.text].length*60);
-  } else { state = 'idle'; showHint('end'); }
+    if (S.auto || contMode) autoTimer = setTimeout(() => { if (state === 'pageDone') advance('auto'); }, 1000 + [...p.text].length*60);
+  } else { state = 'idle'; showHint('end'); if (contMode) contSchedule(1500 + [...p.text].length*60); }
 }
 function showLines(lines){ pages = paginate(lines); pageIdx = 0; if (!pages.length) return; return playPage(); }
 function showStatic(p){ typeTok++; speaking = false; clearTimeout(autoTimer); const st = p.who === '' ? null : (stageOf(p.who) || STAGE[0]); bringFront(st); setFace(st, p.face); showName(p.who); textEl.textContent = p.text; state = 'idle'; showHint('end'); }
@@ -922,8 +930,10 @@ function buildMessages(){
     if (h.role === 'user') msgs.push({ role:'user', content:h.text });
     else msgs.push({ role:'assistant', content: JSON.stringify({ lines: h.lines.map(l => ms.length === 1 ? { face:l.face, text:l.text } : { who:(charById(l.who) || {}).name || '', face:l.face, text:l.text }) }) });
   }
+  if (CONT_EXTRA) msgs.push({ role:'user', content:CONT_EXTRA });   // ずっと話す（会話ログには残さない）
   return msgs;
 }
+let CONT_EXTRA = '';
 function hintFor(st){
   if (st === 400) return '（送った内容かモデル名の形式が受け付けられませんでした）';
   if (st === 401 || st === 403) return '（APIキーが違う・無効・権限なしの可能性）';
@@ -1016,16 +1026,17 @@ function startThinking(){
   let n = 0; textEl.textContent = '…'; clearInterval(thinkTimer);
   thinkTimer = setInterval(() => { n = (n+1)%3; textEl.textContent = '…'.repeat(n+1); }, 450);
 }
-async function send(text){
+async function send(text, opt = {}){
   if (state === 'thinking' || !ROOM) return;
-  if (ROOM.kind === 'ura') return sendUra(text);
-  if (ROOM.kind === 'omote') return sendMeet(text);
+  if (ROOM.kind === 'ura') return sendUra(text, opt.cont);
+  if (ROOM.kind === 'omote') return sendMeet(text, opt.cont);
   const room = ROOM;
   if (text){ HIST.push({ role:'user', text, t:Date.now() }); await saveHist(); }
   startThinking();
   try{
     if (room.kind === 'ref') await loadRefContext(room);   // LINE風のこれまでを読むだけ（ここでの会話は LINE風に送らない）
-    const c = await callAI();
+    CONT_EXTRA = opt.cont ? CONT_TEXT : '';   // ずっと話す：会話には残さず、AIにだけ「続けて」と伝える
+    const c = await callAI().finally(() => { CONT_EXTRA = ''; });
     if (room !== ROOM) return;
     const lines = parseReply(c);
     if (!lines.length) throw new Error('返事に台詞が入っていませんでした');
@@ -1033,7 +1044,7 @@ async function send(text){
     const l = lines[lines.length-1]; room.last = { who:l.who, text:l.text }; room.updated = Date.now(); await saveRooms();
     clearInterval(thinkTimer); await showLines(lines);
   }catch(e){
-    clearInterval(thinkTimer); if (room !== ROOM) return; state = 'error';
+    clearInterval(thinkTimer); if (room !== ROOM) return; state = 'error'; if (contMode){ stopCont(true); toast('うまく続けられなかったので、ずっと話すのを止めました', true, 4000); }
     textEl.textContent = '（うまくお返事できませんでした……。タップでもう一度試します）'; showHint('retry');
     log('error', e.message, lastResp ? `HTTP ${lastResp.status}\n${lastResp.body}` : '');
   }
@@ -1113,16 +1124,16 @@ async function openUra(room){
     const l = msgs.filter(m => m.sender !== 'me').pop(); if (l){ room.last = { who: l.sender === 'narr' ? '' : room.members[0], text:l.text || '' }; room.updated = l.at; saveRooms(); }
   }catch(e){ HIST = []; log('error', '裏トークを読み込めませんでした：' + e.message); }
 }
-async function sendUra(text){
+async function sendUra(text, cont){
   const room = ROOM;
   if (text){ HIST.push({ role:'user', text, t:Date.now() }); }
   startThinking();
   try{
-    const out = text || room._pending;
+    const out = text || (cont ? null : room._pending);
     if (out){ room._pending = out; await srv('POST', '/send', { charId:room.target, text:out }); room._pending = null; }
-    const r = await srv('POST', '/reply', { charId:room.target });
+    const r = await srv('POST', '/reply', { charId:room.target, ...(cont && !out ? { cont:true } : {}) });   // ずっと話す：サーバー（第44版）に「続けて」と頼む（メッセージは増やさない）
     if (room !== ROOM) return;
-    if (r.paused){ clearInterval(thinkTimer); state = 'idle'; showName(''); textEl.textContent = '（裏は今お休み中です。LINE風アプリの設定で再開できます）'; showHint('end'); return; }
+    if (r.paused){ stopCont(true); clearInterval(thinkTimer); state = 'idle'; showName(''); textEl.textContent = '（裏は今お休み中です。LINE風アプリの設定で再開できます）'; showHint('end'); return; }
     const msgs = r.messages || [];
     if (!msgs.length) throw new Error('返事がありませんでした');
     const h = uraToHist(msgs, room); const lines = h.filter(x => x.role === 'chars').flatMap(x => x.lines);
@@ -1131,7 +1142,7 @@ async function sendUra(text){
     const l = lines[lines.length-1]; room.last = { who:l.who, text:l.text }; room.updated = Date.now(); await saveRooms();
     clearInterval(thinkTimer); await showLines(lines);
   }catch(e){
-    clearInterval(thinkTimer); if (room !== ROOM) return; state = 'error';
+    clearInterval(thinkTimer); if (room !== ROOM) return; state = 'error'; if (contMode){ stopCont(true); toast('うまく続けられなかったので、ずっと話すのを止めました', true, 4000); }
     textEl.textContent = '（うまくお返事できませんでした……。タップでもう一度試します）'; showHint('retry');
     log('error', e.message, lastResp ? `HTTP ${lastResp.status}\n${lastResp.body}` : '');
   }
@@ -1158,21 +1169,21 @@ async function openMeet(room){
     return n ? meetToHist(r.lines, room).flatMap(h => h.lines || []) : null;
   }catch(e){ HIST = []; log('error', '会う場面を始められませんでした：' + e.message, lastResp ? `HTTP ${lastResp.status}\n${lastResp.body}` : ''); toast('会う場面を始められませんでした。〈 →「困ったとき」で診断をコピーできます', true, 6000); return null; }
 }
-async function sendMeet(text){
+async function sendMeet(text, cont){
   const room = ROOM;
   if (text) HIST.push({ role:'user', text, t:Date.now() });
   startThinking();
   try{
-    const r = await srv('POST', '/meet/say', { charId:room.target, text:text || '' });
+    const r = await srv('POST', '/meet/say', { charId:room.target, text:text || '', ...(cont && !text ? { cont:true } : {}) });
     if (room !== ROOM) return;
-    if (r.paused){ clearInterval(thinkTimer); state = 'idle'; showName(''); textEl.textContent = '（表のAIは今お休み中です。LINE風アプリで再開すると、続きを話せます）'; showHint('end'); return; }
+    if (r.paused){ stopCont(true); clearInterval(thinkTimer); state = 'idle'; showName(''); textEl.textContent = '（表のAIは今お休み中です。LINE風アプリで再開すると、続きを話せます）'; showHint('end'); return; }
     const lines = meetToHist(r.lines || [], room).flatMap(h => h.lines || []);
     if (!lines.length) throw new Error('返事がありませんでした');
     HIST.push({ role:'chars', lines, t:Date.now() });
     const l = lines[lines.length-1]; room.last = { who:l.who, text:l.text }; room.updated = Date.now(); await saveRooms();
     clearInterval(thinkTimer); await showLines(lines);
   }catch(e){
-    clearInterval(thinkTimer); if (room !== ROOM) return; state = 'error';
+    clearInterval(thinkTimer); if (room !== ROOM) return; state = 'error'; if (contMode){ stopCont(true); toast('うまく続けられなかったので、ずっと話すのを止めました', true, 4000); }
     textEl.textContent = '（うまくお返事できませんでした……。タップでもう一度試します）'; showHint('retry');
     log('error', e.message, lastResp ? `HTTP ${lastResp.status}\n${lastResp.body}` : '');
   }
@@ -1257,7 +1268,7 @@ async function uraRoomFor(target, lineP){
 
 /* ====== トークを開く ====== */
 async function openRoom(id){
-  previewChar = null;
+  previewChar = null; stopCont(true);
   ROOM = ROOMS.find(r => r.id === id) || null; S.room = ROOM ? ROOM.id : null; saveS();
   HIST = [];
   let fresh = null;
@@ -1281,16 +1292,34 @@ async function openRoom(id){
    AIには「台詞ではなく状況・演出の指示」と伝える（ふつう・LINE参照はこのアプリのプロンプト、裏・会う場面はサーバー第43版のプロンプト） */
 const DIR = '【状況・指示】';
 const DIR_RULE = `- 相手の発言のうち「${DIR}」で始まるものは、相手の台詞ではなく、場面の状況の説明や「こうしてほしい」という演出の指示（ナレーション）。その状況になったものとして自然に反応し、指示があればそれに沿って振る舞う。指示があったことや「${DIR}」という言葉そのものには触れない。`;
-let dirMode = false;
+let dirMode = false, contPick = false;
 function setDir(on){
   dirMode = on; $('#dirBtn').classList.toggle('on', on); document.querySelector('.ibox').classList.toggle('dir', on);
   $('#msg').placeholder = on ? '状況や指示（例：急に雨が降ってきた／照れながら答えて）' : (ROOM ? `${ROOM.name}に話しかける…` : '話しかける…');
-  $('#send').textContent = on ? '状況を送る' : '送信';
+  drawSendBtn();
 }
+function drawSendBtn(){ $('#contBtn').classList.toggle('on', contPick); $('#send').textContent = (dirMode ? '状況を送る' : '送信') + (contPick ? '→ずっと' : ''); }
 $('#dirBtn').onclick = () => { setDir(!dirMode); $('#msg').focus(); };
-function openInput(){ setDir(false); $('#inputOv').classList.add('show'); const i = $('#msg'); i.value = ''; setTimeout(() => i.focus(), 30); }
-function closeInput(){ $('#inputOv').classList.remove('show'); $('#msg').blur(); }
-function doSend(){ const v = $('#msg').value.trim(); if (!v) return; const t = dirMode ? DIR + v : v; closeInput(); setDir(false); send(t); }
+$('#contBtn').onclick = () => { contPick = !contPick; drawSendBtn(); $('#msg').focus(); };
+function openInput(){ clearTimeout(contTimer); contPick = contMode; setDir(false); $('#inputOv').classList.add('show'); const i = $('#msg'); i.value = ''; setTimeout(() => i.focus(), 30); }
+function closeInput(){ $('#inputOv').classList.remove('show'); $('#msg').blur(); if (contMode && state === 'idle') contSchedule(1500); }
+function doSend(){
+  const v = $('#msg').value.trim(), go = contPick;
+  if (!v && !go) return;
+  const t = v ? (dirMode ? DIR + v : v) : null;
+  $('#inputOv').classList.remove('show'); $('#msg').blur(); setDir(false);
+  if (go) startCont(); else stopCont(true);
+  if (t) send(t); else contNext();   // 何も書かずに［→ずっと］なら、そのまま続けてもらう
+}
+/* ====== ずっと話す：止めるまで、キャラたちが自分たちで話し続ける（返事を見せ終わったら、次を頼む） ====== */
+let contMode = false, contTimer = 0;
+const CONT_TEXT = DIR + '相手（ユーザー）は何も言わずに見守っている。キャラクターたちは、そのまま自然に会話や場面を続ける。同じことのくり返しにならないよう、話題や場面を少しずつ進める。相手に返事を求めて待たない。';
+function startCont(){ if (!ROOM){ toast('先にトークを開いてください', true, 3000); return; } contMode = true; $('#contStop').classList.add('show'); log('info', 'ずっと話す：開始'); }
+function stopCont(quiet){ const was = contMode; contMode = false; contPick = false; clearTimeout(contTimer); $('#contStop').classList.remove('show'); if (was && !quiet){ toast('ずっと話すのを止めました', false, 2500); log('info', 'ずっと話す：停止'); } }
+function contSchedule(ms){ clearTimeout(contTimer); if (!contMode) return; contTimer = setTimeout(() => { if (contMode && state === 'idle' && !$('#inputOv').classList.contains('show') && !$('#menu').classList.contains('show')) contNext(); }, ms); }
+function contNext(){ if (!contMode || !ROOM || state === 'thinking') return; send(null, { cont:true }); }
+$('#contStop').onclick = (e) => { e.stopPropagation(); stopCont(); };
+document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'hidden' && contMode) stopCont(true); });   // 画面を消したら止める（料金のため）
 $('#send').onclick = doSend; $('#cancel').onclick = closeInput;
 $('#msg').addEventListener('keydown', e => { if (e.key === 'Enter' && !e.isComposing){ e.preventDefault(); doSend(); } });
 $('#inputOv').addEventListener('click', e => { if (e.target.id === 'inputOv') closeInput(); });
@@ -1320,7 +1349,7 @@ function showPanel(p){
   if (p === 'pBak') refreshBak();
   $('#panels').scrollTop = 0;
 }
-function openMenu(p){ $('#menu').classList.add('show'); showPanel(p || curPanel); }
+function openMenu(p){ stopCont(); $('#menu').classList.add('show'); showPanel(p || curPanel); }
 let menuDirty = false;
 $('#mClose').onclick = async () => { $('#menu').classList.remove('show'); if (menuDirty){ menuDirty = false; await openRoom(ROOM && ROOM.id); } else layout(); };
 document.querySelectorAll('#nav button[data-p]').forEach(b => b.onclick = () => showPanel(b.dataset.p));

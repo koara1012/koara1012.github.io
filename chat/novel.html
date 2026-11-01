@@ -68,6 +68,9 @@ html,body{margin:0;height:100%;background:#000;color:#fff;overflow:hidden;
 .ibox{position:absolute;top:calc(env(safe-area-inset-top) + 8px);
   left:calc(env(safe-area-inset-left) + 10px);right:calc(env(safe-area-inset-right) + 10px);
   display:flex;gap:8px;background:rgba(20,16,24,.92);padding:8px;border-radius:12px;box-shadow:0 0 0 1px #6e5a74}
+.ibox.dir{box-shadow:0 0 0 2px #e9a23b;background:rgba(40,30,12,.94)}
+.ibox.dir input{border-color:#e9a23b}
+#dirBtn.on{background:#e9a23b;border-color:#ffd38a;color:#2a1b05;font-weight:700}
 .ibox input{flex:1;min-width:0;font:16px var(--ff);padding:10px 12px;border-radius:8px;border:1px solid #6e5a74;background:#1a161d;color:#fff;-webkit-user-select:text;user-select:text}
 button.b{font:14px var(--ff);padding:8px 13px;border-radius:8px;border:1px solid #8a7290;background:#3b2f40;color:#fff;cursor:pointer;white-space:nowrap}
 button.b.p{background:#d86ad5;border-color:#f3b4f1}
@@ -148,6 +151,7 @@ body.rotmode #rotwrap{transform:var(--RT)}
 </div>
 
 <div id="inputOv"><div class="ibox">
+  <button class="b" id="dirBtn" title="会話ではなく、状況の説明や指示を送る">📝状況</button>
   <input id="msg" type="text" enterkeyhint="send" autocomplete="off" placeholder="話しかける…">
   <button class="b p" id="send">送信</button><button class="b" id="cancel">やめる</button>
 </div></div>
@@ -267,13 +271,16 @@ body.rotmode #rotwrap{transform:var(--RT)}
 <script>
 'use strict';
 /* ====== 版 ====== */
-const VERSION = { no: 15, at: '2026-10-31 20:30:00' };
+const VERSION = { no: 16, at: '2026-11-02 01:30:00' };
 const VERSION_TEXT = `${/\/lab\//.test(location.pathname) ? '試作・' : ''}統合 第${VERSION.no}回（${VERSION.at} 更新・akari.html 第6回がもと）`;
 
 /* ====== 改善ログ（他のAIへの引き継ぎ用）======
    改善のたびに「## 第〜回」を先頭側へ追記し、概要も最新に保つ */
 const DEV_LOG = `# 朱里ノベル 統合の試作（lab/novel.html） 改善ログ
 ※ 本番 akari.html 第6回をもとにした試作。保存先は本番と分けている（localStorage lab.settings / lab.logs、IndexedDB akariLab）。
+## 統合 第16回（2026-11-02 01:30:00）
+- 入力欄に［📝状況］：会話ではなく、ナレーター風に状況の説明や指示を送る（先頭に DIR＝【状況・指示】を付けて送る）。ふつう・LINE参照はこのアプリのプロンプトに DIR_RULE を足す。裏・会う場面はサーバー（第43版）のプロンプトに同じ決まりを足した。会話ログでは「📝 状況：」と出す。送ったあとは会話に戻る。
+
 ## 統合 第15回（2026-10-31 20:30:00）
 - 表トーク（会う場面）：LINE風で表のAIを止めているとき（サーバー第42版の omotePaused）は「お休み中」と出す。話したことは残り、再開後に返事。
 
@@ -866,7 +873,7 @@ function systemPrompt(ms){
   const extra = ex ? (ms.length > 1
     ? `\n\n# このトークの設定（全員共通。各キャラクターの設定と食い違うところは、このトークの中ではこちらを優先する。口調・一人称など食い違わないところは各キャラクターの設定のまま）\n${ex}`
     : `\n\n# このトークでの追加設定（キャラクター設定と食い違うところは、このトークの中ではこちらを優先する）\n${ex}`) : '';
-  return systemPromptBase(ms) + extra + (ROOM && ROOM.kind === 'ref' && REF_CTX ? '\n\n' + REF_CTX : '');
+  return systemPromptBase(ms) + '\n' + DIR_RULE + extra + (ROOM && ROOM.kind === 'ref' && REF_CTX ? '\n\n' + REF_CTX : '');
 }
 const promptOf = c => c.prompt || (ROOM && ROOM.kind === 'ref' && c.lineId && REF_PROMPT[c.lineId]) || '';   // LINE参照：ノベルのキャラ設定が空なら LINE風のキャラ設定を使う
 function systemPromptBase(ms){
@@ -1270,9 +1277,20 @@ async function openRoom(id){
 }
 
 /* ====== 入力欄 ====== */
-function openInput(){ $('#inputOv').classList.add('show'); const i = $('#msg'); i.value = ''; setTimeout(() => i.focus(), 30); }
+/* 「状況・指示」モード：会話ではなく、ナレーター風に状況の説明や「こうしてほしい」を送る。文の先頭に DIR を付けて送り、
+   AIには「台詞ではなく状況・演出の指示」と伝える（ふつう・LINE参照はこのアプリのプロンプト、裏・会う場面はサーバー第43版のプロンプト） */
+const DIR = '【状況・指示】';
+const DIR_RULE = `- 相手の発言のうち「${DIR}」で始まるものは、相手の台詞ではなく、場面の状況の説明や「こうしてほしい」という演出の指示（ナレーション）。その状況になったものとして自然に反応し、指示があればそれに沿って振る舞う。指示があったことや「${DIR}」という言葉そのものには触れない。`;
+let dirMode = false;
+function setDir(on){
+  dirMode = on; $('#dirBtn').classList.toggle('on', on); document.querySelector('.ibox').classList.toggle('dir', on);
+  $('#msg').placeholder = on ? '状況や指示（例：急に雨が降ってきた／照れながら答えて）' : (ROOM ? `${ROOM.name}に話しかける…` : '話しかける…');
+  $('#send').textContent = on ? '状況を送る' : '送信';
+}
+$('#dirBtn').onclick = () => { setDir(!dirMode); $('#msg').focus(); };
+function openInput(){ setDir(false); $('#inputOv').classList.add('show'); const i = $('#msg'); i.value = ''; setTimeout(() => i.focus(), 30); }
 function closeInput(){ $('#inputOv').classList.remove('show'); $('#msg').blur(); }
-function doSend(){ const v = $('#msg').value.trim(); if (!v) return; closeInput(); send(v); }
+function doSend(){ const v = $('#msg').value.trim(); if (!v) return; const t = dirMode ? DIR + v : v; closeInput(); setDir(false); send(t); }
 $('#send').onclick = doSend; $('#cancel').onclick = closeInput;
 $('#msg').addEventListener('keydown', e => { if (e.key === 'Enter' && !e.isComposing){ e.preventDefault(); doSend(); } });
 $('#inputOv').addEventListener('click', e => { if (e.target.id === 'inputOv') closeInput(); });
@@ -1523,7 +1541,7 @@ function renderLog(){
   const el = $('#logList');
   if (!HIST.length){ el.innerHTML = '<p class="note">まだ会話がありません</p>'; return; }
   el.innerHTML = HIST.map(h => h.role === 'user'
-    ? `<div class="u">${esc(S.userName)}：${esc(h.text)}</div>`
+    ? (String(h.text).startsWith(DIR) ? `<div class="u" style="color:#f0c27a">📝 状況：${esc(h.text.slice(DIR.length))}</div>` : `<div class="u">${esc(S.userName)}：${esc(h.text)}</div>`)
     : h.lines.map(l => `<div>${esc(((charById(l.who) || {}).name || '？').replace(/[\s　]/g,''))}：${esc(l.text)} <span class="f">[${esc(l.face)}]</span></div>`).join('')).join('');
   setTimeout(() => { const p = $('#panels'); p.scrollTop = p.scrollHeight; }, 0);
 }

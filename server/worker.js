@@ -14,7 +14,7 @@
 //    ・Cron トリガー  * * * * *  （毎分。実際に動くのは13分おき）
 // =====================================================================
 
-const VERSION = '第44版（2026-11-02 03:50:00 更新・ずっと話す）';
+const VERSION = '第45版（2026-11-02 14:40:00 更新・裏の返事を通信が切れても保存）';
 const DEFAULT_MODEL = 'gemini-flash-latest';
 const DEFAULT_GROK_MODEL = 'grok-4.7';                 // X（Twitter）の Grok と同じ最新世代
 const FALLBACK_GROK_MODEL = 'grok-4-fast-non-reasoning'; // 上が使えないときの予備
@@ -808,9 +808,9 @@ async function route(key, url, body, env, ctx) {
         if ((await getSettings(env)).uraPaused) return json({ messages: [], paused: true });
         const hist = await recent(env, key, 60);
         const last = hist[hist.length - 1];
-        if (body.cont && hist.length) return json({ messages: await groupReply(env, group, [...hist, contMsg()], key) }); // ずっと話す（ノベル画面）：メッセージは増やさず「続けて」と伝える
+        if (body.cont && hist.length) return json({ messages: await keep(ctx, groupReply(env, group, [...hist, contMsg()], key)) }); // ずっと話す（ノベル画面）：メッセージは増やさず「続けて」と伝える
         if (!(body.start && !hist.length) && (!last || last.sender !== 'me')) return json({ messages: [] }); // start：あらすじから物語を始める
-        return json({ messages: await groupReply(env, group, hist, key) });
+        return json({ messages: await keep(ctx, groupReply(env, group, hist, key)) });
       }
       const c = (await getOwner(env, base, world)).char;
       const hist = await recent(env, key, 60);
@@ -819,7 +819,7 @@ async function route(key, url, body, env, ctx) {
       const cont = world === 'ura' && body.cont && last; // ずっと話す（ノベル画面の裏）：ユーザーが黙っていても続ける
       if (!last || (last.sender !== 'me' && !cont && !(stamp && (STAMPS[stamp].cont || stamp === '😴')))) return json({ messages: [] });
       if (world === 'ura' && (await getSettings(env)).uraPaused) return json({ messages: [], paused: true }); // 裏は止めている（再開したら返す）
-      if (cont) return json({ messages: await generateAndStore(env, c, { mode: 'reply' }, [...hist, contMsg()], await getRead(env, key), world) });
+      if (cont) return json({ messages: await keep(ctx, generateAndStore(env, c, { mode: 'reply' }, [...hist, contMsg()], await getRead(env, key), world)) });
       if (world === 'omote' && (await getSettings(env)).omotePaused) return json({ messages: [], paused: true }); // 表は止めている（再開したら返す）
       // 表：その子が今していることによって、すぐ返す／あとで返す（あとで返す分はサーバーが毎分確認して送る）
       const d = { mode: 'reply' };
@@ -834,7 +834,7 @@ async function route(key, url, body, env, ctx) {
           d.late = t.pend;
         }
       }
-      const msgs = await generateAndStore(env, c, d, hist, await getRead(env, key), world);
+      const msgs = await (world === 'ura' ? keep(ctx, generateAndStore(env, c, d, hist, await getRead(env, key), world)) : generateAndStore(env, c, d, hist, await getRead(env, key), world));
       return json({ messages: msgs });
     }
 
@@ -1581,6 +1581,8 @@ async function callAIObj(env, world, system, contents, schema, schemaName, opts)
 }
 
 // ---------------------------------------------------------------- 使うAIを選んで呼ぶ
+// 返事を作っているあいだにアプリとの通信が切れても（画面を閉じた・電波が切れた）、最後まで作って保存する（あとでアプリが読み直せる）
+function keep(ctx, p) { try { if (ctx && ctx.waitUntil) ctx.waitUntil(p.catch(() => {})); } catch (_) {} return p; }
 const OMOTE_PAUSED_MSG = '表のAIは止めています（LINE風アプリで再開できます）';
 // ノベル画面の「ずっと話す」：保存はしない、AIに渡すだけのユーザーの発言（【状況・指示】なので台詞ではないと伝わる）
 const CONT_TEXT = '【状況・指示】ユーザーは何も言わずに見守っている。登場人物たちは、そのまま自然に会話や場面を続ける。同じことのくり返しにならないよう、話題や場面を少しずつ進める。ユーザーに返事を求めて待たない。';

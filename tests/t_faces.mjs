@@ -82,4 +82,22 @@ answer.msgs = ['ふつう'];
 await call('POST', '/send', { charId: a.id + '#ura', text: 'ね' });
 await call('POST', '/reply', { charId: a.id + '#ura' });
 ok(!sys().includes('《表情名》'), 'cleared faces → no rule');
+// 表情名の番号を無視（第46版）
+await call('POST', '/faces', { charId: a.id, faces: [{ name: '1通常' }, { name: '5おどおど', desc: '不安' }, { name: '11得意気' }] });
+answer.msgs = ['《おどおど》あ、あの……', '《得意気》ふふ'];
+await call('POST', '/send', { charId: a.id + '#ura', text: 'どう？' });
+let rr = await call('POST', '/reply', { charId: a.id + '#ura' });
+ok(rr.messages[0].face === '5おどおど' && rr.messages[1].face === '11得意気' && rr.messages[0].text === 'あ、あの……', 'face matched ignoring number: ' + JSON.stringify(rr.messages.map(m => m.face)));
+// AIが断ったとき（第46版）：「……」だけ・決まり文句は 422 で知らせ、保存しない
+const charsBefore = DB.raw.prepare("SELECT count(*) n FROM messages WHERE char_id=? AND sender<>'me'").get(a.id + '#ura').n;
+for (const msgs of [['……'], ['＊……', '……'], ["I'm sorry, but I can't help with that."], ['申し訳ありませんが、この内容にはお応えできません。']]) {
+  answer.msgs = msgs;
+  await call('POST', '/send', { charId: a.id + '#ura', text: 'ねえ' });
+  let er = ''; try { await call('POST', '/reply', { charId: a.id + '#ura' }); } catch (x) { er = x.message; }
+  ok(er.includes('答えられないと返されました'), 'refusal detected: ' + JSON.stringify(msgs));
+}
+ok(DB.raw.prepare("SELECT count(*) n FROM messages WHERE char_id=? AND sender<>'me'").get(a.id + '#ura').n === charsBefore, 'refused replies not stored');
+answer.msgs = ['……そう、ですね。私なんかで、よければ'];
+await call('POST', '/send', { charId: a.id + '#ura', text: 'いっしょに行こう' });
+ok((await call('POST', '/reply', { charId: a.id + '#ura' })).messages.length > 0, 'normal reply starting with …… is fine');
 console.log(fails ? fails + ' FAILED' : 'ALL PASSED');

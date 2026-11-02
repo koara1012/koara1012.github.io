@@ -14,7 +14,7 @@
 //    ・Cron トリガー  * * * * *  （毎分。実際に動くのは13分おき）
 // =====================================================================
 
-const VERSION = '第45版（2026-11-02 14:40:00 更新・裏の返事を通信が切れても保存）';
+const VERSION = '第46版（2026-11-02 15:10:00 更新・AIが断ったときに知らせる・表情名の番号を無視）';
 const DEFAULT_MODEL = 'gemini-flash-latest';
 const DEFAULT_GROK_MODEL = 'grok-4.7';                 // X（Twitter）の Grok と同じ最新世代
 const FALLBACK_GROK_MODEL = 'grok-4-fast-non-reasoning'; // 上が使えないときの予備
@@ -1406,13 +1406,15 @@ function faceRuleSingle(faces) {
 - ナレーション（＊）の吹き出しには《》を付けない。《》はセリフの言葉には含めない。
 ` : '';
 }
-// 先頭の《表情名》を外す。候補にある名前なら face として返す
+// 表情名の先頭の番号（「5おどおど」「11得意気」「3_照れ」など）を外して比べる。AIが番号を省いて答えても合うように
+const faceCore = (n) => String(n || '').trim().replace(/^[0-9０-９]+[\s._\-・:：、)）]*/, '').trim() || String(n || '').trim();
+// 先頭の《表情名》を外す。候補にある名前なら face として返す（番号の有無は気にしない）
 function takeFace(text, faces) {
   text = faces ? String(text).replace(/^(\s*「)\s*(《[^》\n]{1,20}》)/, '$2$1') : text; // 「《照れ》…」→《照れ》「…」
   const m = faces && String(text).match(/^\s*《([^》\n]{1,20})》\s*/);
   if (!m) return { text, face: null };
-  const name = m[1].trim();
-  return { text: String(text).slice(m[0].length), face: faces.some((f) => f.name === name) ? name : null };
+  const name = m[1].trim(), hit = faces.find((f) => f.name === name) || faces.find((f) => faceCore(f.name) === faceCore(name));
+  return { text: String(text).slice(m[0].length), face: hit ? hit.name : null };
 }
 
 function buildUraSystem(c, tlInfo = '', faceRule = '') {
@@ -1471,6 +1473,18 @@ function grokModelFor(env, st) {
 }
 
 // AIの返答テキスト（JSON）→ 吹き出しの配列
+// ---- AIが断ったとき（安全のための判断）。黙って「……」だけ返したり、空で返したりするので、はっきり知らせる
+const REFUSED_MSG = 'この内容には答えられないと返されました（AIの判断）';
+class AiRefused extends HttpError { constructor(detail) { super(422, REFUSED_MSG + (detail ? `：${detail}` : '')); this.refused = true; } }
+const REFUSE_RE = /^(i'?m sorry|i am sorry|sorry,? (but )?i|i can'?t|i cannot|i won'?t|i'?m (not able|unable)|as an ai|申し訳(あり|ござい)ませんが[、,]?\s*(この|その|ご)?(内容|リクエスト|依頼|ご依頼|質問|会話)|(この|その)(内容|リクエスト|ご依頼)(には|に)(お応え|お答え|対応)(でき|いたしかね))/i;
+// 返事が「……」だけ、または断りの決まり文句なら、断ったとみなす
+function looksRefused(texts) {
+  const t = (texts || []).map((x) => String(x).replace(/^[＊*]+\s*/, '').trim()).filter(Boolean);
+  if (!t.length) return true;
+  if (t.every((x) => /^[\s…‥・.。、，,ー―\-「」『』（）()]*$/.test(x))) return true;
+  return t.length <= 2 && REFUSE_RE.test(t[0]);
+}
+
 function parseMessages(text, maxSplit, label) {
   let arr;
   try { arr = JSON.parse(text).messages; } catch (_) {
@@ -1536,6 +1550,7 @@ async function grokText(env, model, system, contents, schema, schemaName, opts) 
   await aiAlertOk(env, 'grok');
   const ch = data.choices && data.choices[0];
   const text = ch && ch.message && typeof ch.message.content === 'string' ? ch.message.content : '';
+  if ((ch && ch.message && ch.message.refusal) || (ch && ch.finish_reason === 'content_filter')) throw new AiRefused('Grok');
   const u = data.usage || {};
   const reasoning = nz(u.completion_tokens_details && u.completion_tokens_details.reasoning_tokens, 0);
   // 考えた分（reasoning）も出力として請求される。completion_tokens に含まれていなければ足す
@@ -1637,6 +1652,7 @@ async function geminiText(env, system, contents, responseSchema, world = 'omote'
   const text = parts.filter((p) => !p.thought && typeof p.text === 'string').map((p) => p.text).join('');
   const u = data.usageMetadata || {};
   await recordCost(env, world, 'gemini', data.modelVersion || model, nz(u.promptTokenCount, 0), nz(u.cachedContentTokenCount, 0), nz(u.candidatesTokenCount, 0) + nz(u.thoughtsTokenCount, 0)).catch(() => {});
+  if (!text && ((data.promptFeedback && data.promptFeedback.blockReason) || (cand && /SAFETY|PROHIBITED|BLOCKLIST|SPII|IMAGE_SAFETY/.test(cand.finishReason || '')))) throw new AiRefused('Gemini');
   if (!text) throw new Error('Geminiの返答が空でした（' + ((cand && cand.finishReason) || (data.promptFeedback && data.promptFeedback.blockReason) || '理由不明') + '）');
   return text;
 }
@@ -1792,6 +1808,7 @@ async function generateAndStore(env, c, d, hist, lastRead, world = 'omote') {
     if (!items.length) return [];
   }
   if (!items.length) throw new Error('返答が空でした');
+  if (ura && looksRefused(items.map((x) => x.text))) throw new AiRefused(); // 裏：断った（「……」だけ・断りの決まり文句。保存しない）。表のトークは、黙る返事もあり得るので API の断りだけを見る
   // 写真（表）：料理や景色の写真、送られた写真の加工。人物は写さない
   if (rich && (rich.photo || (rich.edit && rich.srcImage))) {
     try {
@@ -1912,6 +1929,7 @@ async function groupReply(env, g, hist, key) {
   }
   const out = items.slice(0, Math.min(g.maxSplit, 12) + 2);
   if (!out.length) throw new Error('返答が空でした');
+  if (looksRefused(out.map((x) => x.text))) throw new AiRefused(); // 断った（保存しない）
   const t0 = Date.now();
   const res = await env.DB.batch(out.map((x, i) => env.DB.prepare('INSERT INTO messages (char_id,sender,text,at,speaker,face) VALUES (?,?,?,?,?,?)').bind(key, x.sender, x.text, t0 + i, x.speaker || null, x.face || null)));
   return out.map((x, i) => ({ id: res[i].meta.last_row_id, charId: key, sender: x.sender, text: x.text, at: t0 + i, ...(x.speaker ? { speaker: x.speaker } : {}), ...(x.face ? { face: x.face } : {}) }));
@@ -2068,6 +2086,7 @@ async function meetReply(env, c, start, cont = false) {
     if (text) out.push({ who: 'char', text, ...(f.face ? { face: f.face } : {}) });
   }
   if (!out.length) throw new Error('返答が空でした');
+  if (looksRefused(out.map((x) => x.text))) throw new AiRefused(); // 断った（保存しない）
   const now2 = await kvGet(env, 'meetlog:' + c.id, []);
   await kvSet(env, 'meetlog:' + c.id, [...now2, ...out].slice(-MEET_LOG_MAX));
   return out;

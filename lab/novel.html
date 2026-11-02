@@ -276,13 +276,17 @@ body.rotmode #rotwrap{transform:var(--RT)}
 <script>
 'use strict';
 /* ====== 版 ====== */
-const VERSION = { no: 18, at: '2026-11-02 14:40:00' };
+const VERSION = { no: 19, at: '2026-11-02 15:10:00' };
 const VERSION_TEXT = `${/\/lab\//.test(location.pathname) ? '試作・' : ''}統合 第${VERSION.no}回（${VERSION.at} 更新・akari.html 第6回がもと）`;
 
 /* ====== 改善ログ（他のAIへの引き継ぎ用）======
    改善のたびに「## 第〜回」を先頭側へ追記し、概要も最新に保つ */
 const DEV_LOG = `# 朱里ノベル 統合の試作（lab/novel.html） 改善ログ
 ※ 本番 akari.html 第6回をもとにした試作。保存先は本番と分けている（localStorage lab.settings / lab.logs、IndexedDB akariLab）。
+## 統合 第19回（2026-11-02 15:10:00）
+- AIが断ったとき（API の断り：Grok の refusal・content_filter、Gemini の blockReason・SAFETY 等／返事が「……」だけ・断りの決まり文句）は、「（この内容には答えられないと返されました。…）」と画面に出す（showRefused）。会話には残さない。裏・会う場面はサーバー（第46版）が 422 で知らせる（裏は保存しない）。ずっと話すも止まる。
+- 表情名の番号を無視して照らし合わせる（faceCore・resolveFace）。「5おどおど」に AI が「おどおど」と答えても、その表情になる。サーバー第46版の《表情》も同じ。
+
 ## 統合 第18回（2026-11-02 14:40:00）
 - 裏トークで「何も来ない」ことがある件の対策（ユーザーの報告）：①サーバーへの問い合わせに2分半の時間切れ（前は無期限で「…」のまま）②端末のAIで表情を選ぶのは12秒まで（遅いと返事が出るまで止まっていた。ナレーションの多い返事は表情の印が付かないことがあり、そのとき端末のAIを呼ぶ）③返事が空・エラーのときは、サーバーに保存済みの返事がないか読み直して見せる（uraRecover。画面を閉じて戻ったときも）。サーバー第45版は、通信が切れても裏の返事を最後まで作って保存する（waitUntil）。
 
@@ -781,7 +785,14 @@ function renderChar(st){
   setImg(st.eye2, fade ? f.eye.close : null); st.eye2.style.opacity = fade ? Math.min(.95, Math.max(.05, S.blinkAlpha/100)) : '';
   setImg(st.mouth, f && f.mouth ? (f.mouth[st.ms] || null) : null);
 }
-function setFace(st, name){ if (!st) return; st.face = faceNames(st.c).includes(name) ? name : defaultFace(st.c); st.es = 'open'; st.ms = 'close'; renderChar(st); }
+// 表情名の先頭の番号（「5おどおど」「11得意気」など）を外して比べる。AIが番号を省いて答えても、その表情にする
+const faceCore = n => String(n || '').trim().replace(/^[0-9０-９]+[\s._\-・:：、)）]*/, '').trim() || String(n || '').trim();
+function resolveFace(c, name, kind){   // → 使える表情の正しい名前（無ければ null）
+  if (!c || !name) return null;
+  const list = kind ? usableFaces(c, kind) : faceNames(c);
+  return list.find(n => n === name) || list.find(n => faceCore(n) === faceCore(name)) || null;
+}
+function setFace(st, name){ if (!st) return; st.face = resolveFace(st.c, name) || defaultFace(st.c); st.es = 'open'; st.ms = 'close'; renderChar(st); }
 async function blinkOnce(st, slow){
   const f = faceObj(st.c, st.face); if (!f || !f.eye || !f.eye.close || st.es !== 'open' || st.dead) return;
   const k = slow ? 10 : 1, h = (+S.blinkHalfMs || 45)*k, c = (+S.blinkCloseMs || 90)*k;
@@ -963,6 +974,23 @@ async function postJSON(url, headers, bodyStr, ms = 90000){
   }
   try{ return JSON.parse(txt); }catch(e){ throw new Error('返事の形式が読めませんでした（JSONではない）'); }
 }
+/* ====== AIが断ったとき：「……」のまま黙らず、「この内容には答えられないと返されました」とはっきり出す ====== */
+const REFUSED_TEXT = 'この内容には答えられないと返されました';
+const REFUSE_RE = /^(i'?m sorry|i am sorry|sorry,? (but )?i|i can'?t|i cannot|i won'?t|i'?m (not able|unable)|as an ai|申し訳(あり|ござい)ませんが[、,]?\s*(この|その|ご)?(内容|リクエスト|依頼|ご依頼|質問|会話)|(この|その)(内容|リクエスト|ご依頼)(には|に)(お応え|お答え|対応)(でき|いたしかね))/i;
+function refusedErr(by){ const e = new Error(REFUSED_TEXT + (by ? `（${by}）` : '')); e.refused = true; return e; }
+const isRefused = e => !!(e && (e.refused || /答えられないと返されました|^LINE風サーバー 422/.test(e.message || '')));
+function looksRefused(lines){   // 台詞が「……」だけ・断りの決まり文句
+  const t = (lines || []).map(l => String(l.text || '').trim()).filter(Boolean);
+  if (!t.length) return true;
+  if (t.every(x => /^[\s…‥・.。、，,ー―\-「」『』（）()]*$/.test(x))) return true;
+  return t.length <= 2 && REFUSE_RE.test(t[0]);
+}
+function showRefused(room, e){
+  clearInterval(thinkTimer); if (room !== ROOM) return;
+  stopCont(true); typeTok++; speaking = false; state = 'idle'; showName('');
+  textEl.textContent = `（${REFUSED_TEXT}。言い方や状況を変えて、もう一度話しかけてみてください）`; showHint('end');
+  log('warn', 'AIが断りました：' + ((e && e.message) || REFUSED_TEXT), lastResp ? `HTTP ${lastResp.status}\n${lastResp.body}` : '');
+}
 async function callGemini(){
   if (!S.geminiKey) throw new Error('GeminiのAPIキーが未設定です。〈 → 設定 で入力してください');
   const messages = buildMessages(), model = S.geminiModel || 'gemini-flash-latest';
@@ -981,6 +1009,7 @@ async function callGemini(){
   const j = await postJSON(`https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(model)}:generateContent`, { 'x-goog-api-key':S.geminiKey }, bodyStr);
   const cand = j.candidates && j.candidates[0];
   const c = cand && cand.content && (cand.content.parts || []).filter(x => !x.thought).map(x => x.text || '').join('');
+  if (!c && ((j.promptFeedback && j.promptFeedback.blockReason) || (cand && /SAFETY|PROHIBITED|BLOCKLIST|SPII/.test(cand.finishReason || '')))) throw refusedErr('Gemini');
   if (!c) throw new Error('返事が空でした' + (cand && cand.finishReason ? `（終了理由：${cand.finishReason}）` : (j.promptFeedback && j.promptFeedback.blockReason ? `（ブロック：${j.promptFeedback.blockReason}）` : '')));
   if (j.usageMetadata) log('info', `送受信OK（Gemini）：入力${j.usageMetadata.promptTokenCount||'?'}／出力${j.usageMetadata.candidatesTokenCount||'?'}トークン`);
   return c;
@@ -996,6 +1025,8 @@ async function callGrok(){
   const j = await postJSON(S.endpoint, { 'Authorization':'Bearer ' + S.apiKey }, bodyStr);
   let c = j.choices && j.choices[0] && j.choices[0].message && j.choices[0].message.content;
   if (Array.isArray(c)) c = c.map(x => x.text || '').join('');
+  const ch0 = j.choices && j.choices[0];
+  if ((ch0 && ch0.message && ch0.message.refusal) || (ch0 && ch0.finish_reason === 'content_filter')) throw refusedErr('Grok');
   if (!c) throw new Error('返事が空でした' + (j.choices && j.choices[0] && j.choices[0].finish_reason ? `（終了理由：${j.choices[0].finish_reason}）` : ''));
   if (j.usage) log('info', `送受信OK（Grok）：入力${j.usage.prompt_tokens||'?'}／出力${j.usage.completion_tokens||'?'}トークン`);
   return c;
@@ -1019,7 +1050,8 @@ function parseReply(c){
   return lines.map(l => {
     const who = ms.length === 1 ? ms[0].id : matchWho(l.who, ms, prev); prev = who;
     const ch = charById(who); let f = String(l.face || '').trim();
-    if (!usableFaces(ch, roomKind(ROOM)).includes(f)){ if (l.face) log('info', `${ch.name}の${faceNames(ch).includes(f) ? 'このトークで使わない' : '知らない'}表情「${f}」→ ${defaultFace(ch)}`); f = defaultFace(ch); }
+    const rf = resolveFace(ch, f, roomKind(ROOM));
+    if (rf) f = rf; else { if (l.face) log('info', `${ch.name}の${resolveFace(ch, f) ? 'このトークで使わない' : '知らない'}表情「${f}」→ ${defaultFace(ch)}`); f = defaultFace(ch); }
     return { who, face:f, text:String(l.text || '').replace(/^[（(].*?[)）]\s*/,'').trim() };
   }).filter(l => l.text);
 }
@@ -1042,11 +1074,13 @@ async function send(text, opt = {}){
     const c = await callAI().finally(() => { CONT_EXTRA = ''; });
     if (room !== ROOM) return;
     const lines = parseReply(c);
+    if (looksRefused(lines)) throw refusedErr();
     if (!lines.length) throw new Error('返事に台詞が入っていませんでした');
     HIST.push({ role:'chars', lines, t:Date.now() }); await saveHist();
     const l = lines[lines.length-1]; room.last = { who:l.who, text:l.text }; room.updated = Date.now(); await saveRooms();
     clearInterval(thinkTimer); await showLines(lines);
   }catch(e){
+    if (isRefused(e)){ showRefused(room, e); return; }   // AIが断った：黙らず、はっきり知らせる
     clearInterval(thinkTimer); if (room !== ROOM) return; state = 'error'; if (contMode){ stopCont(true); toast('うまく続けられなかったので、ずっと話すのを止めました', true, 4000); }
     textEl.textContent = '（うまくお返事できませんでした……。タップでもう一度試します）'; showHint('retry');
     log('error', e.message, lastResp ? `HTTP ${lastResp.status}\n${lastResp.body}` : '');
@@ -1090,9 +1124,9 @@ function uraToHist(msgs, room){   // サーバーのメッセージ → ノベ�
     if (m.sender === 'me'){ out.push({ role:'user', text, t:m.at, sid:m.id }); continue; }
     const who = m.sender === 'narr' ? '' : (m.speaker ? ((novelOfLine(m.speaker) || {}).id || single) : single);
     const ch = who ? charById(who) : null;
-    const ok = n => n && ch && usableFaces(ch, 'ura').includes(n);
+    const ok = n => n && ch && resolveFace(ch, n, 'ura');
     const srvFace = ok(m.face);   // サーバーが返事と一緒に選んだ表情（第38版〜）
-    const line = { who, face: ch ? (srvFace ? m.face : ok(uraFaceCache[m.id]) ? uraFaceCache[m.id] : defaultFace(ch)) : '', text, sid:m.id, ...(srvFace || m.face ? { srvFace:true } : {}) };
+    const line = { who, face: ch ? (srvFace || ok(uraFaceCache[m.id]) || defaultFace(ch)) : '', text, sid:m.id, ...(srvFace || m.face ? { srvFace:true } : {}) };
     const last = out[out.length-1];
     if (last && last.role === 'chars') last.lines.push(line); else out.push({ role:'chars', lines:[line], t:m.at });
   }
@@ -1117,7 +1151,7 @@ async function pickFaces(lines){   // 裏の返事に表情を付ける（端末
     }
     const a = String(txt).indexOf('{'), b = String(txt).lastIndexOf('}');
     const faces = JSON.parse(String(txt).slice(a, b+1)).faces || [];
-    need.forEach((l,i) => { const c = charById(l.who); if (usableFaces(c, 'ura').includes(faces[i])){ l.face = faces[i]; if (l.sid) uraFaceCache[l.sid] = faces[i]; } });
+    need.forEach((l,i) => { const c = charById(l.who), rf = resolveFace(c, faces[i], 'ura'); if (rf){ l.face = rf; if (l.sid) uraFaceCache[l.sid] = rf; } });
     try{ await idb.set('uraFaces', uraFaceCache); }catch(e){}
   }catch(e){ log('warn', '裏トークの表情を選べませんでした（通常の顔で表示）：' + e.message); }
 }
@@ -1162,6 +1196,7 @@ async function sendUra(text, cont){
     const l = lines[lines.length-1]; room.last = { who:l.who, text:l.text }; room.updated = Date.now(); await saveRooms();
     clearInterval(thinkTimer); await showLines(lines);
   }catch(e){
+    if (isRefused(e)){ showRefused(room, e); return; }   // AIが断った：黙らず、はっきり知らせる
     if (room === ROOM && !/お休み中|paused/.test(e.message)){   // 返事はサーバーに届いているかもしれない
       const got = await uraRecover(room, seen);
       if (got && got.length && room === ROOM){ HIST.push({ role:'chars', lines:got, t:Date.now() }); const l = got[got.length-1]; room.last = { who:l.who, text:l.text }; room.updated = Date.now(); await saveRooms(); clearInterval(thinkTimer); await showLines(got); return; }
@@ -1183,7 +1218,7 @@ function meetToHist(log, room){
   const out = []; const who0 = room.members[0]; const ch = charById(who0);
   for (const m of log){
     if (m.who === 'me'){ out.push({ role:'user', text:m.text, t:0 }); continue; }
-    const line = m.who === 'narr' ? { who:'', face:'', text:m.text } : { who:who0, face: ch && m.face && usableFaces(ch, 'omote').includes(m.face) ? m.face : (ch ? defaultFace(ch) : ''), text:m.text };
+    const line = m.who === 'narr' ? { who:'', face:'', text:m.text } : { who:who0, face: ch ? (resolveFace(ch, m.face, 'omote') || defaultFace(ch)) : '', text:m.text };
     const last = out[out.length-1];
     if (last && last.role === 'chars') last.lines.push(line); else out.push({ role:'chars', lines:[line], t:0 });
   }
@@ -1213,6 +1248,7 @@ async function sendMeet(text, cont){
     const l = lines[lines.length-1]; room.last = { who:l.who, text:l.text }; room.updated = Date.now(); await saveRooms();
     clearInterval(thinkTimer); await showLines(lines);
   }catch(e){
+    if (isRefused(e)){ showRefused(room, e); return; }   // AIが断った：黙らず、はっきり知らせる
     clearInterval(thinkTimer); if (room !== ROOM) return; state = 'error'; if (contMode){ stopCont(true); toast('うまく続けられなかったので、ずっと話すのを止めました', true, 4000); }
     textEl.textContent = '（うまくお返事できませんでした……。タップでもう一度試します）'; showHint('retry');
     log('error', e.message, lastResp ? `HTTP ${lastResp.status}\n${lastResp.body}` : '');

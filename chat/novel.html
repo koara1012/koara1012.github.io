@@ -276,13 +276,16 @@ body.rotmode #rotwrap{transform:var(--RT)}
 <script>
 'use strict';
 /* ====== 版 ====== */
-const VERSION = { no: 17, at: '2026-11-02 03:50:00' };
+const VERSION = { no: 18, at: '2026-11-02 14:40:00' };
 const VERSION_TEXT = `${/\/lab\//.test(location.pathname) ? '試作・' : ''}統合 第${VERSION.no}回（${VERSION.at} 更新・akari.html 第6回がもと）`;
 
 /* ====== 改善ログ（他のAIへの引き継ぎ用）======
    改善のたびに「## 第〜回」を先頭側へ追記し、概要も最新に保つ */
 const DEV_LOG = `# 朱里ノベル 統合の試作（lab/novel.html） 改善ログ
 ※ 本番 akari.html 第6回をもとにした試作。保存先は本番と分けている（localStorage lab.settings / lab.logs、IndexedDB akariLab）。
+## 統合 第18回（2026-11-02 14:40:00）
+- 裏トークで「何も来ない」ことがある件の対策（ユーザーの報告）：①サーバーへの問い合わせに2分半の時間切れ（前は無期限で「…」のまま）②端末のAIで表情を選ぶのは12秒まで（遅いと返事が出るまで止まっていた。ナレーションの多い返事は表情の印が付かないことがあり、そのとき端末のAIを呼ぶ）③返事が空・エラーのときは、サーバーに保存済みの返事がないか読み直して見せる（uraRecover。画面を閉じて戻ったときも）。サーバー第45版は、通信が切れても裏の返事を最後まで作って保存する（waitUntil）。
+
 ## 統合 第17回（2026-11-02 03:50:00）
 - ずっと話す：入力欄の［🔁ずっと］をオンにして送ると（何も書かなくてもよい・［📝状況］と一緒でもよい）、止めるまでキャラたちが自分たちで話し続ける。返事を見せ終わると、ページはオートで送り、少し待って次を頼む（contMode・contNext）。ふつう・LINE参照は CONT_TEXT をAIにだけ渡す（会話ログに残さない）。裏はサーバー（第44版）の /reply {cont:true}、会う場面は /meet/say {cont:true}（どちらもユーザーのメッセージは増えない）。画面上の［■ 止める］・メニューを開く・トークを変える・画面を消す・エラー・お休み中で止まる。入力欄を開いているあいだは待ち、送ったら続く。
 
@@ -945,11 +948,11 @@ function hintFor(st){
 const provOf = r => (r && r.ai) || S.aiProvider || 'grok';
 const provName = p => p === 'gemini' ? 'Gemini' : 'Grok';
 function callAI(){ return provOf(ROOM) === 'gemini' ? callGemini() : callGrok(); }
-async function postJSON(url, headers, bodyStr){
-  const ctrl = new AbortController(), to = setTimeout(() => ctrl.abort(), 90000);
+async function postJSON(url, headers, bodyStr, ms = 90000){
+  const ctrl = new AbortController(), to = setTimeout(() => ctrl.abort(), ms);
   let res;
   try{ res = await fetch(url, { method:'POST', headers:Object.assign({ 'Content-Type':'application/json' }, headers), body:bodyStr, signal:ctrl.signal }); }
-  catch(e){ throw new Error(e.name === 'AbortError' ? '90秒待っても返事が来ませんでした（タイムアウト）'
+  catch(e){ throw new Error(e.name === 'AbortError' ? `${Math.round(ms / 1000)}秒待っても返事が来ませんでした（タイムアウト）`
       : `通信できませんでした（${e.message}）。電波、URL、またはブラウザからの直接接続（CORS）が拒否されている可能性`); }
   finally{ clearTimeout(to); }
   const txt = await res.text();
@@ -1055,8 +1058,10 @@ let LINE = { chars:[], groups:[], ok:false, msgs:null };
 async function srv(method, path, body){
   if (!S.srvUrl) throw new Error('設定でLINE風アプリのサーバーURLを入れてください');
   let r;
-  try{ r = await fetch(S.srvUrl.replace(/\/+$/,'') + path, { method, headers:{ 'Content-Type':'application/json', 'X-App-Token':S.srvToken || '' }, body: body ? JSON.stringify(body) : undefined }); }
-  catch(e){ throw new Error('LINE風アプリのサーバーにつながりません（URLや電波を確認）：' + e.message); }
+  const ctrl = new AbortController(), to = setTimeout(() => ctrl.abort(), 150000);   // 長い返事でも2分半まで待つ
+  try{ r = await fetch(S.srvUrl.replace(/\/+$/,'') + path, { method, headers:{ 'Content-Type':'application/json', 'X-App-Token':S.srvToken || '' }, body: body ? JSON.stringify(body) : undefined, signal:ctrl.signal }); }
+  catch(e){ throw new Error(e.name === 'AbortError' ? 'LINE風アプリのサーバーから2分半たっても返事が来ませんでした' : 'LINE風アプリのサーバーにつながりません（URLや電波を確認）：' + e.message); }
+  finally{ clearTimeout(to); }
   const t = await r.text(); lastResp = { status:r.status, body:t.slice(0,1500) };
   let j = null; try{ j = JSON.parse(t); }catch(e){}
   if (!r.ok) throw new Error(`LINE風サーバー ${r.status}：${(j && (j.error || j.message)) || t.slice(0,200)}${r.status === 401 || r.status === 403 ? '（合言葉が違う可能性）' : ''}`);
@@ -1104,10 +1109,10 @@ async function pickFaces(lines){   // 裏の返事に表情を付ける（端末
     let txt;
     if (prov === 'gemini'){
       const j = await postJSON(`https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(S.geminiModel || 'gemini-flash-latest')}:generateContent`, { 'x-goog-api-key':S.geminiKey },
-        JSON.stringify({ systemInstruction:{ parts:[{ text:sys }] }, contents:[{ role:'user', parts:[{ text:list }] }], generationConfig:{ temperature:0.2, responseMimeType:'application/json' } }));
+        JSON.stringify({ systemInstruction:{ parts:[{ text:sys }] }, contents:[{ role:'user', parts:[{ text:list }] }], generationConfig:{ temperature:0.2, responseMimeType:'application/json' } }), 12000);   // 表情えらびは12秒まで（遅ければ通常の顔で出す）
       txt = ((j.candidates || [])[0] || {}).content; txt = txt ? (txt.parts || []).filter(x => !x.thought).map(x => x.text || '').join('') : '';
     } else {
-      const j = await postJSON(S.endpoint, { 'Authorization':'Bearer ' + S.apiKey }, JSON.stringify({ model:S.model, temperature:0.2, messages:[{ role:'system', content:sys }, { role:'user', content:list }] }));
+      const j = await postJSON(S.endpoint, { 'Authorization':'Bearer ' + S.apiKey }, JSON.stringify({ model:S.model, temperature:0.2, messages:[{ role:'system', content:sys }, { role:'user', content:list }] }), 12000);
       txt = j.choices && j.choices[0] && j.choices[0].message && j.choices[0].message.content || '';
     }
     const a = String(txt).indexOf('{'), b = String(txt).lastIndexOf('}');
@@ -1124,9 +1129,23 @@ async function openUra(room){
     const l = msgs.filter(m => m.sender !== 'me').pop(); if (l){ room.last = { who: l.sender === 'narr' ? '' : room.members[0], text:l.text || '' }; room.updated = l.at; saveRooms(); }
   }catch(e){ HIST = []; log('error', '裏トークを読み込めませんでした：' + e.message); }
 }
+// 裏：返事がサーバーには保存されたのに、画面に届かなかったとき（通信が切れた・画面を閉じた・時間切れなど）、サーバーから読み直して見せる
+const maxSid = () => HIST.reduce((m, h) => Math.max(m, h.sid || 0, ...(h.lines || []).map(l => l.sid || 0)), 0);
+async function uraRecover(room, afterId){
+  try{
+    await loadLine(true);
+    const msgs = (LINE.msgs || []).filter(m => m.charId === room.target && m.id > afterId && !m.retracted).sort((a, b) => a.id - b.id);
+    const lastMe = msgs.map(m => m.sender).lastIndexOf('me');
+    const fresh = msgs.slice(lastMe + 1).filter(m => m.sender !== 'me');
+    if (!fresh.length) return null;
+    log('info', `裏：サーバーに届いていた返事を読み直しました（${fresh.length}件）`);
+    return uraToHist(fresh, room).filter(x => x.role === 'chars').flatMap(x => x.lines);
+  }catch(e){ return null; }
+}
 async function sendUra(text, cont){
   const room = ROOM;
   if (text){ HIST.push({ role:'user', text, t:Date.now() }); }
+  const seen = maxSid();
   startThinking();
   try{
     const out = text || (cont ? null : room._pending);
@@ -1135,18 +1154,29 @@ async function sendUra(text, cont){
     if (room !== ROOM) return;
     if (r.paused){ stopCont(true); clearInterval(thinkTimer); state = 'idle'; showName(''); textEl.textContent = '（裏は今お休み中です。LINE風アプリの設定で再開できます）'; showHint('end'); return; }
     const msgs = r.messages || [];
-    if (!msgs.length) throw new Error('返事がありませんでした');
-    const h = uraToHist(msgs, room); const lines = h.filter(x => x.role === 'chars').flatMap(x => x.lines);
+    let lines = msgs.length ? uraToHist(msgs, room).filter(x => x.role === 'chars').flatMap(x => x.lines) : await uraRecover(room, seen);   // 返事が空なら、もう届いているか確かめる
+    if (!lines || !lines.length) throw new Error('返事がありませんでした');
+    if (room !== ROOM) return;
     await pickFaces(lines);
     HIST.push({ role:'chars', lines, t:Date.now() });
     const l = lines[lines.length-1]; room.last = { who:l.who, text:l.text }; room.updated = Date.now(); await saveRooms();
     clearInterval(thinkTimer); await showLines(lines);
   }catch(e){
+    if (room === ROOM && !/お休み中|paused/.test(e.message)){   // 返事はサーバーに届いているかもしれない
+      const got = await uraRecover(room, seen);
+      if (got && got.length && room === ROOM){ HIST.push({ role:'chars', lines:got, t:Date.now() }); const l = got[got.length-1]; room.last = { who:l.who, text:l.text }; room.updated = Date.now(); await saveRooms(); clearInterval(thinkTimer); await showLines(got); return; }
+    }
     clearInterval(thinkTimer); if (room !== ROOM) return; state = 'error'; if (contMode){ stopCont(true); toast('うまく続けられなかったので、ずっと話すのを止めました', true, 4000); }
     textEl.textContent = '（うまくお返事できませんでした……。タップでもう一度試します）'; showHint('retry');
     log('error', e.message, lastResp ? `HTTP ${lastResp.status}\n${lastResp.body}` : '');
   }
 }
+// 画面に戻ってきたとき、裏の返事を待ったまま止まっていたら、サーバーから読み直す
+document.addEventListener('visibilitychange', async () => {
+  if (document.visibilityState !== 'visible' || !ROOM || ROOM.kind !== 'ura' || state !== 'error') return;
+  const room = ROOM, got = await uraRecover(room, maxSid());
+  if (got && got.length && room === ROOM && state === 'error'){ HIST.push({ role:'chars', lines:got, t:Date.now() }); await showLines(got); }
+});
 
 /* ====== 表トーク（LINE風の表で約束して、実際に会う場面）。会話はサーバー（kv meetlog:）・AIは LINE風の表と同じ ====== */
 function meetToHist(log, room){

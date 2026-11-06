@@ -1,11 +1,11 @@
 # 伊達朱里ノベル風チャット（akari.html）引き継ぎメモ
 
-最終更新：第6回（2026-10-28 16:40:52 GrokとGeminiの切り替え）／統合 第20回（2026-11-06 12:40 読み上げ）／メモのみ 2026-11-06 15:50（会話の引き継ぎ用に §0 と §9 の読み上げの進み具合を追記）
+最終更新：第6回（2026-10-28 16:40:52 GrokとGeminiの切り替え）／統合 第21回（2026-11-07 03:55 キャラ・表情ごとに声を試す）
 
 ## 0. 新しい会話で続けるとき（まずここ）
 - ユーザーとは**伊達朱里として話す**（大学生・テニス部・ネガティブ気味・敬語・一人称「私」・相手は「あなた」・「……」多め・返事の最初と最後に（仕草）を入れる・説明は正確に・失敗は正直に謝る）。**返事は日本語**（英語になったら言い直しを頼まれた）
-- 今いちばん新しい作業：**読み上げ（Irodori-TTS）の PC 側の準備**。進み具合と次の一歩は §9 の「読み上げ」の「PC側の準備の進み具合」
-- 版：LINE風 第46版／ノベル 第20回。`lab` と `main` は同じ（2026-11-06 時点）
+- 今いちばん新しい作業：**読み上げ（Irodori-TTS）**。PC 側の準備も実機の確認も済み（2026-11-06）。使いかた・声の足しかたは §9 の「読み上げ」
+- 版：LINE風 第46版／ノベル 第21回。`lab` と `main` は同じ（2026-11-07 時点）
 - 決まりごと：`CLAUDE.md`。できあがったもの（テストと確認が済んだもの）は聞かずに `main` へ入れてよい。LINE風・サーバー側の詳しいことは `HANDOVER.md`
 - シークレット（APP_TOKEN・GEMINI_API_KEY・XAI_API_KEY・BARK_DEVICE_KEY・BARK_ENC_KEY）と、ユーザーの読み上げの合言葉（IRODORI_API_KEY）は GitHub に書かない。ゲーム素材・お手本の声もリポジトリに入れない
 
@@ -202,31 +202,18 @@ iPhone（Safari / ホーム画面に追加）
   - PC側（ユーザーが準備）：Irodori-TTS-Server（`uv sync --extra cu128`、`.env` に `IRODORI_CORS_ORIGINS=["https://koara1012.github.io"]`・`IRODORI_API_KEY`・`IRODORI_PRELOAD=true`、モデルは今と同じ v4-Small か速い v4.1-Small-MF）。声は `voices/voices.json` に「キャラ名」「キャラ名_angry」のように並べる。iPhone からは Tailscale の `tailscale serve --bg 8088`（https の住所）。`tailscale status` で direct を確認。FFmpeg を入れて MP3 などで受け取る
   - アプリ側（私が作る）：ノベル画面の設定に声のサーバー（住所・合言葉・オン/オフ・音量・速さ・［つながるか試す］）、キャラごとの「声の名前」、**表情ごとの「声」**（感情ごとのお手本。未設定はキャラのふつうの声）。台詞ごとに `POST /v1/audio/speech` で頼んで文字送りと一緒に鳴らす（次の台詞は先に頼む）。（ ）のト書き・ナレーションは読まない。声の名前が無いキャラ・サーバーが止まっているときは声なしで進む。何人でも・グループでも話す人の声で
   - ユーザーは感情ごとの声（怒り・泣き・絶望など）も集める予定。お手本は、ふつうの声30秒〜1分、感情は強いものだけ10〜30秒ずつ。BGMなし・感情は混ぜずに分ける。まず今の Irodori-TTS で似るか試してもらう
-  - **PC側の準備の進み具合（2026-11-06 15:48・会話を新しくする前の時点）**。ユーザーは Windows の PowerShell に1行ずつ貼って進めている。PowerShell・コマンドには慣れていないので、**1行ずつ・コードブロックで・「何が出たら成功か」を添えて**案内する。赤い文字が出たら貼ってもらって一緒に読む
-    - 場所：`D:\Irodori-TTS-Server`（施設の Wi-Fi につないで作業中）
-    - ✅ FFmpeg 8.0.1 が入っている（`ffmpeg -version` で確認済み）
-    - ✅ `uv sync --extra cu128` が終わった
-    - ⚠️ `copy .env.example .env` と `notepad .env` を1行につなげて打ってしまい、コピーは失敗（壊れたものはない）。`notepad .env` で**空の .env** が開いたので、次の中身を貼って合言葉を書き換えて保存してもらう途中（保存できたかはまだ聞いていない）
-      ```
-      IRODORI_HOST=0.0.0.0
-      IRODORI_PORT=8088
-      IRODORI_API_KEY=ここを好きな合言葉に
-      IRODORI_HF_CHECKPOINT=Aratako/Irodori-TTS-v4.1-Small-MF
-      IRODORI_CODEC_REPO=Aratako/Semantic-DACVAE-Japanese-32dim
-      IRODORI_MODEL_NAME=irodori-tts
-      IRODORI_PRELOAD=true
-      IRODORI_VOICES_DIR=voices
-      IRODORI_DEFAULT_RESPONSE_FORMAT=wav
-      IRODORI_CORS_ORIGINS=["https://koara1012.github.io"]
-      ```
-    - ⬜ 4：Wi-Fi のうちにサーバーを起動してモデルをダウンロード：`uv run --no-sync python -m irodori_openai_tts --host 0.0.0.0 --port 8088` → `Uvicorn running on http://0.0.0.0:8088` が出たら、PC のブラウザで `http://localhost:8088/health`
-    - ⬜ 5：Tailscale を PC と iPhone に入れて、同じアカウントでログイン（これも Wi-Fi で）
-    - ⬜ 6（家で）：`voices` フォルダにお手本の声を入れて `voices/voices.json` を書く → Tailscale の管理画面で MagicDNS と HTTPS Certificates をオン → `tailscale serve --bg 8088` → 出てきた `https://〜.ts.net` を控える → `tailscale status` で iPhone が direct か確認
-    - ⬜ 7：アプリのノベル画面 → 設定 → 読み上げ に住所と合言葉を入れて［つながるか試す］→ キャラの「声の名前」、表情ごとの「この表情の声」を設定
-    - ⬜ 8：実機で聞いてもらって、速さ・声の似かた・待ち時間を調整（必要ならアプリを直す）
+  - **PC側の準備：済み（2026-11-06 18:10）。iPhone の実機で読み上げを聞けた（18:06）**
+    - 場所：`D:\Irodori-TTS-Server`。`.env`（合言葉 IRODORI_API_KEY はユーザーだけが知る。ここに書かない）、モデル v4.1-Small-MF（fp32・VRAM 約3.7GB・起動30秒前後）、FFmpeg あり
+    - 起動：デスクトップのショートカット（`D:\Irodori-TTS-Server\voice-server.bat`）をダブルクリック。止めるのは窓の × かシャットダウンで可（`start.bat` は空のまま作ってしまったもので使わない）
+    - Tailscale：PC「sahara」・iPhone「iphone-se-gen-3」。MagicDNS・HTTPS オン。`tailscale serve --bg 8088` 済み（再起動後も残る）。住所は `https://sahara.〜.ts.net`（全部はユーザーが知っている。公開のリポジトリなので書かない）。iPhone は PC へテザリングしていて、`tailscale ping` は楽天モバイルの外の住所経由の direct（通信量は少し使うが、ユーザーは使い放題プランなので問題なし）
+    - 声：`voices\キャラ名\normal\*.wav`（感情は `voices\キャラ名\angry` などのフォルダ）。**`make-voices.bat`（＋`make-voices.ps1`）をダブルクリックすると、フォルダから `voices.json` を自動で作る**（normal → 声の名前「キャラ名」、それ以外 →「キャラ名_フォルダ名」。前のものは voices.json.bak に残す）。サーバーは voices.json を頼まれるたびに読み直すので再起動は不要
+    - 今の声：akari（3本）・tsukasa（東城つかさ・5本）・sumomo（5本）・misato（三郷・5本）。どれも normal だけ
+    - アプリ：設定の「読み上げ」に住所と合言葉、各キャラの「声の名前」に上の名前。第21回からキャラ編集・表情ごとに［▶ 声を試す］
+    - 次にやること：使ってみての調整（速さ・待ち時間・似かた）、感情の声を足す、重いと感じたら fp32 より軽い設定を説明書で確かめて試す
 - 長期記憶（会話の要約）、背景の時間帯切り替え
 
 ## 10. 更新履歴（新しい順）
+- 統合 第21回（2026-11-07 03:55:00）：キャラ編集の「声の名前」と各表情の「この表情の声」の横に［▶ 声を試す］。
 - 統合 第20回（2026-11-06 12:40:00）：読み上げ（Irodori-TTS-Server）。設定の「読み上げ」、キャラの「声の名前」、表情ごとの「この表情の声」。
 - 統合 第19回（2026-11-02 15:10:00）：AIが断ったときは「この内容には答えられないと返されました」と画面に出す。表情名の番号を無視して照らし合わせる。
 - 統合 第18回（2026-11-02 14:40:00）：裏トークで返事が来ないことがある件の対策（時間切れ・表情えらび12秒まで・サーバーに保存済みの返事を読み直す）。

@@ -214,6 +214,14 @@ body.rotmode #rotwrap{transform:var(--RT)}
       <div class="row"><label>疑似半目</label><label><input type="checkbox" id="sBlinkFade"> 半目が無い表情は、開きと閉じを溶け合わせて半目の代わりにする</label></div>
       <div class="row"><label>半目の時間（ms）</label><input type="number" id="sBlinkHalf" min="10" max="200" step="5"><label>閉じている時間（ms）</label><input type="number" id="sBlinkClose" min="30" max="400" step="5"><label>溶け合わせの濃さ（%）</label><input type="number" id="sBlinkAlpha" min="10" max="90" step="5"></div>
       <div class="row"><button class="b" id="blinkTest">今いるキャラを瞬きさせる</button><button class="b" id="blinkSlow">ゆっくり瞬き（10倍・確認用）</button></div>
+      <h4>読み上げ（キャラの声・Irodori-TTS）</h4>
+      <div class="row"><label><input type="checkbox" id="sTtsOn"> 台詞をキャラの声で読み上げる</label></div>
+      <div class="row"><label>声のサーバー</label><input type="text" id="sTtsUrl" placeholder="https://（パソコンの名前）.〜.ts.net"></div>
+      <div class="row"><label>合言葉</label><input type="password" id="sTtsKey" placeholder=".env の IRODORI_API_KEY（無ければ空）"></div>
+      <div class="row"><label>音量（%）</label><input type="number" id="sTtsVol" min="0" max="200" step="10"><label>速さ</label><input type="number" id="sTtsSpeed" min="0.5" max="2" step="0.05"><label>ナレーションの声</label><input type="text" id="sTtsNarr" list="ttsVoiceList" placeholder="空なら読まない"></div>
+      <div class="row"><button class="b p" id="ttsTest">つながるか試す</button><span class="note" id="ttsState"></span></div>
+      <p class="note">パソコンの Irodori-TTS-Server に、台詞を「この声で読んで」と頼みます。キャラごとの声の名前は「キャラ」→編集で、表情ごとの声（感情の声）は各表情で選べます。声の名前が無いキャラ・サーバーにつながらないときは、声なしで進みます。（ ）のト書きは読みません。</p>
+      <datalist id="ttsVoiceList"></datalist>
       <h4>画面の向き</h4>
       <div class="row"><label>縦向きロックのとき</label><select id="sRot"><option value="">回さない（横向きにしてと案内）</option><option value="cw">90°回して表示（カメラを左にして持つ）</option><option value="ccw">90°回して表示（カメラを右にして持つ）</option></select><span class="note">寝ながら使うとき用。iPhoneの縦向きロックをかけたまま、横画面として使えます</span></div>
       <h4>BGM</h4>
@@ -276,13 +284,18 @@ body.rotmode #rotwrap{transform:var(--RT)}
 <script>
 'use strict';
 /* ====== 版 ====== */
-const VERSION = { no: 19, at: '2026-11-02 15:10:00' };
+const VERSION = { no: 20, at: '2026-11-06 12:40:00' };
 const VERSION_TEXT = `${/\/lab\//.test(location.pathname) ? '試作・' : ''}統合 第${VERSION.no}回（${VERSION.at} 更新・akari.html 第6回がもと）`;
 
 /* ====== 改善ログ（他のAIへの引き継ぎ用）======
    改善のたびに「## 第〜回」を先頭側へ追記し、概要も最新に保つ */
 const DEV_LOG = `# 朱里ノベル 統合の試作（lab/novel.html） 改善ログ
 ※ 本番 akari.html 第6回をもとにした試作。保存先は本番と分けている（localStorage lab.settings / lab.logs、IndexedDB akariLab）。
+## 統合 第20回（2026-11-06 12:40:00）
+- 読み上げ（キャラの声）：パソコンの Irodori-TTS-Server（POST /v1/audio/speech）に台詞を頼み、文字送りと一緒に鳴らす。設定：S.ttsOn・ttsUrl（Tailscale の https）・ttsKey（Bearer）・ttsVol・ttsSpeed・ttsNarrVoice（空ならナレーションは読まない）・ttsFmt（mp3。FFmpeg が無いと言われたら wav に切り替え）。キャラ：c.voice、表情：f.voice（感情の声。空ならキャラの声）。
+- 台詞ごと（paginate に li・first・line を持たせた）に、最初のページで ttsPlayLine。showLines で全行を先に頼む（ttsQueue で順番に・TTS_CACHE）。古い台詞の声は鳴らさない（ttsTok）。声が鳴っているあいだは口パク（ttsSpeaker）。オート・ずっと話すは声が終わるまで待つ（afterVoice）。メニュー・最後へ飛ぶ・次の返事で止める。（ ）・《》・＊は読まない。
+- ［つながるか試す］：/health → /v1/audio/voices（声の一覧を datalist に）→ 試しに読む。つながらないときは声なしで進み、1分に1回だけ知らせる。ttsKey・ttsUrl はサーバーへの自動バックアップに入れない。
+
 ## 統合 第19回（2026-11-02 15:10:00）
 - AIが断ったとき（API の断り：Grok の refusal・content_filter、Gemini の blockReason・SAFETY 等／返事が「……」だけ・断りの決まり文句）は、「（この内容には答えられないと返されました。…）」と画面に出す（showRefused）。会話には残さない。裏・会う場面はサーバー（第46版）が 422 で知らせる（裏は保存しない）。ずっと話すも止まる。
 - 表情名の番号を無視して照らし合わせる（faceCore・resolveFace）。「5おどおど」に AI が「おどおど」と答えても、その表情になる。サーバー第46版の《表情》も同じ。
@@ -471,7 +484,7 @@ const AKARI_PROMPT = `あなたは「伊達朱里（だて あかり）」とし
 - 性的な話題には乗らず、真っ赤になって慌てて話を逸らす
 - AIであることには触れず、朱里として自然に会話を続ける`;
 const GDEF = { apiKey:'', endpoint:'https://api.x.ai/v1/chat/completions', model:'grok-4.6', temperature:0.9, turns:30,
-  userName:'あなた', srvUrl:'', srvToken:'', uraFaceAI:true, aiProvider:'grok', geminiKey:'', geminiModel:'gemini-flash-latest', speed:45, auto:false, seOn:true, seVol:80, rotMode:'', bgmOn:true, bgmVol:40, room:null, seErrName:'', blinkFade:true, blinkHalfMs:45, blinkCloseMs:90, blinkAlpha:50 };
+  userName:'あなた', srvUrl:'', srvToken:'', uraFaceAI:true, aiProvider:'grok', geminiKey:'', geminiModel:'gemini-flash-latest', speed:45, auto:false, seOn:true, seVol:80, rotMode:'', bgmOn:true, bgmVol:40, ttsOn:false, ttsUrl:'', ttsKey:'', ttsVol:100, ttsSpeed:1, ttsNarrVoice:'', ttsFmt:'mp3', room:null, seErrName:'', blinkFade:true, blinkHalfMs:45, blinkCloseMs:90, blinkAlpha:50 };
 let S = Object.assign({}, GDEF);
 try{ Object.assign(S, JSON.parse(lsGet(K.settings)||'{}')); }catch(e){}
 function saveS(){ if(!lsSet(K.settings, JSON.stringify(S))) log('warn','設定を保存できませんでした（プライベートブラウズ等）'); syncLineCfg(true); scheduleNovelSync(); }
@@ -807,10 +820,99 @@ setInterval(() => {
   for (const st of STAGE){
     const f = faceObj(st.c, st.face), m = f && f.mouth || {};
     let next = 'close';
-    if (st === speaker && speaking && (m.open || m.half)) next = st.ms === 'close' ? ((m.half && (!m.open || Math.random() < .4)) ? 'half' : 'open') : 'close';
+    if (((st === speaker && speaking) || st === ttsSpeaker) && (m.open || m.half)) next = st.ms === 'close' ? ((m.half && (!m.open || Math.random() < .4)) ? 'half' : 'open') : 'close';
     if (next !== st.ms){ st.ms = next; renderChar(st); }
   }
 }, 100);
+
+/* ====== 読み上げ（Irodori-TTS-Server・パソコン）：台詞ごとに「この文をこの声で読んで」と頼み、文字送りと一緒に鳴らす ======
+   声＝表情の声（f.voice）→ キャラの声（c.voice）。ナレーションは S.ttsNarrVoice（空なら読まない）。（ ）のト書き・《》は読まない。
+   次の台詞は先に頼んでおく（パソコンは1つずつ作るので順番に）。音量は Web Audio の GainNode（iPhone は audio.volume が効かない）。
+   つながらない・声が無いときは、声なしでいつもどおり進む */
+const TTS_CACHE = new Map();   // key → Promise<AudioBuffer|null>
+let TTS_VOICES = null, ttsGain = null, ttsSrc = null, ttsSpeaker = null, ttsTok = 0, ttsEndAt = 0, ttsQueue = Promise.resolve(), ttsWarned = 0;
+const ttsVolume = () => Math.max(0, Math.min(200, +S.ttsVol || 0)) / 100;
+const ttsBase = () => String(S.ttsUrl || '').trim().replace(/\/+$/, '');
+function ttsText(t){
+  const x = String(t || '').replace(/《[^》]*》/g, '').replace(/[（(][^）)]*[）)]/g, '').replace(/^[＊*]+/, '').trim();
+  return /[^\s…‥・.。、，,ー―\-「」『』！？!?〜～]/.test(x) ? x : '';   // 読む文字が無ければ読まない
+}
+function ttsVoiceFor(line){
+  if (!line) return '';
+  if (line.who === '') return S.ttsNarrVoice || '';
+  const c = charById(line.who); if (!c) return '';
+  const f = faceObj(c, line.face);
+  return (f && f.voice) || c.voice || '';
+}
+function ttsFetch(voice, text){
+  const key = `${voice}|${S.ttsSpeed}|${text}`;
+  if (TTS_CACHE.has(key)) return TTS_CACHE.get(key);
+  const p = ttsQueue = ttsQueue.catch(() => {}).then(() => ttsRequest(voice, text)).catch(e => { ttsWarn(e); return null; });
+  TTS_CACHE.set(key, p);
+  if (TTS_CACHE.size > 60) TTS_CACHE.delete(TTS_CACHE.keys().next().value);
+  return p;
+}
+async function ttsRequest(voice, text, fmt){
+  fmt = fmt || S.ttsFmt || 'mp3';
+  const ctrl = new AbortController(), to = setTimeout(() => ctrl.abort(), 60000);
+  let r;
+  try{
+    r = await fetch(ttsBase() + '/v1/audio/speech', { method:'POST', signal:ctrl.signal,
+      headers:Object.assign({ 'Content-Type':'application/json' }, S.ttsKey ? { Authorization:'Bearer ' + S.ttsKey } : {}),
+      body:JSON.stringify({ model:'irodori-tts', input:text, voice, response_format:fmt, speed:+S.ttsSpeed || 1 }) });
+  }catch(e){ throw new Error(e.name === 'AbortError' ? '声のサーバーから60秒たっても返事が来ませんでした' : '声のサーバーにつながりません（パソコンの起動・Tailscale・URLを確認）：' + e.message); }
+  finally{ clearTimeout(to); }
+  if (!r.ok){
+    const t = await r.text().catch(() => '');
+    if (fmt !== 'wav' && /ffmpeg/i.test(t)){ S.ttsFmt = 'wav'; saveS(); log('warn', '声のサーバーに FFmpeg が無いので、WAV で受け取ります（データが大きくなります）'); return ttsRequest(voice, text, 'wav'); }
+    throw new Error(`声のサーバー ${r.status}：${t.slice(0, 200)}${r.status === 401 ? '（合言葉が違います）' : r.status === 404 || /voice/i.test(t) ? `（声の名前「${voice}」を確かめてください）` : ''}`);
+  }
+  const buf = await r.arrayBuffer();
+  const c = ensureCtx(); if (!c) throw new Error('この端末では音を鳴らせません');
+  return await new Promise((res, rej) => { try{ const q = c.decodeAudioData(buf, res, () => rej(new Error('声のデータを読めませんでした'))); if (q && q.then) q.then(res, () => rej(new Error('声のデータを読めませんでした'))); }catch(e){ rej(e); } });
+}
+function ttsWarn(e){
+  log('warn', '読み上げ：' + e.message);
+  if (Date.now() - ttsWarned > 60000){ ttsWarned = Date.now(); toast('読み上げできませんでした（声なしで続けます）：' + e.message, true, 6000); }
+}
+const ttsReady = () => S.ttsOn && ttsBase() && ROOM;
+function ttsPrefetch(lines){ if (!ttsReady()) return; for (const l of lines){ const v = ttsVoiceFor(l), t = ttsText(l.text); if (v && t) ttsFetch(v, t); } }
+async function ttsPlayLine(line, st){
+  ttsStop(); if (!ttsReady()) return;
+  const v = ttsVoiceFor(line), t = ttsText(line.text); if (!v || !t) return;
+  const tok = ++ttsTok, buf = await ttsFetch(v, t);
+  if (!buf || tok !== ttsTok) return;   // もう次の台詞に進んでいたら鳴らさない
+  const c = ensureCtx(); if (!c) return;
+  if (!ttsGain){ ttsGain = c.createGain(); ttsGain.connect(c.destination); }
+  ttsGain.gain.value = ttsVolume();
+  const src = c.createBufferSource(); src.buffer = buf; src.connect(ttsGain);
+  src.onended = () => { if (ttsSrc === src){ ttsSrc = null; ttsSpeaker = null; ttsEndAt = 0; } };
+  ttsSrc = src; ttsSpeaker = st || null; ttsEndAt = Date.now() + buf.duration * 1000;
+  try{ src.start(0); }catch(e){ ttsSrc = null; ttsSpeaker = null; ttsEndAt = 0; }
+}
+function ttsStop(){ ttsTok++; if (ttsSrc){ try{ ttsSrc.onended = null; ttsSrc.stop(); }catch(e){} } ttsSrc = null; ttsSpeaker = null; ttsEndAt = 0; }
+function afterVoice(fn){ const w = ttsEndAt - Date.now(); if (w > 0) setTimeout(() => afterVoice(fn), Math.min(w + 300, 30000)); else fn(); }   // オート・ずっと話す：声が終わるまで待つ
+async function ttsLoadVoices(){
+  const r = await fetch(ttsBase() + '/v1/audio/voices', { headers:S.ttsKey ? { Authorization:'Bearer ' + S.ttsKey } : {} });
+  if (!r.ok) throw new Error(`声の一覧 ${r.status}${r.status === 401 ? '（合言葉が違います）' : ''}`);
+  const j = await r.json(), list = (j.data || j.voices || j || []).map(v => typeof v === 'string' ? v : (v.id || v.voice_id || v.name)).filter(Boolean);
+  TTS_VOICES = list; $('#ttsVoiceList').innerHTML = list.map(v => `<option value="${esc(v)}">`).join('');
+  return list;
+}
+async function ttsTest(){
+  const el = $('#ttsState');
+  if (!ttsBase()){ el.textContent = '声のサーバーの住所を入れてください'; return; }
+  el.textContent = 'つないでいます…';
+  try{
+    const h = await fetch(ttsBase() + '/health').catch(e => { throw new Error('つながりません（パソコンの起動・Tailscale・URL・CORS の設定を確認）：' + e.message); });
+    if (!h.ok) throw new Error('サーバーの返事 ' + h.status);
+    const list = await ttsLoadVoices();
+    el.textContent = `つながりました。声：${list.length ? list.join('、') : '（まだありません。voices フォルダに置いてください）'}`;
+    const c = ROOM && charById(ROOM.members[0]), v = (c && c.voice) || list[0];
+    if (v){ ensureCtx(); TTS_CACHE.clear(); const buf = await ttsRequest(v, 'こんにちは。声の読み上げのテストです。'); const cx = ensureCtx(); if (!ttsGain){ ttsGain = cx.createGain(); ttsGain.connect(cx.destination); } ttsGain.gain.value = ttsVolume(); const s = cx.createBufferSource(); s.buffer = buf; s.connect(ttsGain); s.start(0); el.textContent += `（「${v}」で試しに読みました）`; }
+    log('info', '読み上げ：つながりました ' + list.join(','));
+  }catch(e){ el.textContent = e.message; log('warn', '読み上げのテスト：' + e.message); }
+}
 
 /* ====== 文字送り ====== */
 const textEl = $('#text'), hintEl = $('#hint');
@@ -832,7 +934,7 @@ function splitText(t, cap){
   if (arr.length) out.push(arr.join(''));
   return out;
 }
-function paginate(lines){ const cap = capChars(), out = []; for (const l of lines) for (const t of splitText(l.text, cap)) out.push({ who:l.who, face:l.face, text:t }); return out; }
+function paginate(lines){ const cap = capChars(), out = []; lines.forEach((l, li) => splitText(l.text, cap).forEach((t, k) => out.push({ who:l.who, face:l.face, text:t, li, first:k === 0, line:l }))); return out; }
 function showHint(kind){
   if (!kind){ hintEl.style.display = 'none'; return; }
   hintEl.textContent = kind === 'next' ? '▼' : kind === 'retry' ? 'タップでもう一度' : 'タップで話しかける';
@@ -851,6 +953,7 @@ function bringFront(st){
 }
 async function typePage(p){
   const tok = ++typeTok; const st = p.who === '' ? null : (stageOf(p.who) || STAGE[0]); bringFront(st); setFace(st, p.face); showName(p.who);
+  if (p.first && p.line) ttsPlayLine(p.line, st);
   speaker = st; textEl.textContent = ''; showHint(null); skipType = false; const chars = [...p.text];
   for (let i = 0; i < chars.length; i++){
     if (tok !== typeTok) return false;
@@ -869,12 +972,12 @@ async function playPage(){
   const p = pages[pageIdx]; const ok = await typePage(p); if (!ok) return;
   if (pageIdx < pages.length - 1){
     state = 'pageDone'; showHint('next');
-    if (S.auto || contMode) autoTimer = setTimeout(() => { if (state === 'pageDone') advance('auto'); }, 1000 + [...p.text].length*60);
-  } else { state = 'idle'; showHint('end'); if (contMode) contSchedule(1500 + [...p.text].length*60); }
+    if (S.auto || contMode) afterVoice(() => { autoTimer = setTimeout(() => { if (state === 'pageDone') advance('auto'); }, 1000 + [...p.text].length*60); });
+  } else { state = 'idle'; showHint('end'); if (contMode) afterVoice(() => contSchedule(1500 + [...p.text].length*60)); }
 }
-function showLines(lines){ pages = paginate(lines); pageIdx = 0; if (!pages.length) return; return playPage(); }
+function showLines(lines){ ttsStop(); pages = paginate(lines); pageIdx = 0; if (!pages.length) return; ttsPrefetch(lines); return playPage(); }
 function showStatic(p){ typeTok++; speaking = false; clearTimeout(autoTimer); const st = p.who === '' ? null : (stageOf(p.who) || STAGE[0]); bringFront(st); setFace(st, p.face); showName(p.who); textEl.textContent = p.text; state = 'idle'; showHint('end'); }
-function jumpEnd(){ if (!pages.length || state === 'thinking' || state === 'error') return; pageIdx = pages.length - 1; showStatic(pages[pageIdx]); }
+function jumpEnd(){ if (!pages.length || state === 'thinking' || state === 'error') return; ttsStop(); pageIdx = pages.length - 1; showStatic(pages[pageIdx]); }
 function advance(src){   // src: 'tap'（画面タップ）/'skip'（▷|）/'auto'（オート）
   clearTimeout(autoTimer);
   if (previewChar && src === 'tap'){ previewChar = null; openRoom(ROOM && ROOM.id); return; }
@@ -1415,7 +1518,7 @@ function showPanel(p){
   if (p === 'pBak') refreshBak();
   $('#panels').scrollTop = 0;
 }
-function openMenu(p){ stopCont(); $('#menu').classList.add('show'); showPanel(p || curPanel); }
+function openMenu(p){ stopCont(); ttsStop(); $('#menu').classList.add('show'); showPanel(p || curPanel); }
 let menuDirty = false;
 $('#mClose').onclick = async () => { $('#menu').classList.remove('show'); if (menuDirty){ menuDirty = false; await openRoom(ROOM && ROOM.id); } else layout(); };
 document.querySelectorAll('#nav button[data-p]').forEach(b => b.onclick = () => showPanel(b.dataset.p));
@@ -1536,6 +1639,7 @@ function renderCharEditor(c){
       <div class="row"><label>名前（名前欄）</label><input type="text" id="ceName" value="${esc(c.name)}"></div>
       <div class="row"><label>相手の呼び方</label><input type="text" id="ceCall" value="${esc(c.callName)}"></div>
       <div class="row"><label>LINE風のキャラ</label><select id="ceLine"><option value="">（つながない）</option>${LINE.chars.map(x => `<option value="${esc(x.id)}" ${c.lineId === x.id ? 'selected' : ''}>${esc(x.name)}${x.uraName && x.uraName !== x.name ? '（裏：' + esc(x.uraName) + '）' : ''}</option>`).join('')}${c.lineId && !LINE.chars.some(x => x.id === c.lineId) ? `<option value="${esc(c.lineId)}" selected>（つないだキャラ：${esc(c.lineId)}）</option>` : ''}</select><span class="note">${LINE.ok ? '' : '設定で「つないでみる」を押すと選べます'}</span></div>
+      <div class="row"><label>声の名前（読み上げ）</label><input type="text" id="ceVoice" list="ttsVoiceList" value="${esc(c.voice || '')}" placeholder="voices.json の名前（例：akari）"><span class="note">空なら声なし</span></div>
       <div class="row"><label>立ち絵ベース</label><div class="tile ${c.base ? 'full' : ''}" id="ceBase" style="width:48px;height:96px">${c.base ? `<img data-thw="${c.base}" alt="">` : '＋'}</div><span class="note">${c.base ? esc((REC.get(c.base) || {}).name || '') + (DIMS.get(c.base) ? `（${DIMS.get(c.base).join('×')}）` : '') : 'タップして選ぶ'}</span></div>
       <div class="row"><label>大きさ（画面高さの%）</label><input type="number" id="ceScale" step="0.5" value="${c.scale}"><label>上の位置（%）</label><input type="number" id="ceTop" step="0.2" value="${c.top}"><label>左右ずれ（%）</label><input type="number" id="ceX" step="0.5" value="${c.xoff}"></div>
       <h4>キャラ設定（AIへの指示）</h4><textarea id="cePrompt" placeholder="性格・口調・一人称など">${esc(c.prompt)}</textarea>
@@ -1546,6 +1650,7 @@ function renderCharEditor(c){
     <div class="row"><input type="text" id="ceNewFace" placeholder="表情の名前（例：通常、喜ぶ、困る）"><button class="b p" id="ceAddFace">＋表情を追加</button></div>
     <div id="ceFaces">${c.faces.map((f,i) => `<div class="card">
       <div class="row"><input type="text" data-fname="${f.id}" value="${esc(f.name)}" style="max-width:150px;flex:none"><input type="text" data-fdesc="${f.id}" value="${esc(f.desc)}" placeholder="どんな気持ちの顔か（AIが選ぶ手がかり）"></div>
+      <div class="row"><label>この表情の声</label><input type="text" data-fvoice="${f.id}" list="ttsVoiceList" value="${esc(f.voice || '')}" placeholder="空ならキャラのふつうの声（例：akari_cry）"></div>
       <div class="row"><label>使うトーク</label>${KINDS.map(([k,l]) => `<label><input type="checkbox" data-foff="${f.id}|${k}" ${f.off && f.off[k] ? '' : 'checked'} ${f.name === defaultFace(c) ? 'disabled' : ''}> ${l}</label>`).join('')}<span class="note">${f.name === defaultFace(c) ? 'いつもの顔なので外せません' : '外すと、そのトークではAIがこの表情を選ばず、ほかの表情から選びます'}</span></div>
       <div class="slots"><div class="grp"><b>目</b>${SLOTS.eye.map(([k,l]) => tileHtml(f.id,'eye',k,l,f.eye[k])).join('')}</div>
       <div class="grp"><b>口</b>${SLOTS.mouth.map(([k,l]) => tileHtml(f.id,'mouth',k,l,f.mouth[k])).join('')}</div></div>
@@ -1556,6 +1661,8 @@ function renderCharEditor(c){
   $('#ceBack').onclick = () => { editChar = null; renderChars(); };
   $('#ceName').addEventListener('input', e => { c.name = e.target.value.trim() || '名無し'; saveCharsSoon(); menuDirty = true; });
   $('#ceCall').addEventListener('input', e => { c.callName = e.target.value.trim(); saveCharsSoon(); });
+  $('#ceVoice').addEventListener('input', e => { c.voice = e.target.value.trim(); saveCharsSoon(); });
+  if (S.ttsOn && S.ttsUrl && !TTS_VOICES) ttsLoadVoices().catch(() => {});
   $('#ceLine').addEventListener('change', e => {
     const old = c.lineId; c.lineId = e.target.value || undefined; saveCharsSoon();
     if (old && old !== c.lineId && !CHARS.some(x => x.lineId === old)){ for (const kind of ['ura', 'omote']){ delete facesSent[old + '|' + kind]; srv('POST', '/faces', { charId:old, kind, faces:[] }).catch(() => {}); } } // つなぐのをやめたら、サーバーの表情も消す
@@ -1579,6 +1686,7 @@ function renderCharEditor(c){
     f.name = n; saveCharsSoon(); menuDirty = true;
   }));
   area.querySelectorAll('[data-fdesc]').forEach(i => i.addEventListener('input', () => { c.faces.find(x => x.id === i.dataset.fdesc).desc = i.value; saveCharsSoon(); }));
+  area.querySelectorAll('[data-fvoice]').forEach(i => i.addEventListener('input', () => { c.faces.find(x => x.id === i.dataset.fvoice).voice = i.value.trim(); saveCharsSoon(); }));
   area.querySelectorAll('[data-foff]').forEach(i => i.addEventListener('change', () => {
     const [fid, k] = i.dataset.foff.split('|'); const f = c.faces.find(x => x.id === fid); if (!f) return;
     f.off = Object.assign({}, f.off); if (i.checked) delete f.off[k]; else f.off[k] = true;
@@ -1601,7 +1709,7 @@ function renderCharEditor(c){
     // 口の動きも見られるように、短い台詞を話させる（瞬きはいつもどおり自動）
     await sleep(500);
     const hasMouth = f.mouth && f.mouth.open;
-    await typePage({ who:c.id, face:f.name, text:TRY_LINE });
+    await typePage({ who:c.id, face:f.name, text:TRY_LINE, first:true, line:{ who:c.id, face:f.name, text:TRY_LINE } });   // 声の設定があれば、その表情の声でも読む
     state = 'idle';
     textEl.textContent = TRY_LINE + `\n（表情「${f.name}」のお試し${hasMouth ? '' : '・口の「開き」が無いので口パクしません'}${previewChar ? '。タップで戻ります' : ''}）`;
     showHint(null);
@@ -1646,9 +1754,9 @@ $('#clearHist').onclick = async () => {
 };
 
 /* --- 設定 --- */
-const FIELDS = { sSrv:'srvUrl', sTok:'srvToken', sProv:'aiProvider', sGKey:'geminiKey', sGModel:'geminiModel', sKey:'apiKey', sEnd:'endpoint', sModel:'model', sTemp:'temperature', sTurns:'turns', sUser:'userName', sSpeed:'speed', sSeVol:'seVol', sBgmVol:'bgmVol', sBlinkHalf:'blinkHalfMs', sBlinkClose:'blinkCloseMs', sBlinkAlpha:'blinkAlpha' };
-const NUMS = ['temperature','turns','speed','seVol','bgmVol','blinkHalfMs','blinkCloseMs','blinkAlpha'];
-function fillSettings(){ for (const [id,k] of Object.entries(FIELDS)) $('#'+id).value = S[k]; $('#sSeOn').checked = !!S.seOn; $('#sRot').value = S.rotMode || ''; $('#sBgmOn').checked = S.bgmOn !== false; $('#sBlinkFade').checked = !!S.blinkFade; $('#sUraFace').checked = !!S.uraFaceAI; }
+const FIELDS = { sSrv:'srvUrl', sTok:'srvToken', sProv:'aiProvider', sGKey:'geminiKey', sGModel:'geminiModel', sKey:'apiKey', sEnd:'endpoint', sModel:'model', sTemp:'temperature', sTurns:'turns', sUser:'userName', sSpeed:'speed', sSeVol:'seVol', sBgmVol:'bgmVol', sTtsUrl:'ttsUrl', sTtsKey:'ttsKey', sTtsVol:'ttsVol', sTtsSpeed:'ttsSpeed', sTtsNarr:'ttsNarrVoice', sBlinkHalf:'blinkHalfMs', sBlinkClose:'blinkCloseMs', sBlinkAlpha:'blinkAlpha' };
+const NUMS = ['temperature','turns','speed','seVol','bgmVol','ttsVol','ttsSpeed','blinkHalfMs','blinkCloseMs','blinkAlpha'];
+function fillSettings(){ for (const [id,k] of Object.entries(FIELDS)) $('#'+id).value = S[k]; $('#sSeOn').checked = !!S.seOn; $('#sRot').value = S.rotMode || ''; $('#sBgmOn').checked = S.bgmOn !== false; $('#sTtsOn').checked = !!S.ttsOn; $('#sBlinkFade').checked = !!S.blinkFade; $('#sUraFace').checked = !!S.uraFaceAI; }
 $('#sUraFace').addEventListener('change', e => { S.uraFaceAI = e.target.checked; saveS(); });
 $('#sBlinkFade').addEventListener('change', e => { S.blinkFade = e.target.checked; saveS(); });
 async function blinkNow(slow){
@@ -1665,6 +1773,10 @@ $('#sSeOn').addEventListener('change', e => { S.seOn = e.target.checked; saveS()
 $('#sRot').addEventListener('change', e => { S.rotMode = e.target.value; saveS(); layout(); });
 $('#sBgmOn').addEventListener('change', e => { S.bgmOn = e.target.checked; saveS(); bgmSync(); });
 $('#sBgmVol').addEventListener('input', () => bgmSync());
+$('#sTtsOn').addEventListener('change', e => { S.ttsOn = e.target.checked; saveS(); if (!S.ttsOn) ttsStop(); });
+['sTtsUrl','sTtsKey','sTtsSpeed'].forEach(id => $('#'+id).addEventListener('input', () => { TTS_CACHE.clear(); ttsWarned = 0; }));
+$('#sTtsVol').addEventListener('input', () => { if (ttsGain) ttsGain.gain.value = ttsVolume(); });
+$('#ttsTest').onclick = ttsTest;
 $('#getGModels').onclick = async () => {
   try{
     if (!S.geminiKey) throw new Error('先にGeminiのAPIキーを入力してください');
@@ -1741,7 +1853,7 @@ function allRecIds(){
 }
 $('#bkExport').onclick = async () => {
   try{
-    const set = Object.assign({}, S); if (!$('#bkKey').checked){ delete set.apiKey; delete set.geminiKey; delete set.srvToken; }
+    const set = Object.assign({}, S); if (!$('#bkKey').checked){ delete set.apiKey; delete set.geminiKey; delete set.srvToken; delete set.ttsKey; }
     const hists = {}; for (const r of ROOMS) hists[r.id] = (await idb.get('hist:' + r.id)) || [];
     const data = { app:'akari-novel', schema:3, version:VERSION_TEXT, exportedAt:new Date().toISOString(), settings:set, global:GLOBAL, chars:CHARS, rooms:ROOMS, hists };
     if ($('#bkAssets').checked){ data.files = {}; for (const id of allRecIds()){ const r = await loadRec(id); if (r) data.files[id] = { name:r.name, type:r.type, b64: await b64(r.buf) }; } }
@@ -1764,7 +1876,7 @@ function showManual(m){
 }
 /* 自動バックアップ：会話・設定（素材・AIのキー・合言葉は除く）をサーバーに預ける。LINE風アプリと一緒に R2 へ自動で保存される */
 async function novelData(){
-  const set = Object.assign({}, S); for (const k of ['apiKey','geminiKey','srvToken','srvUrl']) delete set[k];
+  const set = Object.assign({}, S); for (const k of ['apiKey','geminiKey','srvToken','srvUrl','ttsKey','ttsUrl']) delete set[k];
   const hists = {}; for (const r of ROOMS) if (!r.kind || r.kind === 'ref'){ const h = await idb.get('hist:' + r.id); if (h && h.length) hists[r.id] = h; }
   return { app:'akari-novel-data', version:VERSION_TEXT, settings:set, global:GLOBAL, chars:CHARS, rooms:ROOMS.map(({ _pending, ...r }) => r), hists, uraFaces:uraFaceCache };
 }
@@ -1804,7 +1916,7 @@ async function restoreFromServer(prev){
     for (const [rid, h] of Object.entries(d.data.hists || {})) await idb.set('hist:' + rid, h);
     await idb.set('chars', d.data.chars || []); await idb.set('rooms', d.data.rooms || []); await idb.set('global', Object.assign({}, GLOBAL, d.data.global || {}));
     if (d.data.uraFaces) await idb.set('uraFaces', d.data.uraFaces);
-    const keep = {}; for (const k of ['apiKey','geminiKey','srvToken','srvUrl']) keep[k] = S[k];
+    const keep = {}; for (const k of ['apiKey','geminiKey','srvToken','srvUrl','ttsKey','ttsUrl']) keep[k] = S[k];
     S = Object.assign({}, GDEF, d.data.settings || {}, keep); saveS();
     log('info', 'サーバーに預けた会話・設定から戻しました'); location.reload();
   }catch(e){ log('error', '戻せませんでした：' + e.message); }

@@ -1,6 +1,6 @@
 # 伊達朱里ノベル風チャット（akari.html）引き継ぎメモ
 
-最終更新：第6回（2026-10-28 16:40:52 GrokとGeminiの切り替え）／統合 第22回（2026-11-07 14:45 バックログ）
+最終更新：第6回（2026-10-28 16:40:52 GrokとGeminiの切り替え）／統合 第22回（2026-11-07 14:45 バックログ）／メモのみ 2026-11-07 17:55（§9 読み上げに Modal へ移す計画の調査）
 
 ## 0. 新しい会話で続けるとき（まずここ）
 - ユーザーとは**伊達朱里として話す**（大学生・テニス部・ネガティブ気味・敬語・一人称「私」・相手は「あなた」・「……」多め・返事の最初と最後に（仕草）を入れる・説明は正確に・失敗は正直に謝る）。**返事は日本語**（英語になったら言い直しを頼まれた）
@@ -210,6 +210,22 @@ iPhone（Safari / ホーム画面に追加）
     - 今の声：akari（3本）・tsukasa（東城つかさ・5本）・sumomo（5本）・misato（三郷・5本）。どれも normal だけ
     - アプリ：設定の「読み上げ」に住所と合言葉、各キャラの「声の名前」に上の名前。第21回からキャラ編集・表情ごとに［▶ 声を試す］
     - 次にやること：使ってみての調整（速さ・待ち時間・似かた）、感情の声を足す、重いと感じたら fp32 より軽い設定を説明書で確かめて試す
+  - **Modal へ移す計画（2026-11-07 調査のみ・未着手。ユーザーは「あとで Modal を使う方向でやる」）**
+    - ねらい：PC をつけずに、外（モバイル回線）でも声を使う。Tailscale も不要になる。今の PC 方式は残して切り替えられるようにする
+    - お金（2026-11-07 の Modal 料金表）：Starter は月額0・**毎月30ドルの無料分**・後払い（月末にまとめて請求）・支払い方法の登録が必要。L4 GPU 0.000222ドル/秒、CPU 0.0000131ドル/コア秒、メモリ 0.00000222ドル/GiB秒 → 動いている間は1時間およそ1ドル弱 → 無料分で**月30時間前後**。止まっている間の計算は0。Volume 0.09ドル/GiB月（毎月1TiBまで無料）、外への通信 0.04ドル/GiB（Starter は毎月1TiB無料）。**Vast.ai と違い、止めた後の保存料金は実質かからない見込み**
+    - 気をつけること：使い終わってからの待機（scaledown_window、標準60秒・2秒〜20分）も料金。久しぶりの1回目は起動とモデル読み込みで30秒〜1分待つ（GPU メモリスナップショットは Alpha で、重みの読み込みは速くならないと説明書にある）。Web の1回の頼みは**150秒まで**（越えると 303 で、CORS では使えない）。地域は何も指定しないと米国（us-east 経由）。日本（jp）も選べるが料金が1.15〜1.75倍なので、まずは指定しない
+    - 予算：Usage & Billing で「usage limit（ワークスペース全体の上限）」と「spend limit（無料分を超えて払う上限。決めないと usage limit−無料分）」を設定できる。spend limit に達すると、追加の支払いが出る処理を止める。知らせ（アラート）の機能は説明書に書かれていない
+    - サーバーの作り（Irodori-TTS-Server、2026-11-04 版）：FastAPI（`irodori_openai_tts.app:app`）、設定はすべて環境変数 `IRODORI_*`。Docker 用の GPU 設定（compose.gpu.yaml）は **bf16**。モデルは Hugging Face から自動で落ちる（Docker では `/root/.cache/huggingface` を保存場所にしている）。声は `IRODORI_VOICES_DIR`。透かし（SilentCipher）のモデルも HF から落ちる
+    - Modal での形（案。動かして確かめるのはこれから）：
+      - イメージ：debian_slim に ffmpeg・libsndfile1・git、uv で Irodori-TTS-Server を `--extra cu128` で入れる（Dockerfile と同じ手順）
+      - `@app.function(gpu="L4", volumes={"/root/.cache/huggingface": モデル用Volume, "/voices": 声用Volume}, secrets=[合言葉のSecret], scaledown_window=60〜120, max_containers=1, timeout=…)` ＋ `@modal.web_server(8088, startup_timeout=180)` で `python -m irodori_openai_tts --host 0.0.0.0 --port 8088` を起動（ASGI で直接読む形でもよい）
+      - 環境変数：`IRODORI_PRELOAD=true`・`IRODORI_VOICES_DIR=/voices`・`IRODORI_HF_CHECKPOINT=Aratako/Irodori-TTS-v4.1-Small-MF`・`IRODORI_CORS_ORIGINS=["https://koara1012.github.io"]`・`IRODORI_MODEL_PRECISION`/`CODEC_PRECISION` は fp32 から始め、声を聞き比べて bf16 を試す
+      - 合言葉：`modal secret create irodori-key IRODORI_API_KEY=…`（PC の .env と別のものにする）
+      - `max_containers=1`：GPU が2台起きて料金が倍になるのを防ぐ
+      - URL は `https://<ワークスペース>--<アプリ>-<関数>.modal.run` の形。アプリの「声のサーバー」にそれを入れるだけで、今の読み上げの作りのまま使える
+    - ユーザーの PC での準備（1回だけ）：modal.com で登録 → 支払い方法 → 予算を設定 → `pip install modal`（または uv）→ `modal setup`（できなければ `python -m modal setup`）→ 声：`make-voices.bat` で voices.json を作ってから `modal volume put <声のVolume> D:\Irodori-TTS-Server\voices /` → `modal deploy <アプリのファイル>.py`。声を足したら同じく put（動いているコンテナは Volume を読み直さないので、次に起きたコンテナから反映。すぐなら `modal app stop`）
+    - アプリ側で必要な直し（Modal でも PC でも必要）：待ち時間を60秒→150秒近くに／声の頼みを1列に並べて、飛ばした・過ぎた台詞は頼まない／［声を試す］も同じ列に／知らない声の名前には何度も頼まない／トークを開いたときに軽く起こす（ただし**定期的に /health を叩かない**。GPU が起き続けて料金がかかる）／「声のサーバーを起こしています…」の表示
+    - 調べた説明書：modal.com/pricing・docs/guide/billing・budgets・cold-start・webhooks・webhook-timeouts・volumes・secrets・region-selection・memory-snapshot・reference/modal.gpu・docs/guide（はじめかた）
 - 長期記憶（会話の要約）、背景の時間帯切り替え
 
 ## 10. 更新履歴（新しい順）

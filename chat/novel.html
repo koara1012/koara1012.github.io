@@ -63,6 +63,26 @@ html,body{margin:0;height:100%;background:#000;color:#fff;overflow:hidden;
   box-shadow:0 0 0 calc(var(--S)*2) rgba(255,255,255,.5),0 calc(var(--S)*1) calc(var(--S)*4) rgba(0,0,0,.35)}
 #bBack svg{width:50%;height:50%}
 #bAuto{width:calc(var(--S)*80);height:calc(var(--S)*80)}
+/* バックログ（第22回）：テキストだけ振り返る。顔アイコン・声の再生はなし */
+#blog{position:fixed;inset:0;z-index:25;display:none;background:rgba(0,0,0,.45)}
+#blog.show{display:block}
+#blog .bl{position:absolute;top:calc(var(--sy) + var(--S)*36);bottom:calc(var(--sy) + var(--S)*36);
+  left:max(calc(env(safe-area-inset-left) + 8px), calc(var(--sx) + var(--S)*28));right:max(calc(env(safe-area-inset-right) + 8px), calc(var(--sx) + var(--S)*28));
+  background:rgba(18,14,22,.9);border:1px solid rgba(255,255,255,.55);box-shadow:inset 0 0 0 calc(var(--S)*5) rgba(18,14,22,.9),inset 0 0 0 calc(var(--S)*6) rgba(255,255,255,.18);
+  display:flex;flex-direction:column;font-family:var(--ff)}
+#blog .bh{flex:none;text-align:center;letter-spacing:.12em;color:#d7a3d4;font-size:calc(var(--S)*22);padding:calc(var(--S)*16) 0 calc(var(--S)*8)}
+#blog .bx{position:absolute;top:calc(var(--S)*8);right:calc(var(--S)*12);width:calc(var(--S)*64);height:calc(var(--S)*64);border:0;background:none;color:#f3c9f2;cursor:pointer;padding:0}
+#blog .bx svg{width:70%;height:70%}
+#blog .bs{flex:1;overflow-y:auto;-webkit-overflow-scrolling:touch;padding:0 calc(var(--S)*90) calc(var(--S)*24) calc(var(--S)*90)}
+#blog .be{margin-top:calc(var(--S)*26)}
+#blog .bn{display:flex;align-items:center;gap:calc(var(--S)*10);color:#f2a7ee;font-size:calc(var(--S)*21);letter-spacing:.06em}
+#blog .bn::before{content:'';width:calc(var(--S)*8);height:calc(var(--S)*8);border-radius:50%;background:#e9b7e6;flex:none}
+#blog .bn::after{content:'';flex:1;height:1px;background:rgba(255,255,255,.3)}
+#blog .bt{color:#fff;font-size:calc(var(--S)*26);line-height:1.75;letter-spacing:.08em;white-space:pre-wrap;overflow-wrap:anywhere;margin-top:calc(var(--S)*6);padding-left:calc(var(--S)*18)}
+#blog .be.narr .bt{color:#d6cfe3;padding-left:0}
+#blog .be.me .bn{color:#9fd3ff}#blog .be.me .bn::before{background:#9fd3ff}
+#blog .be.dir .bn{color:#f0c27a}#blog .be.dir .bn::before{background:#f0c27a}
+#blog .bempty{text-align:center;color:#aaa;margin-top:calc(var(--S)*60);font-size:calc(var(--S)*22)}
 #inputOv{position:fixed;inset:0;background:rgba(0,0,0,.35);display:none;z-index:20}
 #inputOv.show{display:block}
 .ibox{position:absolute;top:calc(env(safe-area-inset-top) + 8px);
@@ -144,6 +164,8 @@ body.rotmode #rotwrap{transform:var(--RT)}
   <div id="ctrls">
     <button class="cb" id="bBack" aria-label="メニュー"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M15 4 7 12l8 8"/></svg></button>
     <div class="ln"></div>
+    <button class="cb" id="bLog" aria-label="バックログ"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><path d="M5 6.5h14M5 12h14M5 17.5h9"/></svg></button>
+    <div class="ln"></div>
     <button class="cb" id="bAuto" aria-label="オート"></button>
     <div class="ln"></div>
     <button class="cb" id="bSkip" aria-label="次へ"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round"><path d="M5 4.5v15L16 12z"/><path d="M19.5 4.5v15" stroke-linecap="round"/></svg></button>
@@ -153,6 +175,12 @@ body.rotmode #rotwrap{transform:var(--RT)}
   <div id="ver"></div>
   <button id="contStop">■ 止める（ずっと話しています）</button>
 </div>
+
+<div id="blog"><div class="bl">
+  <div class="bh">BACK LOG</div>
+  <button class="bx" id="blogX" aria-label="閉じる"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"><path d="M5 5l14 14M19 5 5 19"/></svg></button>
+  <div class="bs" id="blogList"></div>
+</div></div>
 
 <div id="inputOv"><div class="ibox">
   <button class="b" id="dirBtn" title="会話ではなく、状況の説明や指示を送る">📝状況</button>
@@ -284,13 +312,16 @@ body.rotmode #rotwrap{transform:var(--RT)}
 <script>
 'use strict';
 /* ====== 版 ====== */
-const VERSION = { no: 21, at: '2026-11-07 03:55:00' };
+const VERSION = { no: 22, at: '2026-11-07 14:45:00' };
 const VERSION_TEXT = `${/\/lab\//.test(location.pathname) ? '試作・' : ''}統合 第${VERSION.no}回（${VERSION.at} 更新・akari.html 第6回がもと）`;
 
 /* ====== 改善ログ（他のAIへの引き継ぎ用）======
    改善のたびに「## 第〜回」を先頭側へ追記し、概要も最新に保つ */
 const DEV_LOG = `# 朱里ノベル 統合の試作（lab/novel.html） 改善ログ
 ※ 本番 akari.html 第6回をもとにした試作。保存先は本番と分けている（localStorage lab.settings / lab.logs、IndexedDB akariLab）。
+## 統合 第22回（2026-11-07 14:45:00）
+- バックログ：右上の〈 とオートの間に［≡］（#bLog）。今のトークの会話を、名前＋テキストだけで振り返る（#blog・backlogEntries）。顔アイコン・声の再生はなし（ユーザーの希望）。ナレーションは名前なしで薄い色、あなたの発言は水色、［📝状況］は橙。今読んでいる返事は画面に出たところまで。開くと一番下。× か外側のタップで閉じる。開いている間は文字送り・オートで進まない（閉じるとオートは続きから）。
+
 ## 統合 第21回（2026-11-07 03:55:00）
 - キャラ・表情ごとに声を試す：キャラ編集の「声の名前」と、各表情の「この表情の声」の横に［▶ 声を試す］（ttsTryVoice・ttsSample）。読み上げのオン／オフに関係なく、その声で短い文（キャラの名前・表情の名前入り）を1回読み、作るのにかかった秒数を出す。表情の声が空ならキャラのふつうの声で読む。失敗の理由（合言葉・声の名前・つながらない）はボタンの横に出す。
 
@@ -1006,6 +1037,7 @@ function showStatic(p){ typeTok++; speaking = false; clearTimeout(autoTimer); co
 function jumpEnd(){ if (!pages.length || state === 'thinking' || state === 'error') return; ttsStop(); pageIdx = pages.length - 1; showStatic(pages[pageIdx]); }
 function advance(src){   // src: 'tap'（画面タップ）/'skip'（▷|）/'auto'（オート）
   clearTimeout(autoTimer);
+  if (logIsOpen()) return;   // バックログを見ている間は進めない
   if (previewChar && src === 'tap'){ previewChar = null; openRoom(ROOM && ROOM.id); return; }
   if (state === 'typing'){ if (src === 'tap') playSE(); skipType = true; return; }
   if (state === 'pageDone'){ if (src === 'tap') playSE(); pageIdx++; playPage(); return; }
@@ -1531,6 +1563,43 @@ function drawAuto(){
     : '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round"><path d="M7 4.5v15L19 12z"/></svg>';
 }
 $('#bBack').onclick = () => openMenu();
+
+/* ====== バックログ（第22回）：今のトークの会話をテキストだけで振り返る。まだ画面に出ていない台詞は出さない ====== */
+const logIsOpen = () => $('#blog').classList.contains('show');
+function backlogEntries(){
+  const out = [], last = HIST[HIST.length - 1];
+  // 今読んでいる返事は、画面に出たところまで（ゲームのバックログと同じ）
+  const cut = (last && last.lines && pages.length && pages[0].line === last.lines[0] && state !== 'idle' && pages[pageIdx]) ? pages[pageIdx].li + 1 : null;
+  HIST.forEach(h => {
+    if (h.role === 'user'){
+      const t = String(h.text || '');
+      if (t.startsWith(DIR)) out.push({ cls:'dir', name:'📝 状況', text:t.slice(DIR.length) });
+      else out.push({ cls:'me', name:S.userName || 'あなた', text:t });
+      return;
+    }
+    const lines = (h === last && cut != null) ? h.lines.slice(0, cut) : (h.lines || []);
+    for (const l of lines){
+      if (l.who === '') out.push({ cls:'narr', name:'', text:l.text });
+      else out.push({ cls:'', name:(charById(l.who) || {}).name || '？', text:l.text });
+    }
+  });
+  return out;
+}
+function openBacklog(){
+  clearTimeout(autoTimer);
+  const list = backlogEntries(), el = $('#blogList');
+  el.innerHTML = list.length ? list.map(e => `<div class="be ${e.cls}">${e.name ? `<div class="bn">${esc(e.name)}</div>` : ''}<div class="bt">${esc(e.text)}</div></div>`).join('')
+    : '<div class="bempty">まだ会話がありません</div>';
+  $('#blog').classList.add('show');
+  requestAnimationFrame(() => { el.scrollTop = el.scrollHeight; });
+}
+function closeBacklog(){
+  $('#blog').classList.remove('show');
+  if (S.auto && state === 'pageDone') advance('auto');   // オートなら続きから
+}
+$('#bLog').onclick = openBacklog;
+$('#blogX').onclick = closeBacklog;
+$('#blog').addEventListener('click', e => { if (e.target.id === 'blog') closeBacklog(); });
 
 /* ====== メニュー ====== */
 let curPanel = 'pRoom';

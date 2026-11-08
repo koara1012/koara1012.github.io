@@ -244,11 +244,11 @@ body.rotmode #rotwrap{transform:var(--RT)}
       <div class="row"><button class="b" id="blinkTest">今いるキャラを瞬きさせる</button><button class="b" id="blinkSlow">ゆっくり瞬き（10倍・確認用）</button></div>
       <h4>読み上げ（キャラの声・Irodori-TTS）</h4>
       <div class="row"><label><input type="checkbox" id="sTtsOn"> 台詞をキャラの声で読み上げる</label></div>
-      <div class="row"><label>声のサーバー</label><input type="text" id="sTtsUrl" placeholder="https://（パソコンの名前）.〜.ts.net"></div>
+      <div class="row"><label>声のサーバー</label><input type="text" id="sTtsUrl" placeholder="https://〜.modal.run または https://（パソコン）.〜.ts.net"></div>
       <div class="row"><label>合言葉</label><input type="password" id="sTtsKey" placeholder=".env の IRODORI_API_KEY（無ければ空）"></div>
       <div class="row"><label>音量（%）</label><input type="number" id="sTtsVol" min="0" max="200" step="10"><label>速さ</label><input type="number" id="sTtsSpeed" min="0.5" max="2" step="0.05"><label>ナレーションの声</label><input type="text" id="sTtsNarr" list="ttsVoiceList" placeholder="空なら読まない"></div>
       <div class="row"><button class="b p" id="ttsTest">つながるか試す</button><span class="note" id="ttsState"></span></div>
-      <p class="note">パソコンの Irodori-TTS-Server に、台詞を「この声で読んで」と頼みます。キャラごとの声の名前は「キャラ」→編集で、表情ごとの声（感情の声）は各表情で選べます。声の名前が無いキャラ・サーバーにつながらないときは、声なしで進みます。（ ）のト書きは読みません。</p>
+      <p class="note">Irodori-TTS-Server（Modal のクラウドGPU か、パソコン）に、台詞を「この声で読んで」と頼みます。Modal は、しばらく使っていないと最初の声まで30秒〜1分かかります（話しかけたときに先に起こします）。キャラごとの声の名前は「キャラ」→編集で、表情ごとの声（感情の声）は各表情で選べます。声の名前が無いキャラ・サーバーにつながらないときは、声なしで進みます。（ ）のト書きは読みません。</p>
       <datalist id="ttsVoiceList"></datalist>
       <h4>画面の向き</h4>
       <div class="row"><label>縦向きロックのとき</label><select id="sRot"><option value="">回さない（横向きにしてと案内）</option><option value="cw">90°回して表示（カメラを左にして持つ）</option><option value="ccw">90°回して表示（カメラを右にして持つ）</option></select><span class="note">寝ながら使うとき用。iPhoneの縦向きロックをかけたまま、横画面として使えます</span></div>
@@ -312,13 +312,22 @@ body.rotmode #rotwrap{transform:var(--RT)}
 <script>
 'use strict';
 /* ====== 版 ====== */
-const VERSION = { no: 22, at: '2026-11-07 14:45:00' };
+const VERSION = { no: 23, at: '2026-11-08 22:40:00' };
 const VERSION_TEXT = `${/\/lab\//.test(location.pathname) ? '試作・' : ''}統合 第${VERSION.no}回（${VERSION.at} 更新・akari.html 第6回がもと）`;
 
 /* ====== 改善ログ（他のAIへの引き継ぎ用）======
    改善のたびに「## 第〜回」を先頭側へ追記し、概要も最新に保つ */
 const DEV_LOG = `# 朱里ノベル 統合の試作（lab/novel.html） 改善ログ
 ※ 本番 akari.html 第6回をもとにした試作。保存先は本番と分けている（localStorage lab.settings / lab.logs、IndexedDB akariLab）。
+## 統合 第23回（2026-11-08 22:40:00）
+- 読み上げを Modal（クラウドGPU）でも使えるように（リポジトリの tts-modal/ に Modal 用のファイルと手順）。アプリは「声のサーバー」の住所を変えるだけ。
+- 声の頼みを全部1列に（ttsEnqueue）。［▶ 声を試す］・［つながるか試す］も同じ列に並び、連打しても最後の1回だけ作る。
+- もう要らない声は作らない：新しい返事が来たら前の返事の未作成分をやめる、台詞を進めたら過ぎた台詞の未作成分をやめる、トークを移ったらやめる（ttsWant・ttsPlan・ttsForget）。
+- 声の名前が無いと言われたら、その名前は10分頼まない（ttsBad。設定・声の名前を変えたら解除）。
+- 待つのは140秒まで（以前60秒。Modal の1回の上限150秒より短く）。8秒以上かかったら「声のサーバーを起こしています…」を出す（3分に1回まで）。
+- 話しかけて考えている間に /health を叩いて GPU を先に起こす（ttsWarm・2分に1回まで。定期的には叩かない）。
+- 設定の説明・住所の例・エラーの文を Modal とパソコンの両方向けに。
+
 ## 統合 第22回（2026-11-07 14:45:00）
 - バックログ：右上の〈 とオートの間に［≡］（#bLog）。今のトークの会話を、名前＋テキストだけで振り返る（#blog・backlogEntries）。顔アイコン・声の再生はなし（ユーザーの希望）。ナレーションは名前なしで薄い色、あなたの発言は水色、［📝状況］は橙。今読んでいる返事は画面に出たところまで。開くと一番下。× か外側のタップで閉じる。開いている間は文字送り・オートで進まない（閉じるとオートは続きから）。
 
@@ -859,12 +868,22 @@ setInterval(() => {
   }
 }, 100);
 
-/* ====== 読み上げ（Irodori-TTS-Server・パソコン）：台詞ごとに「この文をこの声で読んで」と頼み、文字送りと一緒に鳴らす ======
+/* ====== 読み上げ（Irodori-TTS-Server・Modal かパソコン）：台詞ごとに「この文をこの声で読んで」と頼み、文字送りと一緒に鳴らす ======
    声＝表情の声（f.voice）→ キャラの声（c.voice）。ナレーションは S.ttsNarrVoice（空なら読まない）。（ ）のト書き・《》は読まない。
    次の台詞は先に頼んでおく（パソコンは1つずつ作るので順番に）。音量は Web Audio の GainNode（iPhone は audio.volume が効かない）。
-   つながらない・声が無いときは、声なしでいつもどおり進む */
+   つながらない・声が無いときは、声なしでいつもどおり進む。
+   第23回：頼みは全部1列（ttsEnqueue）。もう要らない台詞（飛ばした・過ぎた・トークを移った）の声は作らない（ttsWant）。
+   声の名前が無いと言われたら、その名前はしばらく頼まない（ttsBad）。待つのは140秒まで（Modal の1回の上限150秒より少し短く）。
+   話しかけたとき（考え中）に /health を軽く叩いて GPU を先に起こす（ttsWarm・2分に1回まで。定期的には叩かない＝料金がかかるので） */
 const TTS_CACHE = new Map();   // key → Promise<AudioBuffer|null>
 let TTS_VOICES = null, ttsGain = null, ttsSrc = null, ttsSpeaker = null, ttsTok = 0, ttsEndAt = 0, ttsQueue = Promise.resolve(), ttsWarned = 0;
+const TTS_WAIT = 140000;          // 1つの声を待つ時間
+const ttsWant = new Set();        // 今の返事でまだ要る声（key）
+let ttsPlan = [];                 // 今の返事の台詞の順番（key）
+const ttsBad = new Map();         // 声の名前 → 「無い」と言われた時刻（10分は頼まない）
+let ttsWarmAt = 0, ttsWakeToastAt = 0;
+function ttsEnqueue(fn){ const p = ttsQueue.catch(() => {}).then(fn); ttsQueue = p.catch(() => {}); return p; }   // パソコンも Modal も1つずつ作るので、こちらも1列に並べる
+const ttsIsBad = v => { const t = ttsBad.get(v); return !!t && Date.now() - t < 600000; };
 const ttsVolume = () => Math.max(0, Math.min(200, +S.ttsVol || 0)) / 100;
 const ttsBase = () => String(S.ttsUrl || '').trim().replace(/\/+$/, '');
 function ttsText(t){
@@ -878,28 +897,37 @@ function ttsVoiceFor(line){
   const f = faceObj(c, line.face);
   return (f && f.voice) || c.voice || '';
 }
+const ttsKey = (voice, text) => `${voice}|${S.ttsSpeed}|${text}`;
 function ttsFetch(voice, text){
-  const key = `${voice}|${S.ttsSpeed}|${text}`;
+  const key = ttsKey(voice, text);
   if (TTS_CACHE.has(key)) return TTS_CACHE.get(key);
-  const p = ttsQueue = ttsQueue.catch(() => {}).then(() => ttsRequest(voice, text)).catch(e => { ttsWarn(e); return null; });
+  if (ttsIsBad(voice)) return Promise.resolve(null);
+  const p = ttsEnqueue(async () => {
+    if (!ttsWant.has(key)){ TTS_CACHE.delete(key); return null; }   // 順番が来たときにはもう要らない（飛ばした・過ぎた）
+    if (ttsIsBad(voice)){ TTS_CACHE.delete(key); return null; }
+    return await ttsRequest(voice, text);
+  }).catch(e => { TTS_CACHE.delete(key); ttsWarn(e); return null; });
   TTS_CACHE.set(key, p);
   if (TTS_CACHE.size > 60) TTS_CACHE.delete(TTS_CACHE.keys().next().value);
   return p;
 }
 async function ttsRequest(voice, text, fmt){
   fmt = fmt || S.ttsFmt || 'mp3';
-  const ctrl = new AbortController(), to = setTimeout(() => ctrl.abort(), 60000);
+  const ctrl = new AbortController(), to = setTimeout(() => ctrl.abort(), TTS_WAIT);
+  const wake = setTimeout(() => { if (Date.now() - ttsWakeToastAt > 180000){ ttsWakeToastAt = Date.now(); toast('声のサーバーを起こしています…（しばらく使っていなかったときは30秒〜1分）', false, 5000); } }, 8000);
   let r;
   try{
     r = await fetch(ttsBase() + '/v1/audio/speech', { method:'POST', signal:ctrl.signal,
       headers:Object.assign({ 'Content-Type':'application/json' }, S.ttsKey ? { Authorization:'Bearer ' + S.ttsKey } : {}),
       body:JSON.stringify({ model:'irodori-tts', input:text, voice, response_format:fmt, speed:+S.ttsSpeed || 1 }) });
-  }catch(e){ throw new Error(e.name === 'AbortError' ? '声のサーバーから60秒たっても返事が来ませんでした' : '声のサーバーにつながりません（パソコンの起動・Tailscale・URLを確認）：' + e.message); }
-  finally{ clearTimeout(to); }
+  }catch(e){ throw new Error(e.name === 'AbortError' ? `声のサーバーから${TTS_WAIT / 1000}秒たっても返事が来ませんでした` : '声のサーバーにつながりません（住所・電波、パソコンなら起動と Tailscale を確認）：' + e.message); }
+  finally{ clearTimeout(to); clearTimeout(wake); }
   if (!r.ok){
     const t = await r.text().catch(() => '');
     if (fmt !== 'wav' && /ffmpeg/i.test(t)){ S.ttsFmt = 'wav'; saveS(); log('warn', '声のサーバーに FFmpeg が無いので、WAV で受け取ります（データが大きくなります）'); return ttsRequest(voice, text, 'wav'); }
-    throw new Error(`声のサーバー ${r.status}：${t.slice(0, 200)}${r.status === 401 ? '（合言葉が違います）' : r.status === 404 || /voice/i.test(t) ? `（声の名前「${voice}」を確かめてください）` : ''}`);
+    const badVoice = r.status !== 401 && (r.status === 404 || /voice/i.test(t));
+    if (badVoice) ttsBad.set(voice, Date.now());   // 同じ名前で何度も頼まない（10分。設定を変えたら解除）
+    throw new Error(`声のサーバー ${r.status}：${t.slice(0, 200)}${r.status === 401 ? '（合言葉が違います）' : badVoice ? `（声の名前「${voice}」を確かめてください。10分は頼みません）` : ''}`);
   }
   const buf = await r.arrayBuffer();
   const c = ensureCtx(); if (!c) throw new Error('この端末では音を鳴らせません');
@@ -910,10 +938,23 @@ function ttsWarn(e){
   if (Date.now() - ttsWarned > 60000){ ttsWarned = Date.now(); toast('読み上げできませんでした（声なしで続けます）：' + e.message, true, 6000); }
 }
 const ttsReady = () => S.ttsOn && ttsBase() && ROOM;
-function ttsPrefetch(lines){ if (!ttsReady()) return; for (const l of lines){ const v = ttsVoiceFor(l), t = ttsText(l.text); if (v && t) ttsFetch(v, t); } }
+function ttsPrefetch(lines){   // 新しい返事：前の返事の、まだ作っていない声はやめて、この返事の声を順に頼む
+  ttsWant.clear(); ttsPlan = [];
+  if (!ttsReady()) return;
+  for (const l of lines){ const v = ttsVoiceFor(l), t = ttsText(l.text); if (v && t){ const k = ttsKey(v, t); ttsPlan.push(k); ttsWant.add(k); ttsFetch(v, t); } }
+}
+function ttsForget(){ ttsWant.clear(); ttsPlan = []; }   // トークを移った・閉じた：まだ作っていない声は頼まない
+function ttsWarm(){   // 考えている間に GPU を起こしておく（返事の声を早く出すため）。2分に1回まで
+  if (!ttsReady() || Date.now() - ttsWarmAt < 120000) return;
+  ttsWarmAt = Date.now();
+  fetch(ttsBase() + '/health', { cache:'no-store' }).catch(() => {});
+}
 async function ttsPlayLine(line, st){
   ttsStop(); if (!ttsReady()) return;
   const v = ttsVoiceFor(line), t = ttsText(line.text); if (!v || !t) return;
+  const key = ttsKey(v, t), i = ttsPlan.indexOf(key);
+  if (i > 0){ for (const k of ttsPlan.slice(0, i)) ttsWant.delete(k); }   // 前の台詞（もう過ぎた）の声は、まだなら作らない
+  ttsWant.add(key);
   const tok = ++ttsTok, buf = await ttsFetch(v, t);
   if (!buf || tok !== ttsTok) return;   // もう次の台詞に進んでいたら鳴らさない
   const c = ensureCtx(); if (!c) return;
@@ -944,8 +985,8 @@ async function ttsTryVoice(voice, text, el, note){
   const tok = ++ttsTrying; ttsStop(); ensureCtx();
   say(`「${voice}」で作っています…`);
   try{
-    const t0 = Date.now(), buf = await ttsRequest(voice, text);
-    if (tok !== ttsTrying) return;
+    const t0 = Date.now(), buf = await ttsEnqueue(() => tok === ttsTrying ? ttsRequest(voice, text) : null);   // トークの声と同じ列に並ぶ。連打したら最後の1回だけ作る
+    if (tok !== ttsTrying || !buf) return;
     const cx = ensureCtx(); if (!cx) throw new Error('この端末では音を鳴らせません');
     if (!ttsGain){ ttsGain = cx.createGain(); ttsGain.connect(cx.destination); }
     ttsGain.gain.value = ttsVolume();
@@ -961,12 +1002,13 @@ async function ttsTest(){
   if (!ttsBase()){ el.textContent = '声のサーバーの住所を入れてください'; return; }
   el.textContent = 'つないでいます…';
   try{
-    const h = await fetch(ttsBase() + '/health').catch(e => { throw new Error('つながりません（パソコンの起動・Tailscale・URL・CORS の設定を確認）：' + e.message); });
+    ttsBad.clear();
+    const h = await fetch(ttsBase() + '/health').catch(e => { throw new Error('つながりません（住所・CORS の設定、パソコンなら起動と Tailscale を確認）：' + e.message); });
     if (!h.ok) throw new Error('サーバーの返事 ' + h.status);
     const list = await ttsLoadVoices();
     el.textContent = `つながりました。声：${list.length ? list.join('、') : '（まだありません。voices フォルダに置いてください）'}`;
     const c = ROOM && charById(ROOM.members[0]), v = (c && c.voice) || list[0];
-    if (v){ ensureCtx(); TTS_CACHE.clear(); const buf = await ttsRequest(v, 'こんにちは。声の読み上げのテストです。'); const cx = ensureCtx(); if (!ttsGain){ ttsGain = cx.createGain(); ttsGain.connect(cx.destination); } ttsGain.gain.value = ttsVolume(); const s = cx.createBufferSource(); s.buffer = buf; s.connect(ttsGain); s.start(0); el.textContent += `（「${v}」で試しに読みました）`; }
+    if (v){ ensureCtx(); TTS_CACHE.clear(); const buf = await ttsEnqueue(() => ttsRequest(v, 'こんにちは。声の読み上げのテストです。')); const cx = ensureCtx(); if (!ttsGain){ ttsGain = cx.createGain(); ttsGain.connect(cx.destination); } ttsGain.gain.value = ttsVolume(); const s = cx.createBufferSource(); s.buffer = buf; s.connect(ttsGain); s.start(0); el.textContent += `（「${v}」で試しに読みました）`; }
     log('info', '読み上げ：つながりました ' + list.join(','));
   }catch(e){ el.textContent = e.message; log('warn', '読み上げのテスト：' + e.message); }
 }
@@ -1218,6 +1260,7 @@ function parseReply(c){
 }
 let thinkTimer = 0;
 function startThinking(){
+  ttsWarm();
   state = 'thinking'; showHint(null); typeTok++; speaking = false;
   let n = 0; textEl.textContent = '…'; clearInterval(thinkTimer);
   thinkTimer = setInterval(() => { n = (n+1)%3; textEl.textContent = '…'.repeat(n+1); }, 450);
@@ -1495,7 +1538,7 @@ async function uraRoomFor(target, lineP){
 
 /* ====== トークを開く ====== */
 async function openRoom(id){
-  previewChar = null; stopCont(true);
+  previewChar = null; stopCont(true); ttsStop(); ttsForget();
   ROOM = ROOMS.find(r => r.id === id) || null; S.room = ROOM ? ROOM.id : null; saveS();
   HIST = [];
   let fresh = null;
@@ -1756,7 +1799,7 @@ function renderCharEditor(c){
   $('#ceBack').onclick = () => { editChar = null; renderChars(); };
   $('#ceName').addEventListener('input', e => { c.name = e.target.value.trim() || '名無し'; saveCharsSoon(); menuDirty = true; });
   $('#ceCall').addEventListener('input', e => { c.callName = e.target.value.trim(); saveCharsSoon(); });
-  $('#ceVoice').addEventListener('input', e => { c.voice = e.target.value.trim(); saveCharsSoon(); });
+  $('#ceVoice').addEventListener('input', e => { c.voice = e.target.value.trim(); ttsBad.clear(); saveCharsSoon(); });
   if (S.ttsOn && S.ttsUrl && !TTS_VOICES) ttsLoadVoices().catch(() => {});
   $('#ceVoiceTry').onclick = () => ttsTryVoice(c.voice, ttsSample(c, null), $('#ceVoiceState'));
   $('#ceLine').addEventListener('change', e => {
@@ -1782,7 +1825,7 @@ function renderCharEditor(c){
     f.name = n; saveCharsSoon(); menuDirty = true;
   }));
   area.querySelectorAll('[data-fdesc]').forEach(i => i.addEventListener('input', () => { c.faces.find(x => x.id === i.dataset.fdesc).desc = i.value; saveCharsSoon(); }));
-  area.querySelectorAll('[data-fvoice]').forEach(i => i.addEventListener('input', () => { c.faces.find(x => x.id === i.dataset.fvoice).voice = i.value.trim(); saveCharsSoon(); }));
+  area.querySelectorAll('[data-fvoice]').forEach(i => i.addEventListener('input', () => { c.faces.find(x => x.id === i.dataset.fvoice).voice = i.value.trim(); ttsBad.clear(); saveCharsSoon(); }));
   area.querySelectorAll('[data-fvtry]').forEach(b => b.onclick = () => { const f = c.faces.find(x => x.id === b.dataset.fvtry); if (f) ttsTryVoice(f.voice || c.voice, ttsSample(c, f), area.querySelector(`[data-fvstate="${f.id}"]`), !f.voice && c.voice ? '（この表情の声が空なので、キャラのふつうの声）' : ''); });
   area.querySelectorAll('[data-foff]').forEach(i => i.addEventListener('change', () => {
     const [fid, k] = i.dataset.foff.split('|'); const f = c.faces.find(x => x.id === fid); if (!f) return;
@@ -1871,7 +1914,7 @@ $('#sRot').addEventListener('change', e => { S.rotMode = e.target.value; saveS()
 $('#sBgmOn').addEventListener('change', e => { S.bgmOn = e.target.checked; saveS(); bgmSync(); });
 $('#sBgmVol').addEventListener('input', () => bgmSync());
 $('#sTtsOn').addEventListener('change', e => { S.ttsOn = e.target.checked; saveS(); if (!S.ttsOn) ttsStop(); });
-['sTtsUrl','sTtsKey','sTtsSpeed'].forEach(id => $('#'+id).addEventListener('input', () => { TTS_CACHE.clear(); ttsWarned = 0; }));
+['sTtsUrl','sTtsKey','sTtsSpeed','sTtsNarr'].forEach(id => $('#'+id).addEventListener('input', () => { TTS_CACHE.clear(); ttsWarned = 0; ttsBad.clear(); }));
 $('#sTtsVol').addEventListener('input', () => { if (ttsGain) ttsGain.gain.value = ttsVolume(); });
 $('#ttsTest').onclick = ttsTest;
 $('#getGModels').onclick = async () => {

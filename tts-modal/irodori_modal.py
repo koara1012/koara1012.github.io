@@ -39,6 +39,7 @@ voices = modal.Volume.from_name("irodori-voices", create_if_missing=True)
 # Irodori-TTS-Server の Dockerfile と同じ手順で入れる（uv・CUDA 12.8 版の PyTorch）
 # Modal の土台は 3.11 以上しか選べないので 3.11。サーバー本体は uv が Python 3.10（リポジトリの .python-version）を
 # 自分で取ってきて /app/.venv に入れる（PC と同じ 3.10 で動く）
+# --locked だと Modal の中では「uv.lock を作り直して」と止まるので、--frozen（uv.lock の版をそのまま入れる）
 image = (
     modal.Image.debian_slim(python_version="3.11")
     .apt_install("build-essential", "ca-certificates", "ffmpeg", "git", "libsndfile1")
@@ -51,7 +52,7 @@ image = (
     .run_commands(
         f"git clone {IRODORI_SERVER_REPO} /app",
         f"cd /app && git checkout {IRODORI_SERVER_REV}",
-        "cd /app && uv sync --locked --no-dev --no-editable --extra cu128 --python 3.10",
+        "cd /app && uv sync --frozen --no-dev --no-editable --extra cu128 --python 3.10",
     )
     .env({
         "HF_HOME": HF_CACHE,

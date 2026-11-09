@@ -5,5 +5,5 @@ if exist "..\make-voices.ps1" powershell -NoProfile -ExecutionPolicy Bypass -Fil
 uvx modal volume create irodori-voices 2>nul
 uvx modal volume put irodori-voices "%~dp0..\voices" / --force
 echo.
-echo Done. New voices are used after the GPU sleeps (about 5 minutes without talking).
+echo Done. New voices are used after the GPU sleeps (about 4 minutes without talking).
 pause

@@ -17,7 +17,7 @@ import modal
 
 # ---- ここだけ変えれば調整できます ---------------------------------------
 GPU = "L4"                 # 24GB。Irodori-TTS には十分。安くしたいときは "T4"（未確認）
-SCALEDOWN_SECONDS = 300    # 最後の声を作ってから、GPU を止めるまで待つ秒数（この間も料金がかかる）。
+SCALEDOWN_SECONDS = 240    # 最後の声を作ってから、GPU を止めるまで待つ秒数（この間も料金がかかる）。
                            # 短いほど安いが、次に話しかけたとき起動待ち（30秒〜1分）になりやすい
 PRECISION = "fp32"         # PC と同じ。軽くしたいときは "bf16"（Irodori の Docker GPU 設定はこちら）。声は少し変わるかも
 ALLOWED_ORIGIN = "https://koara1012.github.io"

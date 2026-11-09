@@ -1,9 +1,10 @@
-# PC の Modal のトークン（1-login.bat で ~/.modal.toml に入ったもの）を、Secret「modal-billing」にコピーする。
-# 今月の使用量の窓口（usage）が料金を読むために使う。トークンは画面にもファイルにも出さない。
+# Copy this PC's Modal token (saved in ~/.modal.toml by 1-login.bat) to the Modal secret "modal-billing".
+# The usage endpoint uses it to read this month's cost. The token is never printed or written to a file.
+# (ASCII only on purpose: Windows PowerShell 5.1 reads BOM-less files as Shift-JIS.)
 $f = Join-Path $env:USERPROFILE '.modal.toml'
 if (-not (Test-Path -LiteralPath $f)) { Write-Host 'Modal token not found. Run 1-login.bat first.'; exit 1 }
 $text = Get-Content -LiteralPath $f -Raw -Encoding UTF8
-# [profile] ごとに分けて、active = true のもの（無ければ最初）を使う
+# Split by [profile]; use the one with active = true (or the first one)
 $blocks = [regex]::Split($text, '(?m)^\s*\[') | Where-Object { $_ -match 'token_id' }
 if (-not $blocks) { Write-Host 'Modal token not found. Run 1-login.bat first.'; exit 1 }
 $pick = $blocks | Where-Object { $_ -match '(?m)^\s*active\s*=\s*true' } | Select-Object -First 1

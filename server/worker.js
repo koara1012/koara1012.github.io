@@ -14,7 +14,7 @@
 //    ・Cron トリガー  * * * * *  （毎分。実際に動くのは13分おき）
 // =====================================================================
 
-const VERSION = '第46版（2026-11-02 15:10:00 更新・AIが断ったときに知らせる・表情名の番号を無視）';
+const VERSION = '第47版（2026-11-10 06:00:00 更新・電話と留守電）';
 const DEFAULT_MODEL = 'gemini-flash-latest';
 const DEFAULT_GROK_MODEL = 'grok-4.7';                 // X（Twitter）の Grok と同じ最新世代
 const FALLBACK_GROK_MODEL = 'grok-4-fast-non-reasoning'; // 上が使えないときの予備
@@ -72,6 +72,7 @@ export default {
     ctx.waitUntil(runDueProactive(env).catch((e) => log(env, '自動送信: ' + e.message))); // 時間をずらした話しかけ
     ctx.waitUntil(runDuePostscripts(env).catch((e) => log(env, '追伸: ' + e.message))); // 追伸・不在着信のあとの言葉
     ctx.waitUntil(runAppointments(env).catch((e) => log(env, '会う約束: ' + e.message))); // 会う約束の通知（試作・使うときだけ）
+    ctx.waitUntil(runCalls(env).catch((e) => log(env, '電話: ' + e.message))); // 電話：GPU を起こしてから鳴らす・不在・放置・折り返し
     ctx.waitUntil(runDisasters(env, minute).catch((e) => log(env, '災害の確認: ' + e.message))); // 地震・速報は毎分、ほかは間をあけて確認
     // 見回りは毎分。キャラごとに13分の中で担当の分をずらして判定する（何人も同じ瞬間に動かないように）
     ctx.waitUntil(tick(env, minute).catch((e) => log(env, 'tick全体: ' + e.message)));
@@ -108,7 +109,7 @@ async function ensureSchema(env) {
     env.DB.prepare('CREATE TABLE IF NOT EXISTS ai_cost (world TEXT NOT NULL, month TEXT NOT NULL, usd REAL NOT NULL DEFAULT 0, calls INTEGER NOT NULL DEFAULT 0, tin INTEGER NOT NULL DEFAULT 0, tout INTEGER NOT NULL DEFAULT 0, images INTEGER NOT NULL DEFAULT 0, PRIMARY KEY (world, month))'), // AIの利用料金（目安）
   ]);
   // 既存の messages に写真・送信取り消し用の列を足す（2回目以降は「もうある」で失敗するので無視）
-  for (const col of ['image TEXT', 'alt TEXT', 'retracted INTEGER NOT NULL DEFAULT 0', 'retract_at INTEGER', 'reaction TEXT', 'reacted_at INTEGER', 'reply_to INTEGER', 'kind TEXT', 'speaker TEXT', 'face TEXT']) {
+  for (const col of ['image TEXT', 'alt TEXT', 'retracted INTEGER NOT NULL DEFAULT 0', 'retract_at INTEGER', 'reaction TEXT', 'reacted_at INTEGER', 'reply_to INTEGER', 'kind TEXT', 'speaker TEXT', 'face TEXT', 'meta TEXT']) {
     try { await env.DB.prepare('ALTER TABLE messages ADD COLUMN ' + col).run(); } catch (_) {}
   }
   // TLの投稿に写真を付けられるようにする
@@ -194,6 +195,7 @@ const DEFAULT_SETTINGS = {
   meName: '', meNameUra: '', meIconVer: 0, meUraIconVer: 0, // あなたのTLでの名前（表・裏）とアイコンの版
   newsEnabled: true, // 表で話題を切り替えるとき、最近のニュースも話題にする
   uraPaused: false, omotePaused: false, lifeEnabled: true, imagesEnabled: true, delayEnabled: true, disasterEnabled: true, quakeMin: '4', notifyVia: 'web', barkSound: '', yen: 150, cost: {}, birthday: '', // くらし（記憶・毎日の様子など）、写真、あなたの誕生日 MM-DD
+  phoneEnabled: true, phoneAllOff: false, phoneQuietMode: 'same', phoneQuietStart: 1, phoneQuietEnd: 7, ttsUrl: '',
   weatherLat: 35.927, weatherLon: 139.604, weatherPlace: '埼玉県さいたま市北区日進町',
 };
 async function getSettings(env) {
@@ -232,6 +234,8 @@ function normChar(c) {
     jealous: ['yes', 'no'].includes(c.jealous) ? c.jealous : 'auto', // 嫉妬する：おまかせ（設定から判断）／する／しない
     birthday: validMD(c.birthday) ? c.birthday : '', // キャラの誕生日 "MM-DD"（空なら決めていない）
     uraOnly: !!c.uraOnly, // 裏だけに登場する（表のトーク・表のTL・くらしには出てこない）
+    voice: /^[\w.-]{1,40}$/.test(String(c.voice || '').trim()) ? String(c.voice).trim() : '', // 電話の声（Irodori-TTS の声の名前）。空なら電話を使わない
+    callFreq: ['none', 'rare', 'normal', 'often'].includes(c.callFreq) ? c.callFreq : 'normal', // キャラからの着信の頻度
   };
 }
 function validMD(v) { const m = /^(\d{2})-(\d{2})$/.exec(String(v || '')); return !!m && +m[1] >= 1 && +m[1] <= 12 && +m[2] >= 1 && +m[2] <= [31, 29, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31][+m[1] - 1]; }
@@ -307,8 +311,9 @@ async function getChar(env, id) {
 const rowToMsg = (r) => ({ id: r.id, charId: r.char_id, sender: r.sender, text: r.retracted ? '' : r.text, at: r.at,
   ...(r.image && !r.retracted ? { image: r.image } : {}), ...(r.alt ? { alt: r.alt } : {}), ...(r.retracted ? { retracted: 1, origText: r.text } : {}),
   ...(r.reaction ? { reaction: r.reaction, reactedAt: r.reacted_at || 0 } : {}),
-  ...(r.reply_to ? { replyTo: r.reply_to } : {}), ...(r.kind ? { kind: r.kind } : {}), ...(r.speaker ? { speaker: r.speaker } : {}), ...(r.face ? { face: r.face } : {}) });
-const MSG_COLS = 'id,char_id,sender,text,at,image,alt,retracted,reaction,reacted_at,reply_to,kind,speaker,face';
+  ...(r.reply_to ? { replyTo: r.reply_to } : {}), ...(r.kind ? { kind: r.kind } : {}), ...(r.speaker ? { speaker: r.speaker } : {}), ...(r.face ? { face: r.face } : {}), ...(r.meta ? { meta: parseMeta(r.meta) } : {}) });
+function parseMeta(v) { try { return JSON.parse(v); } catch (_) { return {}; } }
+const MSG_COLS = 'id,char_id,sender,text,at,image,alt,retracted,reaction,reacted_at,reply_to,kind,speaker,face,meta';
 
 // ---------------------------------------------------------------- スタンプ（表のトークだけ）
 // キャラの吹き出しにはユーザーが、ユーザーの吹き出しにはキャラが付ける（1つのメッセージに1つ）
@@ -407,7 +412,11 @@ async function route(key, url, body, env, ctx) {
       const { results: ap } = await env.DB.prepare("SELECT k,v FROM kv WHERE k >= 'appt:' AND k < 'appt;'").all();
       const appts = {};
       for (const r of ap) { try { appts[r.k.slice(5)] = JSON.parse(r.v); } catch (_) {} }
-      return json({ appts, chars, groups: await loadGroups(env), aiAlerts: await aiAlerts(env), messages, more, reads, charRead, reactions, status, cost: await costSummary(env).catch(() => null), outage: dis && dis.outage ? dis.outage : null, retracted: rt.map((r) => r.id), settings: await getSettings(env), now: Date.now(), version: VERSION });
+      const calls = (await listCalls(env)).filter((x) => ['ringing', 'active'].includes(x.status)).map(callPublic);
+      const { results: vmr } = await env.DB.prepare("SELECT k,v FROM kv WHERE k >= 'vm:' AND k < 'vm;'").all();
+      const vms = {};
+      for (const r of vmr) { try { vms[r.k.slice(3)] = JSON.parse(r.v); } catch (_) {} }
+      return json({ calls, vms, appts, chars, groups: await loadGroups(env), aiAlerts: await aiAlerts(env), messages, more, reads, charRead, reactions, status, cost: await costSummary(env).catch(() => null), outage: dis && dis.outage ? dis.outage : null, retracted: rt.map((r) => r.id), settings: await getSettings(env), now: Date.now(), version: VERSION });
     }
 
     // ---- 立ち絵の表情（ノベル画面から。裏の返事でAIが選ぶ候補。画像は受け取らない）
@@ -444,6 +453,108 @@ async function route(key, url, body, env, ctx) {
       if (text) { const lg = await kvGet(env, 'meetlog:' + c.id, []); lg.push({ who: 'me', text }); await kvSet(env, 'meetlog:' + c.id, lg.slice(-MEET_LOG_MAX)); }
       if ((await getSettings(env)).omotePaused) return json({ lines: [], paused: true }); // 話したことは残す（再開したら返事）
       return json({ lines: await meetReply(env, c, false, !text && body.cont) });
+    }
+    // ---- 電話（第47版）
+    case 'POST /call/start': { // ユーザーからかける：出るかどうかを先に決める（アプリは呼び出し音の間に GPU を起こす）
+      const c = await omoteChar(env, body.charId);
+      if (!phoneChar(c)) throw new HttpError(400, 'このキャラには声の名前がないので、電話は使えません');
+      const st = await getSettings(env);
+      if (!phoneOn(st)) throw new HttpError(400, '電話はオフになっています（設定）');
+      const calls = await listCalls(env);
+      const busy = busyCall(calls);
+      if (busy && busy.status === 'active') throw new HttpError(409, 'いまは別の電話中です');
+      for (const x of calls) if (x.status === 'dialing') await delCall(env, x.id);
+      const d = await decideAnswer(env, c, st, Date.now());
+      const cl = { id: newCallId(), charId: c.id, members: [c.id], dir: 'out', status: 'dialing', created: Date.now(), answer: !!d.answer, after: d.after || 'none', line: String(d.line || '').slice(0, 200), transcript: [] };
+      await putCall(env, cl);
+      return json({ call: callPublic(cl), ringMs: cl.answer ? Math.round(4000 + Math.random() * 9000) : CALL_RING_MS });
+    }
+    case 'POST /call/connect': { // 呼び出しが終わった：出たなら第一声、出なかったら記録と（たまに）折り返し・LINE
+      const cl = await getCall(env, body.id);
+      const c = await omoteChar(env, cl.charId);
+      if (cl.dir !== 'out' || cl.status !== 'dialing') throw new HttpError(409, 'この電話はもう終わっています');
+      if (!cl.answer || (await getSettings(env)).omotePaused) {
+        await delCall(env, cl.id);
+        const m = await callMsg(env, c.id, 'me', 'callout', '', null);
+        if (cl.after === 'callback' && Math.random() < 0.7) await kvSet(env, 'callback:' + c.id, { due: Date.now() + (10 + Math.random() * 80) * MIN });
+        else if (cl.after === 'line' && cl.line && Math.random() < 0.7) await kvSet(env, 'ps:' + c.id, { texts: [cl.line], due: Date.now() + (5 + Math.random() * 40) * MIN, after: m.id });
+        return json({ answered: false, message: m });
+      }
+      cl.status = 'active'; cl.answeredAt = Date.now(); cl.lastAt = Date.now();
+      await putCall(env, cl);
+      const r = await keep(ctx, callReply(env, cl, c));
+      cl.transcript.push(...r.lines.map((t) => ({ who: 'char', text: t, at: Date.now() })));
+      await putCall(env, cl);
+      return json({ answered: true, call: callPublic(cl), lines: r.lines, hangup: r.hangup });
+    }
+    case 'POST /call/answer': { // キャラからの着信に出た
+      const cl = await getCall(env, body.id);
+      const c = await omoteChar(env, cl.charId);
+      if (cl.status === 'active') return json({ call: callPublic(cl), lines: [], again: true });
+      if (cl.dir !== 'in' || cl.status !== 'ringing' || Date.now() > cl.ringAt + CALL_RING_MS + CALL_GRACE_MS) throw new HttpError(410, '電話はもう切れました（不在着信になりました）');
+      cl.status = 'active'; cl.answeredAt = Date.now(); cl.lastAt = Date.now();
+      await putCall(env, cl);
+      const r = await keep(ctx, callReply(env, cl, c));
+      cl.transcript.push(...r.lines.map((t) => ({ who: 'char', text: t, at: Date.now() })));
+      await putCall(env, cl);
+      return json({ call: callPublic(cl), lines: r.lines, hangup: r.hangup });
+    }
+    case 'POST /call/decline': { // 着信を拒否した：留守電を残すかはキャラしだい
+      const cl = await getCall(env, body.id);
+      const c = await omoteChar(env, cl.charId);
+      if (cl.dir === 'in' && cl.status === 'ringing') await keep(ctx, callMissed(env, cl, c, 'declined'));
+      else if (cl.dir === 'out') await delCall(env, cl.id);
+      return json({ ok: true });
+    }
+    case 'POST /call/say': { // 通話中に話した（text が空なら、黙っている扱いで返事だけ）
+      const cl = await getCall(env, body.id);
+      const c = await omoteChar(env, cl.charId);
+      if (cl.status !== 'active') throw new HttpError(409, 'この電話はもう切れています');
+      const text = String(body.text || '').trim().slice(0, 2000);
+      if (text) cl.transcript.push({ who: 'me', text, at: Date.now() });
+      cl.lastAt = Date.now();
+      await putCall(env, cl);
+      if ((await getSettings(env)).omotePaused) return json({ lines: [], paused: true });
+      const r = await keep(ctx, callReply(env, cl, c));
+      const now2 = await kvGet(env, 'call:' + cl.id, null);
+      if (!now2) return json({ lines: [], ended: true });
+      now2.transcript.push(...r.lines.map((t) => ({ who: 'char', text: t, at: Date.now() })));
+      now2.lastAt = Date.now();
+      await putCall(env, now2);
+      return json({ lines: r.lines, hangup: r.hangup });
+    }
+    case 'POST /call/ping': { // 通話中：まだつながっている（放置で切れないように）
+      const cl = await getCall(env, body.id);
+      if (cl.status === 'active') { cl.lastAt = Date.now(); await putCall(env, cl); }
+      return json({ call: callPublic(cl) });
+    }
+    case 'POST /call/end': { // 切った（by: me / char）。内容をまとめて記憶に・トークに記録
+      const cl = await kvGet(env, 'call:' + String(body.id || ''), null);
+      if (!cl) return json({ message: null });
+      const c = await omoteChar(env, cl.charId);
+      const m = await keep(ctx, finishCall(env, cl, c, { by: body.by === 'char' ? 'char' : 'me', est: body.est || null }));
+      return json({ message: m });
+    }
+    case 'GET /call': {
+      const cl = await kvGet(env, 'call:' + String(url.searchParams.get('id') || ''), null);
+      return json({ call: cl ? callPublic(cl) : null });
+    }
+    case 'POST /vm/heard': { // 留守電を聞いた
+      const id = String(body.charId || '');
+      const list = await kvGet(env, 'vm:' + id, []);
+      for (const v of list) if (v.id === Number(body.id)) v.heard = true;
+      await kvSet(env, 'vm:' + id, list);
+      return json({ vms: list });
+    }
+    case 'POST /call/test': { // テスト：今すぐ電話をかけてもらう（設定の時間帯・頻度は無視）
+      const c = await omoteChar(env, body.charId);
+      if (!phoneChar(c)) throw new HttpError(400, 'このキャラには声の名前がありません');
+      const st = await getSettings(env);
+      if (busyCall(await listCalls(env))) throw new HttpError(409, 'いまは別の電話中です');
+      const cl = { id: newCallId(), charId: c.id, members: [c.id], dir: 'in', status: 'warming', created: Date.now(), why: 'ring', transcript: [] };
+      await putCall(env, cl);
+      await keep(ctx, advanceCall(env, cl, st, c));
+      return json({ call: callPublic((await kvGet(env, 'call:' + cl.id, null)) || cl) });
     }
     case 'POST /meet/end': { // 会うのを終える：会った内容をまとめて、表の記憶へ
       const c = await omoteChar(env, body.charId);
@@ -683,7 +794,7 @@ async function route(key, url, body, env, ctx) {
       await noteUserDelete(env);
       await env.DB.batch([
         env.DB.prepare('DELETE FROM chars WHERE id=?').bind(id),
-        env.DB.prepare('DELETE FROM kv WHERE k IN (?,?,?,?,?,?,?,?,?)').bind('reply:' + id, 'rhythm:' + id, 'jealous:' + id, 'proj:' + id, 'ps:' + id, 'faces:' + id, 'facesO:' + id, 'appt:' + id, 'meetlog:' + id),
+        env.DB.prepare('DELETE FROM kv WHERE k IN (?,?,?,?,?,?,?,?,?,?,?)').bind('reply:' + id, 'rhythm:' + id, 'jealous:' + id, 'proj:' + id, 'ps:' + id, 'faces:' + id, 'facesO:' + id, 'appt:' + id, 'meetlog:' + id, 'vm:' + id, 'callback:' + id),
         env.DB.prepare('DELETE FROM messages WHERE char_id=? OR char_id=?').bind(id, id + URA),
         env.DB.prepare('DELETE FROM reads WHERE char_id=? OR char_id=?').bind(id, id + URA),
         env.DB.prepare('DELETE FROM ura_icons WHERE char_id=?').bind(id),
@@ -926,6 +1037,13 @@ async function route(key, url, body, env, ctx) {
       if ('disasterEnabled' in s) v.disasterEnabled = !!s.disasterEnabled;
       if ('quakeMin' in s && QUAKE_MIN[s.quakeMin]) v.quakeMin = s.quakeMin;
       if ('birthday' in s) v.birthday = /^\d{2}-\d{2}$/.test(String(s.birthday)) ? String(s.birthday) : '';
+      // 電話（第47版）
+      if ('phoneEnabled' in s) v.phoneEnabled = !!s.phoneEnabled;
+      if ('phoneAllOff' in s) v.phoneAllOff = !!s.phoneAllOff; // すべての電話（キャラからの着信）を拒否
+      if ('phoneQuietMode' in s && ['same', 'custom', 'off'].includes(s.phoneQuietMode)) v.phoneQuietMode = s.phoneQuietMode;
+      if ('phoneQuietStart' in s) v.phoneQuietStart = clamp(Math.round(num(s.phoneQuietStart, 1)), 0, 23);
+      if ('phoneQuietEnd' in s) v.phoneQuietEnd = clamp(Math.round(num(s.phoneQuietEnd, 7)), 0, 23);
+      if ('ttsUrl' in s) { const u = String(s.ttsUrl || '').trim().replace(/\/+$/, ''); v.ttsUrl = /^https:\/\/[^\s/]+(\/[^\s]*)?$/.test(u) ? u.slice(0, 200) : ''; } // GPU を起こすため（/health だけ使う）
       if (s.notify && typeof s.notify === 'object') {
         for (const k of Object.keys(NOTIFY_DEFAULT)) if (k in s.notify) v.notify[k] = !!s.notify[k];
       }
@@ -1205,6 +1323,7 @@ async function tick(env, minute) {
     try {
       const hist = await recent(env, c.id, 60);
       const lastRead = await getRead(env, c.id);
+      if (await maybeRing(env, c, settings, now).catch((e) => { log(env, `電話（${c.name}）: ${e.message}`); return false; })) { done.push(c.name + ':着信'); continue; }
       let d = await lifeDecide(env, c, hist, lastRead, now, settings, ctxAll).catch((e) => { log(env, `くらし（${c.name}）: ${e.message}`); return null; });
       let boost = { f: 1 };
       if (!d) {
@@ -1349,7 +1468,7 @@ function buildContents(hist, world = 'omote', images = {}, faces = null) {
   const turns = [];
   for (const m of hist) {
     const role = m.sender === 'me' ? 'user' : 'model';
-    let body = m.retracted ? `（送信を取り消したメッセージ：${m.origText || ''}）` : m.kind === 'call' ? '（電話をかけたが、ユーザーは出なかった）' : m.text;
+    let body = m.retracted ? `（送信を取り消したメッセージ：${m.origText || ''}）` : m.kind === 'callout' ? '（電話をかけた。相手は出なかった）' : m.kind ? msgLine(m) : m.text;
     if (m.image || (m.alt && !m.retracted)) body = (m.sender === 'me' ? '（写真を送りました）' : `（写真を送った：${m.alt || ''}）`) + (body ? ' ' + body : '');
     // 裏は現実の時刻とは別の時間軸なので時刻は付けない。ナレーションは「＊」付きで渡す
     const line = world === 'ura' ? (m.sender === 'narr' ? '＊' + body : (faces && m.face && m.sender === 'char' ? `《${m.face}》` : '') + body) : `[${fmtTime(m.at)}] ${body}`;
@@ -2109,6 +2228,251 @@ async function meetEnd(env, c, now) {
   if (summary) await env.DB.prepare("INSERT INTO memories (char_id,kind,text,due,status,created,followed) VALUES (?, 'fact', ?, '', 'open', ?, 0)").bind(c.id, `${jstDay(now)}にユーザーと実際に会った${a.place ? `（${a.place}）` : ''}：${summary}`.slice(0, 200), now).run();
   await env.DB.prepare('DELETE FROM kv WHERE k=?').bind('meetlog:' + c.id).run();
   return done;
+}
+
+// ================================================================ 電話・留守電（第47版）
+// 声は Modal の Irodori-TTS（アプリが作って鳴らす）。サーバーは「かけるか・出るか・何を話すか・留守電を残すか」と記録を受け持つ。
+// 着信は GPU を先に起こしてから鳴らす（st.ttsUrl の /health。アプリが設定から送ってくる）。
+// 通話（kv call:<id>）は members を配列で持つ（いまは1人。あとでグループ通話を足せるように）
+const CALL_RING_MS = 25e3, CALL_GRACE_MS = 15e3, CALL_IDLE_END = 3 * 60e3, CALL_WRAP_MS = 55 * 60e3, CALL_MAX_MS = 60 * 60e3, VM_MAX = 10, CALL_WARM_GIVEUP = 4 * 60e3;
+const CALL_URL = 'https://koara1012.github.io/chat/';
+const CALL_FREQ = { none: 0, rare: 0.25, normal: 0.8, often: 2 }; // 1日あたりのおおよその着信の回数
+const phoneOn = (st) => st.phoneEnabled !== false;
+const phoneChar = (c) => !!(c && !c.uraOnly && c.voice);
+function phoneQuiet(ts, st) { // 電話に出られない時間（「通知と同じ」なら静かな時間と同じ）
+  if (st.phoneQuietMode === 'off') return false;
+  if (st.phoneQuietMode === 'custom') return isQuiet(ts, { quietEnabled: true, quietStart: st.phoneQuietStart, quietEnd: st.phoneQuietEnd });
+  return isQuiet(ts, st);
+}
+const callDurText = (ms) => { const s = Math.round(ms / 1000); return s >= 60 ? `${Math.floor(s / 60)}分${s % 60 ? (s % 60) + '秒' : ''}` : `${s}秒`; };
+const newCallId = () => 'c' + Date.now().toString(36) + randomAlnum(6);
+async function listCalls(env) {
+  const { results } = await env.DB.prepare("SELECT k,v FROM kv WHERE k >= 'call:' AND k < 'call;'").all();
+  const out = [];
+  for (const r of results) { try { out.push(JSON.parse(r.v)); } catch (_) {} }
+  return out;
+}
+async function getCall(env, id) {
+  const cl = await kvGet(env, 'call:' + String(id || ''), null);
+  if (!cl) throw new HttpError(404, '電話が見つかりません（もう切れています）');
+  return cl;
+}
+const putCall = (env, cl) => kvSet(env, 'call:' + cl.id, cl);
+const delCall = (env, id) => env.DB.prepare('DELETE FROM kv WHERE k=?').bind('call:' + id).run();
+const callPublic = (cl) => ({ id: cl.id, charId: cl.charId, members: cl.members, dir: cl.dir, status: cl.status, created: cl.created, ringAt: cl.ringAt || 0, answeredAt: cl.answeredAt || 0, ringUntil: cl.ringAt ? cl.ringAt + CALL_RING_MS + CALL_GRACE_MS : 0 });
+const busyCall = (calls) => calls.find((x) => ['warming', 'ringing', 'dialing', 'active'].includes(x.status));
+async function warmTTS(env, st, ms = 20e3) { // GPU を起こす（返事が来れば起きている）
+  if (!st.ttsUrl) return true; // 住所が分からないときは、起こさずに鳴らす（声は遅れるかも）
+  try {
+    const r = await fetch(st.ttsUrl.replace(/\/+$/, '') + '/health', { signal: AbortSignal.timeout(ms) });
+    return r.ok;
+  } catch (_) { return false; }
+}
+async function callNotify(env, st, c, title, body, url, ring) {
+  if (st.notifyVia !== 'bark') await pushPayload(env, { title, body, charId: c.id, tag: 'call-' + c.id, url }).catch((e) => log(env, '電話の通知: ' + e.message));
+  if (st.notifyVia !== 'web') await sendBark(env, st, { title, body, cid: c.id, group: c.name, url, ring }).catch((e) => log(env, '電話の通知（Bark）: ' + e.message));
+}
+async function callMsg(env, key, sender, kind, text, meta) {
+  const at = Date.now();
+  const r = await env.DB.prepare('INSERT INTO messages (char_id,sender,text,at,kind,meta) VALUES (?,?,?,?,?,?)').bind(key, sender, text || '', at, kind, meta ? JSON.stringify(meta) : null).run();
+  return { id: r.meta.last_row_id, charId: key, sender, text: text || '', at, kind, ...(meta ? { meta } : {}) };
+}
+async function callTalk(env, c, n = 16) {
+  return (await recent(env, c.id, n)).filter((m) => !m.retracted).map((m) => `[${fmtTime(m.at)}] ${m.sender === 'me' ? 'ユーザー' : c.name}: ${msgLine(m)}`).join('\n');
+}
+function msgLine(m) {
+  const meta = m.meta || {};
+  if (m.kind === 'call') return meta.declined ? '（電話をかけたが、ユーザーに切られた）' : '（電話をかけたが、ユーザーは出なかった）';
+  if (m.kind === 'vm') return `（留守番電話にメッセージを残した：「${m.text}」）`;
+  if (m.kind === 'callout') return '（ユーザーから電話がかかってきたが、出られなかった）';
+  if (m.kind === 'callog') return `（電話で${callDurText(meta.dur || 0)}話した${meta.sum ? '。話した内容：' + meta.sum : ''}）`;
+  return m.text || (m.image ? '（写真）' : '');
+}
+// --- かけてくる：毎分の見回り（担当の分）で、頻度の設定と今していることから決める
+async function maybeRing(env, c, st, now) {
+  if (!phoneOn(st) || st.phoneAllOff || !phoneChar(c) || st.omotePaused) return false;
+  const per = CALL_FREQ[c.callFreq] ?? CALL_FREQ.normal;
+  if (!per || phoneQuiet(now, st) || isQuiet(now, st)) return false;
+  const state = await getState(env, c.id);
+  const today = jstDay(now);
+  const cnt = state.ringDay === today ? state.ringCount || 0 : 0;
+  if (cnt >= 3 || now - (state.lastRingAt || 0) < 3 * 3600e3) return false;
+  const a = activityAt(state, now, c.id);
+  if (isSleepKind(a.kind) || a.avail < 40) return false;
+  // 見回りは1人あたり13分おき。起きている時間（約16時間）で per 回くらいになるように
+  const p = per / (16 * 60 / TICK_MIN) * ((await isJealous(env, c).catch(() => false)) ? 1.4 : 1);
+  if (Math.random() >= p) return false;
+  return startIncoming(env, c, st, now, 'ring');
+}
+async function startIncoming(env, c, st, now, why) {
+  if (busyCall(await listCalls(env))) return false;
+  const state = await getState(env, c.id), today = jstDay(now);
+  state.ringCount = (state.ringDay === today ? state.ringCount || 0 : 0) + 1; state.ringDay = today; state.lastRingAt = now;
+  await setState(env, c.id, state);
+  const cl = { id: newCallId(), charId: c.id, members: [c.id], dir: 'in', status: 'warming', created: now, why, transcript: [] };
+  await putCall(env, cl);
+  await advanceCall(env, cl, st, c);
+  return true;
+}
+async function ringNow(env, cl, st, c) {
+  cl.status = 'ringing'; cl.ringAt = Date.now();
+  await putCall(env, cl);
+  await callNotify(env, st, c, c.name, '📞 着信', CALL_URL + '?call=' + encodeURIComponent(cl.id), true);
+}
+async function advanceCall(env, cl, st, c) {
+  if (cl.status !== 'warming') return;
+  if (await warmTTS(env, st)) return ringNow(env, cl, st, c);
+  if (Date.now() - cl.created > CALL_WARM_GIVEUP) { await delCall(env, cl.id); await log(env, `電話（${c.name}）：声のサーバーを起こせなかったので、かけるのをやめました`); }
+}
+// 毎分：起こしている途中の着信・鳴りっぱなし・放置された通話・折り返しの予定
+async function runCalls(env) {
+  const st = await getSettings(env), now = Date.now();
+  const chars = await loadChars(env);
+  for (const cl of await listCalls(env)) {
+    const c = chars.find((x) => x.id === cl.charId);
+    if (!c) { await delCall(env, cl.id); continue; }
+    try {
+      if (cl.status === 'warming') await advanceCall(env, cl, st, c);
+      else if (cl.status === 'ringing' && now > cl.ringAt + CALL_RING_MS + CALL_GRACE_MS) await callMissed(env, cl, c, 'missed');
+      else if (cl.status === 'dialing' && now - cl.created > 3 * MIN) await delCall(env, cl.id);
+      else if (cl.status === 'active' && now - (cl.lastAt || cl.answeredAt || cl.created) > CALL_IDLE_END) await finishCall(env, cl, c, { by: 'idle' });
+    } catch (e) { await log(env, `電話（${c.name}）: ${e.message}`); }
+  }
+  // 折り返しの電話（出られなかったあと、キャラの性格しだいで）
+  const { results } = await env.DB.prepare("SELECT k,v FROM kv WHERE k >= 'callback:' AND k < 'callback;'").all();
+  for (const r of results) {
+    let p; try { p = JSON.parse(r.v); } catch (_) { p = null; }
+    if (p && p.due > now) continue;
+    await env.DB.prepare('DELETE FROM kv WHERE k=?').bind(r.k).run();
+    const c = chars.find((x) => x.id === r.k.slice(9));
+    if (!c || !p || !phoneOn(st) || st.phoneAllOff || !phoneChar(c) || st.omotePaused || phoneQuiet(now, st)) continue;
+    await startIncoming(env, c, st, now, 'callback').catch((e) => log(env, `折り返しの電話（${c.name}）: ${e.message}`));
+  }
+}
+// --- 出なかった・拒否された：留守電を残すか、あとで LINE を送るかをキャラの性格で決める
+const VM_SCHEMA = { type: 'object', properties: { leave_voicemail: { type: 'boolean' }, voicemail: { type: 'string' }, send_line: { type: 'boolean' }, line: { type: 'string' } }, required: ['leave_voicemail', 'voicemail', 'send_line', 'line'], additionalProperties: false };
+async function callMissed(env, cl, c, how) {
+  if (!['ringing', 'warming'].includes(cl.status)) return;
+  await delCall(env, cl.id);
+  const now = Date.now(), st = await getSettings(env);
+  const miss = await callMsg(env, c.id, 'char', 'call', '', how === 'declined' ? { declined: true } : null);
+  let r = null;
+  if (!st.omotePaused) {
+    try {
+      const state = await getState(env, c.id);
+      const sys = `あなたは${c.name}として、ユーザーに電話をかけたが${how === 'declined' ? '切られた（拒否された）' : '出てもらえなかった'}直後の行動を決めます。
+# キャラクター: ${c.name}
+${charPersona(c, 'omote', 3000)}
+# 今の様子
+${activityText(state, now, c.id)}
+# 電話をかけた理由
+${cl.why === 'callback' ? 'さっきユーザーから電話があったのに出られなかったので、折り返した。' : '声が聞きたくなった・話したいことがあった（最近のトークの流れから自然に決める）。'}
+# 最近のトーク（古い順）
+${await callTalk(env, c, 14) || '（なし）'}
+# 決めること
+- 留守番電話にメッセージを残すか。キャラの性格・話したかった内容・関係によって、残すときと残さないときがある（残さないことも多い）。残すなら、電話口で話す言葉だけで1〜3文（15秒くらいまで）。書き言葉・絵文字・描写・（ ）書きは使わない。
+- あとでトークにメッセージを送るか（例：「なんで出ないの？」「忙しかった？」）。送るのは、性格に合うときだけ・たまに。送るなら1文。
+- 自分がAIであることには触れない。キャラクターが未成年の設定である場合、性的な内容は一切書かない。`;
+      r = await aiJson(env, 'omote', sys, '（いま、電話が留守番電話に切り替わった）', VM_SCHEMA, 'voicemail');
+    } catch (e) { await log(env, `留守電（${c.name}）: ${e.message}`); }
+  }
+  const out = [miss];
+  const vmText = r && r.leave_voicemail ? String(r.voicemail || '').trim().slice(0, 300) : '';
+  if (vmText) {
+    const m = await callMsg(env, c.id, 'char', 'vm', vmText, null);
+    const list = await kvGet(env, 'vm:' + c.id, []);
+    list.push({ id: m.id, at: m.at, text: vmText, heard: false });
+    await kvSet(env, 'vm:' + c.id, list.slice(-VM_MAX));
+    out.push(m);
+  }
+  await pushToAll(env, c, out);
+  const line = r && r.send_line ? String(r.line || '').trim().slice(0, 200) : '';
+  if (line && Math.random() < 0.6) await kvSet(env, 'ps:' + c.id, { texts: [line], due: now + (3 + Math.random() * 12) * MIN, after: out[out.length - 1].id });
+}
+// --- ユーザーからかける：出るかどうか（今していること・時間・喧嘩中・気分）
+const ANSWER_SCHEMA = { type: 'object', properties: { answer: { type: 'boolean' }, after: { type: 'string', enum: ['none', 'callback', 'line'] }, line: { type: 'string' } }, required: ['answer', 'after', 'line'], additionalProperties: false };
+async function decideAnswer(env, c, st, now) {
+  if (st.omotePaused) return { answer: false, after: 'none', line: '' };
+  const state = await getState(env, c.id);
+  const sys = `あなたは${c.name}として、ユーザーから電話がかかってきたときに、出るかどうかを決めます。
+# キャラクター: ${c.name}
+${charPersona(c, 'omote', 3000)}
+# 今の様子・時刻
+${fmtTime(now)}。${activityText(state, now, c.id)}
+# 最近のトーク（古い順）
+${await callTalk(env, c, 14) || '（なし）'}
+# 決め方
+- 手が空いていれば、ふつうは出る。
+- 寝ている・お風呂・仕事や授業の最中・移動中で出られない、喧嘩中で出たくない、気分が乗らない、などのときは出ない。キャラの性格と今の様子・最近のやり取りから自然に決める。出ないのは、はっきり理由があるときだけ。
+- 出ないとき、あとでどうするか：折り返し電話をかける（callback）・トークで一言送る（line。例：「ごめん、さっき出られなかった」）・何もしない（none）。性格に合うときだけ、たまに。line のときはその一言（1文）を書く。
+- 自分がAIであることには触れない。`;
+  try { return await aiJson(env, 'omote', sys, '（いま着信が鳴っている）', ANSWER_SCHEMA, 'answer_call'); }
+  catch (e) { await log(env, `電話に出るか（${c.name}）: ${e.message}`); return { answer: true, after: 'none', line: '' }; }
+}
+// --- 通話中の返事
+const CALL_SCHEMA = { type: 'object', properties: { messages: { type: 'array', items: { type: 'string' } }, hangup: { type: 'boolean' } }, required: ['messages', 'hangup'], additionalProperties: false };
+function buildCallSystem(c, cl, lifeInfo, talk, state, now) {
+  const el = cl.answeredAt ? now - cl.answeredAt : 0;
+  return `あなたは次のキャラクターになりきって、ユーザーと「電話で」話しています。声だけのやり取りです。ふだんスマホのメッセージアプリ（トーク）でやり取りしている相手で、これまでの記憶はそのまま覚えています。
+
+# キャラクター: ${c.name}
+${charPersona(c, 'omote')}
+${lifeInfo}
+# 今の様子
+${fmtTime(now)}。${activityText(state, now, c.id)}
+# この電話
+${cl.dir === 'in' ? (cl.why === 'callback' ? 'さっきユーザーからの電話に出られなかったので、あなたから折り返した。' : 'あなたからかけた（声が聞きたくなった・話したいことがあった。最近のトークの流れから自然に）。') : 'ユーザーからかかってきた電話に出た。'}通話して${Math.floor(el / MIN)}分。
+# 最近のトーク（メッセージアプリ。古い順）
+${talk || '（なし）'}
+
+# ルール
+- 電話で口にする言葉だけを書く。話し言葉で、1回の返事は1〜3文ほど。長い説明はしない。
+- 書き言葉・絵文字・顔文字・記号での演出・情景描写・（ ）書きは使わない（声で読み上げるため）。
+- 返事は1〜2個に分けてよい（間をあけて話すとき）。
+- 電話を切るタイミングは、時間で決めない。キャラの性格・今の様子・このあとの予定から自然に決める。切るときは「そろそろ切るね」などと別れのあいさつをして、hangup を true にする。
+- ユーザーが切ろうとしても、性格や流れによっては「まだ切らないで」と少し引き止めてよい（ただし、しつこく引き止め続けない）。ユーザーがはっきり切ると言ったら受け入れる。
+${el >= CALL_MAX_MS ? '- もう1時間近く話している。この返事で自然に話をまとめて、別れのあいさつをして hangup を true にする。\n' : el >= CALL_WRAP_MS ? '- かなり長く話している。そろそろ自然に話をまとめる方向へ（今すぐ切らなくてよい）。\n' : ''}${DIR_RULE}- ユーザーの行動・発言・気持ちを勝手に決めない。
+- 自分がAIであることには触れない。
+- キャラクターが未成年の設定である場合、性的な内容は一切話さない。
+${cl.transcript.length ? '' : cl.dir === 'in' ? '\n# 今回\nユーザーが電話に出たところ。かけた側として「もしもし」から話し始める。\n' : '\n# 今回\n電話に出たところ。「もしもし」など、出たときの第一声から。\n'}
+出力は {"messages": ["言葉1", "言葉2"], "hangup": false} の形のJSONのみ。`;
+}
+async function callReply(env, cl, c) {
+  const st = await getSettings(env), now = Date.now();
+  const state = await getState(env, c.id);
+  const lifeInfo = await lifeContext(env, c, st, now).catch(() => '');
+  const talk = await callTalk(env, c, 16);
+  const turns = [];
+  for (const m of cl.transcript.slice(-60)) {
+    const role = m.who === 'me' ? 'user' : 'model';
+    const t = turns[turns.length - 1];
+    if (t && t.role === role) t.parts[0].text += '\n' + m.text; else turns.push({ role, parts: [{ text: m.text }] });
+  }
+  if (!turns.length || turns[turns.length - 1].role !== 'user') turns.push({ role: 'user', parts: [{ text: cl.transcript.length ? '（少し黙っている）' : cl.dir === 'in' ? '（電話に出た）' : '（着信）' }] });
+  const wb = await worldBlock(env, c.prompt + '\n' + cl.transcript.slice(-20).map((m) => m.text).join('\n'));
+  const r = await callAIObj(env, 'omote', wb + buildCallSystem(c, cl, lifeInfo, talk, state, now), turns, CALL_SCHEMA, 'call_reply');
+  const lines = (Array.isArray(r && r.messages) ? r.messages : []).map((t) => String(t || '').replace(/^「([\s\S]*)」$/, '$1').trim()).filter(Boolean).slice(0, 3);
+  if (!lines.length) throw new Error('返答が空でした');
+  if (looksRefused(lines)) throw new AiRefused();
+  const hangup = !!(r && r.hangup) || (cl.answeredAt && now - cl.answeredAt > CALL_MAX_MS + 3 * MIN);
+  return { lines, hangup };
+}
+const CALL_SUM_SCHEMA = MEET_SUM_SCHEMA;
+async function finishCall(env, cl, c, { by = 'me', est = null } = {}) {
+  await delCall(env, cl.id);
+  if (cl.status !== 'active') return null;
+  const now = Date.now(), dur = Math.max(0, now - (cl.answeredAt || now));
+  let sum = '';
+  if (cl.transcript.some((m) => m.who === 'me') && !(await getSettings(env)).omotePaused) {
+    const text = cl.transcript.slice(-80).map((m) => (m.who === 'me' ? 'ユーザー: ' : c.name + ': ') + trunc(m.text, 200)).join('\n');
+    try {
+      const r = await aiJson(env, 'omote', `あなたは、${c.name}とユーザーが電話で話した内容を、${c.name}があとでトークで思い出せるように、短くまとめる係です。何の話をして、どんな雰囲気だったかを、1〜2文で具体的に書きます。`, text, CALL_SUM_SCHEMA, 'call_summary');
+      sum = String((r && r.summary) || '').trim().slice(0, 200);
+    } catch (e) { await log(env, `通話のまとめ（${c.name}）: ${e.message}`); }
+  }
+  if (sum) await env.DB.prepare("INSERT INTO memories (char_id,kind,text,due,status,created,followed) VALUES (?, 'fact', ?, '', 'open', ?, 0)").bind(c.id, `${jstDay(now)}にユーザーと電話で話した：${sum}`.slice(0, 200), now).run();
+  const meta = { dur, by, dir: cl.dir, ...(sum ? { sum } : {}), ...(est && Number.isFinite(Number(est.usd)) ? { usd: Math.round(Number(est.usd) * 1e4) / 1e4, gpuMs: Math.round(num(est.gpuMs, 0)) } : {}) };
+  return callMsg(env, c.id, cl.dir === 'in' ? 'char' : 'me', 'callog', '', meta);
 }
 
 // 引用返信の候補：最近のユーザーのメッセージ（続けて2つ以上送られたときや、少し前の話があるとき）
@@ -4425,7 +4789,7 @@ async function lifeDecide(env, c, hist, lastRead, now, st, ctxAll) {
     }
   }
   // 不在着信：声が聞きたくなって電話をかける（ユーザーは出られない）。36時間に1回まで・手が空いているときだけ
-  if (now - (state.lastCallAt || 0) > 36 * 3600e3 && h >= 8 && h < 23) {
+  if (!(phoneOn(st) && phoneChar(c)) && now - (state.lastCallAt || 0) > 36 * 3600e3 && h >= 8 && h < 23) { // 声のある子は、本当の電話（maybeRing）でかけてくる
     const a = activityAt(state, now, c.id);
     const quietFor = now - last.at;
     const p = quietFor > 60 * MIN && quietFor < 10 * 3600e3 ? 0.02 : 0.006;
@@ -4866,11 +5230,12 @@ async function barkEncrypt(keyStr, ivStr, plain) {
   let bin = ''; for (const b of ct) bin += String.fromCharCode(b);
   return btoa(bin);
 }
-async function sendBark(env, st, { title, body, cid, group, url }) {
+async function sendBark(env, st, { title, body, cid, group, url, ring }) {
   if (!env.BARK_DEVICE_KEY) throw new Error('シークレット BARK_DEVICE_KEY が設定されていません');
   const p = { title: String(title || ''), body: String(body || ''), group: group || 'トーク', level: 'active' };
   if (st.barkSound) p.sound = st.barkSound;
-  if (url) p.url = url; // タップで開くページ（会う約束の通知）
+  if (url) p.url = url; // タップで開くページ（会う約束・電話の通知）
+  if (ring) { p.call = '1'; p.level = 'timeSensitive'; } // 着信：Bark の着信音を鳴らし続ける
   const icon = await barkIconUrl(env, cid).catch(() => '');
   if (icon) p.icon = icon;
   const server = (env.BARK_SERVER || BARK_SERVER).replace(/\/+$/, '');
@@ -4915,7 +5280,7 @@ async function pushPayload(env, obj) {
 async function pushToAll(env, c, msgs) {
   if (!msgs.length) return;
   const st = await getSettings(env);
-  const body = truncBytes(msgs.map((m) => (m.kind === 'call' ? '📞 不在着信' : m.image && !m.text ? '📷 写真' : m.text)).filter(Boolean).join('\n'), 1800);
+  const body = truncBytes(msgs.map((m) => (m.kind === 'call' ? '📞 不在着信' : m.kind === 'vm' ? '📞 留守番電話が1件' : m.image && !m.text ? '📷 写真' : m.text)).filter(Boolean).join('\n'), 1800);
   if (st.notifyVia !== 'bark') await pushPayload(env, { title: c.name, body, charId: c.id, badge: await totalUnread(env) });
   if (st.notifyVia !== 'web') await sendBark(env, st, { title: c.name, body, cid: c.id, group: c.name }).catch((e) => log(env, 'Bark通知: ' + e.message));
 }

@@ -9,6 +9,8 @@ Irodori-TTS-Server を Modal（クラウドGPU）で動かすためのファイ�
 ・合言葉（IRODORI_API_KEY）は Modal の Secret「irodori-tts」に入れる。このファイルには書かない（公開リポジトリのため）
 ・お手本の声は Volume「irodori-voices」（中の /voices フォルダ）に置く
 ・モデルは Volume「irodori-hf-cache」に、最初に起動したときに自動でダウンロードされて残る
+・今月の使用量の窓口（usage）：GPU を使わない小さな関数。料金を読むために、PC の Modal のトークンを
+  Secret「modal-billing」に入れて使う（5-usage-setup.bat で作る）。アプリの設定の「読み上げ」に出す
 """
 
 import subprocess
@@ -19,6 +21,8 @@ import modal
 GPU = "L4"                 # 24GB。Irodori-TTS には十分。安くしたいときは "T4"（未確認）
 SCALEDOWN_SECONDS = 240    # 最後の声を作ってから、GPU を止めるまで待つ秒数（この間も料金がかかる）。
                            # 短いほど安いが、次に話しかけたとき起動待ち（30秒〜1分）になりやすい
+MONTHLY_CREDITS = 30       # Starter の毎月の無料分（ドル）。アプリの「あと〇ドル」の計算に使う
+HOURLY_ESTIMATE = 0.85     # L4＋CPU＋メモリで1時間あたりのおおよその料金（ドル）。「あと約〇時間」の目安
 PRECISION = "fp32"         # PC と同じ。軽くしたいときは "bf16"（Irodori の Docker GPU 設定はこちら）。声は少し変わるかも
 ALLOWED_ORIGIN = "https://koara1012.github.io"
 # Irodori-TTS-Server の版（2026-11-04 の版に固定。勝手に変わらないように）
@@ -88,3 +92,74 @@ def serve():
     # モデルを読み終えてから受け付けを始める（IRODORI_PRELOAD=true）。
     # 1回目だけ、モデルを Volume にダウンロードするので数分かかる
     subprocess.Popen(["/app/.venv/bin/python", "-m", "irodori_openai_tts"], cwd="/app")
+
+
+# ===== 今月の使用量（アプリの設定に出す）。GPU なし・すぐ止まるので、料金はほぼかからない =====
+usage_image = modal.Image.debian_slim(python_version="3.11").pip_install("fastapi[standard]")
+
+
+@app.function(
+    image=usage_image,
+    cpu=0.25,
+    memory=256,
+    secrets=[modal.Secret.from_name("irodori-tts"), modal.Secret.from_name("modal-billing")],
+    max_containers=1,
+    scaledown_window=10,
+    timeout=60,
+)
+@modal.asgi_app()
+def usage():
+    import os
+    import time
+    from datetime import datetime, timezone
+
+    from fastapi import FastAPI, Request
+    from fastapi.middleware.cors import CORSMiddleware
+    from fastapi.responses import JSONResponse
+
+    web = FastAPI()
+    web.add_middleware(CORSMiddleware, allow_origins=[ALLOWED_ORIGIN], allow_methods=["GET"], allow_headers=["Authorization"])
+    cache = {"at": 0.0, "body": None}
+
+    def read_summary():
+        # まずコンテナ自身の権限で。だめなら PC のトークン（Secret「modal-billing」）で
+        errors = []
+        try:
+            return modal.Workspace.from_context().billing.summary(cycle="this month")
+        except Exception as e:  # noqa: BLE001
+            errors.append(f"container: {type(e).__name__}: {e}")
+        tid, tsec = os.environ.get("BILLING_TOKEN_ID"), os.environ.get("BILLING_TOKEN_SECRET")
+        if tid and tsec:
+            try:
+                client = modal.Client.from_credentials(tid, tsec)
+                return modal.Workspace.from_context(client=client).billing.summary(cycle="this month")
+            except Exception as e:  # noqa: BLE001
+                errors.append(f"token: {type(e).__name__}: {e}")
+        raise RuntimeError(" / ".join(errors) or "no credentials")
+
+    @web.get("/")
+    def get_usage(request: Request):
+        key = os.environ.get("IRODORI_API_KEY", "")
+        if not key or request.headers.get("authorization", "") != f"Bearer {key}":
+            return JSONResponse({"error": "bad passphrase"}, status_code=401)
+        if cache["body"] and time.time() - cache["at"] < 60:
+            return cache["body"]
+        try:
+            s = read_summary()
+        except Exception as e:  # noqa: BLE001
+            return JSONResponse({"error": str(e)[:400]}, status_code=502)
+        metered = float(s.metered_cost)
+        body = {
+            "month": datetime.now(timezone.utc).strftime("%Y-%m"),
+            "metered": round(metered, 4),            # 今月使った分（無料分を引く前）
+            "billed": round(float(s.billed_cost), 4),  # 実際に請求される分（spend limit 0 なら 0 のはず）
+            "credits": MONTHLY_CREDITS,
+            "remaining": round(max(0.0, MONTHLY_CREDITS - metered), 4),
+            "hourly_estimate": HOURLY_ESTIMATE,
+            "breakdown": {k: round(float(v), 4) for k, v in s.metered_cost_breakdown.items() if float(v)},
+            "checked_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
+        }
+        cache.update(at=time.time(), body=body)
+        return body
+
+    return web

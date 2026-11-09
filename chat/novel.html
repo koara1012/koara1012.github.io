@@ -64,6 +64,10 @@ html,body{margin:0;height:100%;background:#000;color:#fff;overflow:hidden;
 #bBack svg{width:50%;height:50%}
 #bAuto{width:calc(var(--S)*80);height:calc(var(--S)*80)}
 /* バックログ（第22回）：テキストだけ振り返る。顔アイコン・声の再生はなし */
+#ttsUsage{flex:1;min-width:200px}
+#ttsUsage .ubar{height:8px;border-radius:4px;background:rgba(255,255,255,.15);overflow:hidden;margin:4px 0}
+#ttsUsage .ubar i{display:block;height:100%;width:0;background:#7ad19a;transition:width .3s}
+#ttsUsage .ubar.warn i{background:#f0c27a}#ttsUsage .ubar.over i{background:#e86b6b}
 #blog{position:fixed;inset:0;z-index:25;display:none;background:rgba(0,0,0,.45)}
 #blog.show{display:block}
 #blog .bl{position:absolute;top:calc(var(--sy) + var(--S)*36);bottom:calc(var(--sy) + var(--S)*36);
@@ -248,6 +252,7 @@ body.rotmode #rotwrap{transform:var(--RT)}
       <div class="row"><label>合言葉</label><input type="password" id="sTtsKey" placeholder=".env の IRODORI_API_KEY（無ければ空）"></div>
       <div class="row"><label>音量（%）</label><input type="number" id="sTtsVol" min="0" max="200" step="10"><label>速さ</label><input type="number" id="sTtsSpeed" min="0.5" max="2" step="0.05"><label>ナレーションの声</label><input type="text" id="sTtsNarr" list="ttsVoiceList" placeholder="空なら読まない"></div>
       <div class="row"><button class="b p" id="ttsTest">つながるか試す</button><span class="note" id="ttsState"></span></div>
+      <div class="row" id="ttsUsageRow"><button class="b s" id="ttsUsageBtn">今月の使用量を見る</button><div id="ttsUsage"><div class="ubar"><i></i></div><span class="note" id="ttsUsageText">（Modal のときだけ）</span></div></div>
       <p class="note">Irodori-TTS-Server（Modal のクラウドGPU か、パソコン）に、台詞を「この声で読んで」と頼みます。Modal は、しばらく使っていないと最初の声まで30秒〜1分かかります（話しかけたときに先に起こします）。キャラごとの声の名前は「キャラ」→編集で、表情ごとの声（感情の声）は各表情で選べます。声の名前が無いキャラ・サーバーにつながらないときは、声なしで進みます。（ ）のト書きは読みません。</p>
       <datalist id="ttsVoiceList"></datalist>
       <h4>画面の向き</h4>
@@ -312,13 +317,16 @@ body.rotmode #rotwrap{transform:var(--RT)}
 <script>
 'use strict';
 /* ====== 版 ====== */
-const VERSION = { no: 23, at: '2026-11-08 22:40:00' };
+const VERSION = { no: 24, at: '2026-11-10 02:40:00' };
 const VERSION_TEXT = `${/\/lab\//.test(location.pathname) ? '試作・' : ''}統合 第${VERSION.no}回（${VERSION.at} 更新・akari.html 第6回がもと）`;
 
 /* ====== 改善ログ（他のAIへの引き継ぎ用）======
    改善のたびに「## 第〜回」を先頭側へ追記し、概要も最新に保つ */
 const DEV_LOG = `# 朱里ノベル 統合の試作（lab/novel.html） 改善ログ
 ※ 本番 akari.html 第6回をもとにした試作。保存先は本番と分けている（localStorage lab.settings / lab.logs、IndexedDB akariLab）。
+## 統合 第24回（2026-11-10 02:40:00）
+- 今月の使用量：設定の「読み上げ」に［今月の使用量を見る］とバー（#ttsUsage・ttsUsageLoad）。「今月（11月）：$1.23 ／ $30 使用（4%）・あと $28.77（約34時間）・請求 $0.00｜内訳」。Modal の usage 窓口（tts-modal/irodori_modal.py の usage 関数。GPU なし）に合言葉つきで聞く。住所は声のサーバーの住所の「-serve.」を「-usage.」にしたもの（Modal でないときは出さない）。設定を開いたとき10分に1回まで自動。70%で黄・90%で赤。「約〇時間」は1時間0.85ドルの目安。
+
 ## 統合 第23回（2026-11-08 22:40:00）
 - 読み上げを Modal（クラウドGPU）でも使えるように（リポジトリの tts-modal/ に Modal 用のファイルと手順）。アプリは「声のサーバー」の住所を変えるだけ。
 - 声の頼みを全部1列に（ttsEnqueue）。［▶ 声を試す］・［つながるか試す］も同じ列に並び、連打しても最後の1回だけ作る。
@@ -997,6 +1005,32 @@ async function ttsTryVoice(voice, text, el, note){
     log('info', `読み上げ：声を試す ${voice}`);
   }catch(e){ if (tok === ttsTrying) say(e.message); log('warn', `読み上げ：声を試す ${voice}：` + e.message); }
 }
+/* 今月の使用量（第24回）：Modal の「usage」窓口（声のサーバーの住所の -serve. を -usage. にしたもの）に聞く。
+   GPU は使わない小さな関数。設定を開いたときに10分に1回まで自動で、ボタンでいつでも */
+function ttsUsageUrl(){
+  const b = ttsBase(), m = b.match(/^(https:\/\/[^/]*?)-serve\.([^/]*modal\.run)$/i);
+  return m ? `${m[1]}-usage.${m[2]}/` : '';
+}
+let ttsUsageAt = 0;
+async function ttsUsageLoad(force){
+  const el = $('#ttsUsageText'), bar = $('#ttsUsage .ubar'), u = ttsUsageUrl();
+  $('#ttsUsageBtn').disabled = !u;
+  if (!u){ el.textContent = '（声のサーバーが Modal のときだけ出ます）'; bar.querySelector('i').style.width = '0'; return; }
+  if (!force && Date.now() - ttsUsageAt < 600000) return;
+  ttsUsageAt = Date.now(); el.textContent = '読み込んでいます…';
+  try{
+    const ctrl = new AbortController(), to = setTimeout(() => ctrl.abort(), 30000);
+    const r = await fetch(u, { headers:S.ttsKey ? { Authorization:'Bearer ' + S.ttsKey } : {}, signal:ctrl.signal, cache:'no-store' }).finally(() => clearTimeout(to));
+    const j = await r.json().catch(() => ({}));
+    if (!r.ok) throw new Error(r.status === 401 ? '合言葉が違います' : r.status === 404 ? '使用量の窓口がまだありません（PC で 5-usage-setup.bat → 4-deploy.bat）' : `${r.status}：${String(j.error || '').slice(0, 160)}`);
+    const used = +j.metered || 0, cr = +j.credits || 30, left = Math.max(0, cr - used), hr = +j.hourly_estimate || 0.85, pct = Math.min(100, used / cr * 100);
+    bar.querySelector('i').style.width = pct.toFixed(1) + '%';
+    bar.classList.toggle('warn', pct >= 70 && pct < 90); bar.classList.toggle('over', pct >= 90);
+    const parts = Object.entries(j.breakdown || {}).sort((a, b) => b[1] - a[1]).slice(0, 4).map(([k, v]) => `${k} $${(+v).toFixed(2)}`).join('・');
+    el.textContent = `今月（${String(j.month || '').slice(5).replace(/^0/, '')}月）：$${used.toFixed(2)} ／ $${cr} 使用（${pct.toFixed(0)}%）・あと $${left.toFixed(2)}（約${(left / hr).toFixed(0)}時間）・請求 $${(+j.billed || 0).toFixed(2)}${parts ? `｜${parts}` : ''}`;
+    log('info', `読み上げ：今月の使用量 $${used.toFixed(2)} / $${cr}`);
+  }catch(e){ el.textContent = '使用量を読めませんでした：' + (e.name === 'AbortError' ? '30秒たっても返事が来ませんでした' : e.message); ttsUsageAt = 0; }
+}
 async function ttsTest(){
   const el = $('#ttsState');
   if (!ttsBase()){ el.textContent = '声のサーバーの住所を入れてください'; return; }
@@ -1651,7 +1685,7 @@ function showPanel(p){
   document.querySelectorAll('#nav button[data-p]').forEach(x => x.classList.toggle('on', x.dataset.p === p));
   document.querySelectorAll('.pn').forEach(x => x.classList.toggle('on', x.id === p));
   if (p === 'pRoom') renderRooms(); if (p === 'pChar') renderChars(); if (p === 'pLog') renderLog();
-  if (p === 'pSet') fillSettings(); if (p === 'pAsset') refreshAssetUI(); if (p === 'pHelp') renderHelp();
+  if (p === 'pSet'){ fillSettings(); ttsUsageLoad(false); } if (p === 'pAsset') refreshAssetUI(); if (p === 'pHelp') renderHelp();
   if (p === 'pDev') $('#devView').textContent = DEV_LOG;
   if (p === 'pBak') refreshBak();
   $('#panels').scrollTop = 0;
@@ -1914,9 +1948,10 @@ $('#sRot').addEventListener('change', e => { S.rotMode = e.target.value; saveS()
 $('#sBgmOn').addEventListener('change', e => { S.bgmOn = e.target.checked; saveS(); bgmSync(); });
 $('#sBgmVol').addEventListener('input', () => bgmSync());
 $('#sTtsOn').addEventListener('change', e => { S.ttsOn = e.target.checked; saveS(); if (!S.ttsOn) ttsStop(); });
-['sTtsUrl','sTtsKey','sTtsSpeed','sTtsNarr'].forEach(id => $('#'+id).addEventListener('input', () => { TTS_CACHE.clear(); ttsWarned = 0; ttsBad.clear(); }));
+['sTtsUrl','sTtsKey','sTtsSpeed','sTtsNarr'].forEach(id => $('#'+id).addEventListener('input', () => { TTS_CACHE.clear(); ttsWarned = 0; ttsBad.clear(); ttsUsageAt = 0; }));
 $('#sTtsVol').addEventListener('input', () => { if (ttsGain) ttsGain.gain.value = ttsVolume(); });
 $('#ttsTest').onclick = ttsTest;
+$('#ttsUsageBtn').onclick = () => ttsUsageLoad(true);
 $('#getGModels').onclick = async () => {
   try{
     if (!S.geminiKey) throw new Error('先にGeminiのAPIキーを入力してください');

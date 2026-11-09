@@ -253,7 +253,7 @@ body.rotmode #rotwrap{transform:var(--RT)}
       <div class="row"><label>音量（%）</label><input type="number" id="sTtsVol" min="0" max="200" step="10"><label>速さ</label><input type="number" id="sTtsSpeed" min="0.5" max="2" step="0.05"><label>ナレーションの声</label><input type="text" id="sTtsNarr" list="ttsVoiceList" placeholder="空なら読まない"></div>
       <div class="row"><button class="b p" id="ttsTest">つながるか試す</button><span class="note" id="ttsState"></span></div>
       <div class="row" id="ttsUsageRow"><button class="b s" id="ttsUsageBtn">今月の使用量を見る</button><div id="ttsUsage"><div class="ubar"><i></i></div><span class="note" id="ttsUsageText">（Modal のときだけ）</span></div></div>
-      <p class="note">Irodori-TTS-Server（Modal のクラウドGPU か、パソコン）に、台詞を「この声で読んで」と頼みます。Modal は、しばらく使っていないと最初の声まで30秒〜1分かかります（話しかけたときに先に起こします）。キャラごとの声の名前は「キャラ」→編集で、表情ごとの声（感情の声）は各表情で選べます。声の名前が無いキャラ・サーバーにつながらないときは、声なしで進みます。（ ）のト書きは読みません。</p>
+      <p class="note">Irodori-TTS-Server（Modal のクラウドGPU か、パソコン）に、台詞を「この声で読んで」と頼みます。Modal は、しばらく使っていないと最初の声まで30秒〜1分かかります（話しかけたときに先に起こします。話している間は起こし続け、アプリを閉じると30秒ほどで止まります）。キャラごとの声の名前は「キャラ」→編集で、表情ごとの声（感情の声）は各表情で選べます。声の名前が無いキャラ・サーバーにつながらないときは、声なしで進みます。（ ）のト書きは読みません。</p>
       <datalist id="ttsVoiceList"></datalist>
       <h4>画面の向き</h4>
       <div class="row"><label>縦向きロックのとき</label><select id="sRot"><option value="">回さない（横向きにしてと案内）</option><option value="cw">90°回して表示（カメラを左にして持つ）</option><option value="ccw">90°回して表示（カメラを右にして持つ）</option></select><span class="note">寝ながら使うとき用。iPhoneの縦向きロックをかけたまま、横画面として使えます</span></div>
@@ -317,13 +317,16 @@ body.rotmode #rotwrap{transform:var(--RT)}
 <script>
 'use strict';
 /* ====== 版 ====== */
-const VERSION = { no: 24, at: '2026-11-10 02:40:00' };
+const VERSION = { no: 25, at: '2026-11-10 06:00:00' };
 const VERSION_TEXT = `${/\/lab\//.test(location.pathname) ? '試作・' : ''}統合 第${VERSION.no}回（${VERSION.at} 更新・akari.html 第6回がもと）`;
 
 /* ====== 改善ログ（他のAIへの引き継ぎ用）======
    改善のたびに「## 第〜回」を先頭側へ追記し、概要も最新に保つ */
 const DEV_LOG = `# 朱里ノベル 統合の試作（lab/novel.html） 改善ログ
 ※ 本番 akari.html 第6回をもとにした試作。保存先は本番と分けている（localStorage lab.settings / lab.logs、IndexedDB akariLab）。
+## 統合 第25回（2026-11-10 06:00:00）
+- Modal の GPU は最後に使ってから30秒で止まる設定に（tts-modal の SCALEDOWN_SECONDS=30。ユーザーが 4-deploy.bat を押したら有効）。ノベル画面は、トークを開いて話している間（最後に声を頼んだ・話しかけてから4分）だけ20秒ごとに /health を叩いて起こし続ける（ttsLastUse）。アプリを閉じる・画面を消すと叩かなくなるので30秒で止まる。電話（LINE風アプリ・第47版）も通話中は20秒ごとに起こす。
+
 ## 統合 第24回（2026-11-10 02:40:00）
 - 今月の使用量：設定の「読み上げ」に［今月の使用量を見る］とバー（#ttsUsage・ttsUsageLoad）。「今月（11月）：$1.23 ／ $30 使用（4%）・あと $28.77（約34時間）・請求 $0.00｜内訳」。Modal の usage 窓口（tts-modal/irodori_modal.py の usage 関数。GPU なし）に合言葉つきで聞く。住所は声のサーバーの住所の「-serve.」を「-usage.」にしたもの（Modal でないときは出さない）。設定を開いたとき10分に1回まで自動。70%で黄・90%で赤。「約〇時間」は1時間0.85ドルの目安。
 
@@ -889,7 +892,13 @@ const TTS_WAIT = 140000;          // 1つの声を待つ時間
 const ttsWant = new Set();        // 今の返事でまだ要る声（key）
 let ttsPlan = [];                 // 今の返事の台詞の順番（key）
 const ttsBad = new Map();         // 声の名前 → 「無い」と言われた時刻（10分は頼まない）
-let ttsWarmAt = 0, ttsWakeToastAt = 0;
+let ttsWarmAt = 0, ttsWakeToastAt = 0, ttsLastUse = 0;
+// 第25回：Modal は最後に使ってから30秒で止まる設定。トークを開いて話している間（最後に話してから4分）だけ、20秒ごとに起こし続ける。
+// アプリを閉じる・画面を消すと止まるので、GPU も30秒で止まる（料金の節約）
+setInterval(() => {
+  if (document.visibilityState !== 'visible' || !S.ttsOn || !ttsBase() || Date.now() - ttsLastUse > 240000) return;
+  fetch(ttsBase() + '/health', { cache:'no-store' }).catch(() => {});
+}, 20000);
 function ttsEnqueue(fn){ const p = ttsQueue.catch(() => {}).then(fn); ttsQueue = p.catch(() => {}); return p; }   // パソコンも Modal も1つずつ作るので、こちらも1列に並べる
 const ttsIsBad = v => { const t = ttsBad.get(v); return !!t && Date.now() - t < 600000; };
 const ttsVolume = () => Math.max(0, Math.min(200, +S.ttsVol || 0)) / 100;
@@ -921,6 +930,7 @@ function ttsFetch(voice, text){
 }
 async function ttsRequest(voice, text, fmt){
   fmt = fmt || S.ttsFmt || 'mp3';
+  ttsLastUse = Date.now();
   const ctrl = new AbortController(), to = setTimeout(() => ctrl.abort(), TTS_WAIT);
   const wake = setTimeout(() => { if (Date.now() - ttsWakeToastAt > 180000){ ttsWakeToastAt = Date.now(); toast('声のサーバーを起こしています…（しばらく使っていなかったときは30秒〜1分）', false, 5000); } }, 8000);
   let r;
@@ -953,6 +963,7 @@ function ttsPrefetch(lines){   // 新しい返事：前の返事の、まだ作�
 }
 function ttsForget(){ ttsWant.clear(); ttsPlan = []; }   // トークを移った・閉じた：まだ作っていない声は頼まない
 function ttsWarm(){   // 考えている間に GPU を起こしておく（返事の声を早く出すため）。2分に1回まで
+  if (ttsReady()) ttsLastUse = Date.now();
   if (!ttsReady() || Date.now() - ttsWarmAt < 120000) return;
   ttsWarmAt = Date.now();
   fetch(ttsBase() + '/health', { cache:'no-store' }).catch(() => {});

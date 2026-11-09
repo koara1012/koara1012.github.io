@@ -271,6 +271,39 @@ body.ura #list.tlMode{background:#efe9f0}
 .meRow .mini{display:flex;gap:6px}
 .meRow .mini .btn{padding:7px;font-size:13px}
 
+/* 電話（第47版）：縦の通話画面 */
+#callView{position:fixed;inset:0;z-index:45;display:none;flex-direction:column;align-items:center;background:linear-gradient(180deg,#3672c7 0%,#6aa3e3 42%,#dcebfa 70%,#fff 100%);color:#fff;padding:calc(env(safe-area-inset-top) + 34px) 18px calc(env(safe-area-inset-bottom) + 20px);overflow:hidden}
+#callView.on{display:flex}
+#cvSubToggle{position:absolute;top:calc(env(safe-area-inset-top) + 10px);right:12px;border:0;border-radius:14px;background:rgba(255,255,255,.22);color:#fff;font-size:12px;padding:5px 10px}
+.cvName{font-size:30px;font-weight:800;letter-spacing:.04em;text-align:center}
+.cvStat{font-size:17px;margin-top:8px;opacity:.95;text-align:center}
+.cvTime{font-size:28px;font-weight:700;font-variant-numeric:tabular-nums;min-height:34px;text-align:center}
+.cvAvWrap{position:relative;width:min(56vw,210px);height:min(56vw,210px);margin:22px 0 12px;flex:none}
+.cvAvWrap i{position:absolute;inset:-26px;border-radius:50%;background:rgba(255,255,255,.2);animation:cvRip 2.4s ease-out infinite}
+.cvAvWrap i.r2{animation-delay:1.2s}
+@keyframes cvRip{0%{transform:scale(.78);opacity:.95}100%{transform:scale(1.32);opacity:0}}
+.cvAv{position:relative;width:100%;height:100%;border-radius:50%;border:4px solid rgba(255,255,255,.92);overflow:hidden;background:#b9c9de;display:grid;place-items:center;font-size:72px;color:#fff;box-shadow:0 6px 24px rgba(0,40,100,.25)}
+.cvAv img{width:100%;height:100%;object-fit:cover}
+#cvSub{width:100%;max-width:440px;flex:1 1 auto;min-height:40px;overflow:auto;color:#1d2a3a;font-size:15px;line-height:1.6;text-align:center;padding:4px 6px}
+#cvSub .me{color:#4f6278;font-size:13px}
+#cvInput{width:100%;max-width:440px;flex:none;margin:6px 0 10px}
+.cvModes{display:flex;gap:6px;justify-content:center;margin-bottom:8px}
+.cvModes button{border:1px solid #9fb6d3;background:#fff;color:#33506f;border-radius:16px;padding:5px 14px;font-size:13px}
+.cvModes button.on{background:#3672c7;color:#fff;border-color:#3672c7}
+#cvTextRow{display:flex;gap:6px}
+#cvText{flex:1;min-width:0;border:1px solid #c6d4e6;border-radius:20px;padding:10px 14px;font-size:16px;color:#1d2a3a;background:#fff}
+#cvSend{border:0;border-radius:20px;background:#3672c7;color:#fff;padding:0 16px;font-size:15px}
+#cvMicRow{display:flex;gap:8px;align-items:center;justify-content:center;flex-wrap:wrap}
+#cvMic{border:0;border-radius:24px;background:#3672c7;color:#fff;padding:12px 26px;font-size:16px;font-weight:700}
+#cvMic.on{background:#e5566b}
+#cvMicX{border:0;border-radius:20px;background:#8a97a8;color:#fff;padding:10px 14px}
+#cvHeard{width:100%;min-height:20px;text-align:center;color:#33506f;font-size:14px;margin-top:6px}
+#cvBtns{display:flex;gap:14px;width:100%;max-width:440px;flex:none;margin-top:auto}
+.cvBtn{flex:1;border:0;border-radius:40px;padding:18px 8px;font-size:18px;font-weight:700;color:#fff;background:#e5566b;box-shadow:0 4px 14px rgba(0,0,0,.12)}
+.cvBtn.ok{background:#2fb46c}.cvBtn.gray{background:#e5566b;opacity:.92}
+#callView.active .cvBtn.gray,#callView.dial .cvBtn.gray{background:#e5566b}
+.bub.call.vm .ic{background:#3672c7}.bub.call.log .ic{background:#2fb46c}.bub.call.out .ic{background:#8a97a8}
+.bub.call .new{display:inline-block;width:8px;height:8px;border-radius:50%;background:#e74c3c;margin-left:6px;vertical-align:middle}
 #toast{position:fixed;left:50%;bottom:calc(env(safe-area-inset-bottom) + 80px);transform:translateX(-50%);
   background:rgba(20,26,38,.9);color:#fff;padding:10px 16px;border-radius:12px;font-size:13px;max-width:86vw;
   opacity:0;pointer-events:none;transition:opacity .2s;z-index:50;line-height:1.5}
@@ -320,6 +353,7 @@ body.ura #list.tlMode{background:#efe9f0}
     <h1 id="chatTitle"></h1>
     <button class="ib" id="btnGrpReset" aria-label="会話をリセット" style="font-size:14px;font-weight:700;padding:0 8px;display:none">リセット</button>
     <button class="ib" id="btnSelect" aria-label="メッセージを選んで消す" style="font-size:14px;font-weight:700;padding:0 8px">選択</button>
+    <button class="ib" id="btnCall" aria-label="電話をかける" style="font-size:18px;padding:0 6px;display:none">📞</button>
     <button class="ib" id="btnNovel" aria-label="ノベル画面で開く" style="font-size:14px;font-weight:700;padding:0 8px">立ち絵</button>
     <button class="ib" id="btnEditChar" aria-label="キャラを編集" style="font-size:14px;font-weight:700;padding:0 8px">編集</button>
   </header>
@@ -408,6 +442,16 @@ body.ura #list.tlMode{background:#efe9f0}
       <div class="hint">その子が今していること（お風呂・食事・寝ている など）によって、返事が遅れたり、既読だけ付いたりします。ここではその子のもともとの早さを選べます。「おまかせ」ならキャラ設定から判断します。</div>
       <div class="hint">「おまかせ」なら、キャラ設定の文章から嫉妬しやすいかを読み取ります。嫉妬しやすい子だけ、あなたがほかの子とばかり話していると拗ねます。</div>
     </div>
+    <div class="field" id="edPhoneBox">
+      <label class="t" for="edVoice">電話の声（声の名前）</label>
+      <input type="text" id="edVoice" maxlength="40" placeholder="例：akari（空なら電話を使いません）" autocapitalize="off" autocorrect="off">
+      <div class="hint">ノベル画面の「読み上げ」で使っている、Irodori-TTS の声の名前です。声の名前を入れた子だけが電話を使います（あなたからかける・この子からかかってくる・留守電）。</div>
+    </div>
+    <div class="field" id="edCallFreqBox">
+      <label class="t">この子からの着信</label>
+      <div class="seg" id="edCallFreq"><button data-v="none">かけてこない</button><button data-v="rare">たまに</button><button data-v="normal">ふつう</button><button data-v="often">よく</button></div>
+      <div class="hint">目安：たまに＝数日に1回、ふつう＝1日に0〜1回、よく＝1日に1〜2回。今していることや時間帯で、かけてこないこともあります。1回ごとに声のサーバー（GPU）が起きるので、多いほど無料分を使います。</div>
+    </div>
     <div class="field" id="edLifeBox">
       <label class="t">今日の様子・覚えていること（表）</label>
       <div class="card" id="edToday">読み込み中…</div>
@@ -491,6 +535,7 @@ body.ura #list.tlMode{background:#efe9f0}
     <div class="btns" id="edDanger">
       <div class="sec">テスト・管理</div>
       <button class="btn sub" id="edPoke">今すぐ話しかけてもらう（表・テスト）</button>
+      <button class="btn sub" id="edCallTest">今すぐ電話をかけてもらう（テスト）</button>
       <button class="btn sub" id="edNewsPoke">ニュースの話題で話しかけてもらう（表・テスト）</button>
       <button class="btn sub" id="edTlPoke">今すぐ表のタイムラインに投稿してもらう（テスト）</button>
       <button class="btn sub" id="edUraTlPoke">今すぐ裏のタイムラインに投稿してもらう（テスト）</button>
@@ -690,6 +735,24 @@ body.ura #list.tlMode{background:#efe9f0}
       <button class="btn sub" id="costSave" style="margin-top:10px">料金の設定を保存</button>
     </div>
 
+    <div class="sec">電話・留守電（表のトーク）</div>
+    <div class="field">
+      <label class="chk"><input type="checkbox" id="stPhoneOn"> 電話を使う（声の名前を入れたキャラだけ）</label>
+      <label class="chk" style="margin-top:6px"><input type="checkbox" id="stPhoneAllOff"> すべての着信を拒否する（キャラからかかってこない）</label>
+      <div class="t" style="margin-top:10px">電話に出られない時間</div>
+      <div class="seg" id="stPhoneQuiet"><button data-v="same">通知と同じ</button><button data-v="custom">自分で決める</button><button data-v="off">なし</button></div>
+      <div class="inline" id="stPhoneQBox" style="margin-top:6px"><select id="stPhoneQS"></select> 時から <select id="stPhoneQE"></select> 時まで</div>
+      <div class="hint">この時間は、キャラから電話がかかってきません（あなたからはかけられます）。「通知と同じ」は、下の「静かな時間」と同じです。</div>
+      <label class="chk" style="margin-top:8px"><input type="checkbox" id="stCallSubs"> 通話の字幕を出す</label>
+      <label class="chk"><input type="checkbox" id="stVmSubs"> 留守電の字幕を出す</label>
+      <div class="t" style="margin-top:10px" id="stRingName">着信音</div>
+      <div class="btns"><button class="btn sub" id="stRingPick">着信音のファイルを選ぶ</button><button class="btn sub" id="stRingTest">鳴らしてみる</button><button class="btn sub" id="stRingClear">電子音に戻す</button></div>
+      <input type="file" id="stRingFile" accept="audio/*" hidden>
+      <div class="hint">アプリを開いているときに鳴る音です（iPhone の中にだけ保存）。アプリを閉じているときは、通知（Bark なら着信のように鳴り続けます）で知らせます。</div>
+      <div class="hint" id="stPhoneVoice"></div>
+      <div class="hint" id="stPhoneChars"></div>
+    </div>
+
     <div class="sec">会う約束（試作・表のトーク）</div>
     <div class="field">
       <label class="chk"><input type="checkbox" id="stMeet"> トークで決めた「実際に会う約束」を記録して、時間になったら通知する（ノベル画面で会う）</label>
@@ -772,6 +835,22 @@ body.ura #list.tlMode{background:#efe9f0}
   </div></div>
 </section>
 
+<!-- 電話（第47版） -->
+<section id="callView" aria-label="電話">
+  <button id="cvSubToggle">字幕 ON</button>
+  <div class="cvName" id="cvName"></div>
+  <div class="cvStat" id="cvStat"></div>
+  <div class="cvTime" id="cvTime"></div>
+  <div class="cvAvWrap"><i></i><i class="r2"></i><div class="cvAv" id="cvAv"></div></div>
+  <div id="cvSub"></div>
+  <div id="cvInput" hidden>
+    <div class="cvModes"><button id="cvModeText">⌨ 文字</button><button id="cvModeMic">🎤 声</button></div>
+    <div id="cvTextRow"><input type="text" id="cvText" placeholder="話しかける" autocomplete="off"><button id="cvSend">送る</button></div>
+    <div id="cvMicRow" hidden><button id="cvMic">🎤 話す</button><button id="cvMicX" hidden>✕ やめる</button><div id="cvHeard"></div></div>
+  </div>
+  <div id="cvBtns"></div>
+</section>
+
 <div id="toast"></div>
 <div id="stampPick"></div>
 <div id="imgView"><img id="imgViewImg" alt=""></div>
@@ -781,7 +860,7 @@ body.ura #list.tlMode{background:#efe9f0}
 // 置き場所で切り替える：/lab/（試作）と /chat/（本番）で同じファイルを使う
 // 試作は本番と同じサイトなので、保存の名前に「lab.」を付けて本番の chat.* には書き込まない。通知も登録しない
 const IS_LAB = /\/lab\//.test(location.pathname);
-const APP_VERSION = '第46版（2026-11-02 15:10:00 更新・AIが断ったときに知らせる・表情名の番号を無視）' + (IS_LAB ? '【試作】' : '');
+const APP_VERSION = '第47版（2026-11-10 06:00:00 更新・電話と留守電）' + (IS_LAB ? '【試作】' : '');
 if (IS_LAB) { document.title = '【試作】トーク（統合）'; const mt = document.querySelector('meta[name=apple-mobile-web-app-title]'); if (mt) mt.content = 'トーク試作'; }
 const $ = (id) => document.getElementById(id);
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
@@ -879,6 +958,7 @@ async function sync() {
     while (more) {
       const d = await api('GET', '/sync?since=' + S.maxId);
       S.chars = d.chars; S.groups = d.groups || []; S.aiAlerts = d.aiAlerts || {}; S.status = d.status || {}; S.reads = d.reads || {}; S.charRead = d.charRead || {}; S.outage = d.outage || null; S.cost = d.cost || S.cost; renderCost(); renderPause(); S.settings = d.settings || S.settings; S.appts = d.appts || S.appts || {}; renderAiAlert();
+      phoneAfterSync(d);
       const fresh = [];
       for (const m of d.messages) if (addMsg(m)) fresh.push(m);
       applyRetracted(d.retracted || []);
@@ -920,7 +1000,7 @@ function addMsg(m) {
 
 // 他から届いた（Cronで来た）新着を、開いているトークなら「入力中…」付きで見せる
 function revealIncoming(fresh) {
-  const mine = fresh.filter((m) => m.sender !== 'me' && S.view === 'chat' && m.charId === curKey());
+  const mine = fresh.filter((m) => m.sender !== 'me' && !m.kind && S.view === 'chat' && m.charId === curKey()); // 電話の記録（不在着信・留守電など）は「入力中…」なしで出す
   if (mine.length) queueReveal(mine, 0);
 }
 
@@ -1138,7 +1218,7 @@ function renderList() {
     const k = keyOf(c.id);
     const n = ura ? 0 : unreadCount(c.id); // 裏は未読バッジなし
     const empty = ura ? 'まだ会っていません' : 'メッセージはまだありません';
-    const lastTxt = last ? (last.retracted ? '送信を取り消しました' : last.kind === 'call' ? '📞 不在着信' : (last.image || last.localImg) && !last.text ? '写真' : last.text) : '';
+    const lastTxt = last ? (last.retracted ? '送信を取り消しました' : last.kind === 'call' ? '📞 不在着信' : last.kind === 'vm' ? '📞 留守番電話' : last.kind === 'callout' ? '📞 発信（応答なし）' : last.kind === 'callog' ? `📞 通話 ${durText((last.meta || {}).dur)}` : (last.image || last.localImg) && !last.text ? '写真' : last.text) : '';
     const so = !ura && (S.status || {})[c.id] || {};
     const pv = S.typingFor === k ? '入力中…' : last ? (last.sender === 'me' ? 'あなた: ' : last.sender === 'narr' ? '＊' : '') + lastTxt.replace(/\s+/g, ' ') : empty;
     return `<div class="row" role="button" tabindex="0" data-id="${esc(c.id)}"><div class="avw">${avatarHTML(c)}${so.emoji ? `<span class="avb">${esc(so.emoji)}</span>` : ''}</div>
@@ -1172,6 +1252,7 @@ function renderChat(keepPos, forceBottom) {
   const c = grp ? { id: grp.id, name: grp.name } : charById(S.current);
   if (!c) return;
   $('btnGrpReset').style.display = grp ? '' : 'none'; // .ib は display を指定しているので hidden 属性では消えない
+  $('btnCall').style.display = !grp && S.world !== 'ura' && canPhone(c) ? '' : 'none';
   renderMeetBar();
   const k = curKey(), ura = isUraKey(k);
   const nm = grp ? grp.name : dispName(c, ura ? 'ura' : 'omote');
@@ -1675,7 +1756,10 @@ var imgLoading = {};
 function bubHTML(m) {
   if (m.retracted) return `<div class="bub gone">${m.sender === 'me' ? 'メッセージの送信を取り消しました' : '送信を取り消しました'}</div>`;
   const src = m.localImg || (m.image && imgCache[m.image]);
-  if (m.kind === 'call') return `<div class="bub call"><span class="ic">📞</span><span><b>不在着信</b><small>応答なし</small></span></div>`;
+  if (m.kind === 'call') return `<div class="bub call"><span class="ic">📞</span><span><b>${m.meta && m.meta.declined ? '着信（拒否）' : '不在着信'}</b><small>${m.meta && m.meta.declined ? 'あなたが拒否しました' : '応答なし'}</small></span></div>`;
+  if (m.kind === 'vm') { const v = vmOf(baseId(m.charId), m.id); return `<div class="bub call vm" data-vm="${m.id}"><span class="ic">▶</span><span><b>留守番電話${v && !v.heard ? '<span class="new"></span>' : ''}</b><small>${v ? (v.heard ? 'タップで再生' : '新しい留守電・タップで再生') : '古い留守電（もう残っていません）'}</small></span></div>`; }
+  if (m.kind === 'callout') return `<div class="bub call out" data-callback="1"><span class="ic">📞</span><span><b>発信</b><small>応答なし・タップでかけ直す</small></span></div>`;
+  if (m.kind === 'callog') { const mt = m.meta || {}; return `<div class="bub call log" data-callback="1"><span class="ic">📞</span><span><b>通話 ${durText(mt.dur)}</b><small>${mt.usd != null ? `約$${Number(mt.usd).toFixed(3)}（約${yenOf(Number(mt.usd))}円）` : 'タップでかけ直す'}</small></span></div>`; }
   if (m.image || m.localImg) return `<div class="bub photo"><img ${src ? `src="${src}"` : `data-img="${esc(m.image)}"`} alt="${esc(m.alt || '写真')}"></div>${m.text ? `<div class="bub">${esc(m.text)}</div>` : ''}`;
   return `<div class="bub">${quoteHTML(m)}${esc(m.text)}</div>`;
 }
@@ -1762,6 +1846,8 @@ function openEdit(id) {
   if (c) loadLife(c.id);
   edit.uraNarration = c ? c.uraNarration !== false : true;
   edit.uraLength = c && c.uraLength ? c.uraLength : 'normal';
+  $('edVoice').value = c ? c.voice || '' : '';
+  edit.callFreq = c && c.callFreq ? c.callFreq : 'normal';
   $('edDanger').style.display = c ? '' : 'none';
   syncEditLabels(); drawEditIcon();
   show('edit');
@@ -1799,16 +1885,17 @@ function syncEditLabels() {
   $('edTyping').querySelectorAll('button').forEach((b) => b.classList.toggle('on', b.dataset.v === edit.typing));
   $('edJealous').querySelectorAll('button').forEach((b) => b.classList.toggle('on', b.dataset.v === (edit.jealous || 'auto')));
   $('edSpeed').querySelectorAll('button').forEach((b) => b.classList.toggle('on', b.dataset.v === (edit.replySpeed || 'auto')));
+  $('edCallFreq').querySelectorAll('button').forEach((b) => b.classList.toggle('on', b.dataset.v === (edit.callFreq || 'normal')));
   // 裏だけの子には、表でしか使わない設定を見せない
   $('edWorlds').querySelectorAll('button').forEach((b) => b.classList.toggle('on', (b.dataset.v === 'ura') === !!edit.uraOnly));
   $('edWorldsHint').textContent = edit.uraOnly
     ? '裏（会う場面）のトーク・裏のタイムライン・裏のグループにだけ登場します。表のトーク・表のタイムライン・くらしには出てきません。'
     : '表（トーク）と裏（会う場面）の両方に登場します。';
-  for (const id of ['edPerDay', 'edNudge', 'edSplit', 'edJealous', 'edSpeed', 'edNewsKw', 'edTlPer', 'edLifeBox']) {
+  for (const id of ['edPerDay', 'edNudge', 'edSplit', 'edJealous', 'edSpeed', 'edNewsKw', 'edTlPer', 'edLifeBox', 'edVoice', 'edCallFreq']) {
     const f = $(id).closest('.field');
     f.style.display = edit.uraOnly || (id === 'edLifeBox' && !edit.id) ? 'none' : '';
   }
-  for (const id of ['edPoke', 'edNewsPoke', 'edTlPoke', 'edClear']) $(id).style.display = edit.uraOnly ? 'none' : '';
+  for (const id of ['edPoke', 'edNewsPoke', 'edTlPoke', 'edClear', 'edCallTest']) $(id).style.display = edit.uraOnly ? 'none' : '';
 }
 function drawEditIcon() {
   const el = $('edIcon');
@@ -1844,7 +1931,9 @@ async function saveEdit() {
     newsKeywords: $('edNewsKw').value.trim(), jealous: edit.jealous || 'auto', replySpeed: edit.replySpeed || 'auto',
     birthday: $('edBdM').value && $('edBdD').value ? $('edBdM').value + '-' + $('edBdD').value : '',
     uraOnly: !!edit.uraOnly,
+    voice: $('edVoice').value.trim(), callFreq: edit.callFreq || 'normal',
   };
+  if (char.voice && !/^[\w.-]{1,40}$/.test(char.voice)) return toast('電話の声の名前は、半角の英数字と _ - . だけにしてください');
   if (($('edBdM').value === '') !== ($('edBdD').value === '')) return toast('誕生日は月と日の両方を選んでください');
   if (char.birthday && ['02-30', '02-31', '04-31', '06-31', '09-31', '11-31'].includes(char.birthday)) return toast('その日付はありません');
   if (edit.icon !== undefined) char.icon = edit.icon;
@@ -1991,7 +2080,7 @@ function openSettings() {
   [['costGeminiIn', 'geminiIn'], ['costGeminiOut', 'geminiOut'], ['costGrokIn', 'grokIn'], ['costGrokOut', 'grokOut'], ['costImage', 'image']].forEach(([id, k]) => { $(id).value = cs[k] != null ? cs[k] : ''; });
   $('stDis').checked = S.settings.disasterEnabled !== false; $('stQuake').value = S.settings.quakeMin || '4';
   loadDisStatus();
-  renderMeetSettings();
+  renderMeetSettings(); renderPhoneSettings();
   $('stLife').checked = S.settings.lifeEnabled !== false; $('stImages').checked = S.settings.imagesEnabled !== false; $('stDelay').checked = S.settings.delayEnabled !== false;
   const two = (n) => String(n).padStart(2, '0');
   $('stBdM').innerHTML = '<option value="">--</option>' + Array.from({ length: 12 }, (_, i) => `<option value="${two(i + 1)}">${i + 1}</option>`).join('');
@@ -2368,6 +2457,7 @@ $('edUraNarr').addEventListener('click', (e) => { const b = e.target.closest('bu
 $('edTyping').addEventListener('click', (e) => { const b = e.target.closest('button'); if (b) { edit.typing = b.dataset.v; syncEditLabels(); } });
 $('edSpeed').addEventListener('click', (e) => { const b = e.target.closest('button'); if (b) { edit.replySpeed = b.dataset.v; syncEditLabels(); } });
 $('edWorlds').addEventListener('click', (e) => { const b = e.target.closest('button'); if (b) { edit.uraOnly = b.dataset.v === 'ura'; syncEditLabels(); } });
+$('edCallFreq').addEventListener('click', (e) => { const b = e.target.closest('button'); if (b) { edit.callFreq = b.dataset.v; syncEditLabels(); } });
 $('edJealous').addEventListener('click', (e) => { const b = e.target.closest('button'); if (b) { edit.jealous = b.dataset.v; syncEditLabels(); } });
 $('edMems').addEventListener('click', async (e) => {
   const b = e.target.closest('[data-mem]'); if (!b) return;
@@ -2774,17 +2864,397 @@ async function saveMeetSettings() {
 }
 $('stMeet').onchange = $('stMeetOn').onchange = saveMeetSettings;
 
+// ================================================================ 電話・留守電（第47版）
+// 声は Modal（またはパソコン）の Irodori-TTS。住所・合言葉・音量・速さは、ノベル画面の「読み上げ」の設定を使う。
+// 話し方は［⌨ 文字］［🎤 声］。🎤は押すと聞き始め、もう一度押すと送る（iPhone の音声認識）。
+const MODAL_IDLE_S = 30;      // Modal が最後に使ってから止まるまでの秒数（料金の目安に使う）
+const GPU_USD_PER_H = 0.85;   // GPU(L4)＋CPU＋メモリの1時間あたりの目安
+const CALL = { cur: null, seen: new Set() };
+const callSubsOn = () => store.get('call.subs', true);
+const vmSubsOn = () => store.get('vm.subs', true);
+function ttsCfg() {
+  const read = (k) => { try { return JSON.parse(localStorage.getItem(k) || '{}') || {}; } catch (_) { return {}; } };
+  let s = read(IS_LAB ? 'lab.settings' : 'novel.settings');
+  if (IS_LAB && !s.ttsUrl) s = read('novel.settings'); // 試作：本番のノベル画面の設定を借りる（読むだけ）
+  return { url: String(s.ttsUrl || '').trim().replace(/\/+$/, ''), key: String(s.ttsKey || ''), vol: Math.max(0, Math.min(200, s.ttsVol == null ? 100 : +s.ttsVol)) / 100, speed: +s.ttsSpeed || 1 };
+}
+const canPhone = (c) => !!(c && !c.uraOnly && c.voice && S.settings.phoneEnabled !== false);
+const fmtClock = (ms) => { const s = Math.max(0, Math.floor(ms / 1000)); return `${String(Math.floor(s / 60)).padStart(2, '0')}:${String(s % 60).padStart(2, '0')}`; };
+const durText = (ms) => { const s = Math.round((ms || 0) / 1000); return s >= 60 ? `${Math.floor(s / 60)}分${s % 60 ? (s % 60) + '秒' : ''}` : `${s}秒`; };
+const yenOf = (usd) => Math.round(usd * (S.settings.yen || 150) * 10) / 10;
+// --- 音（Web Audio。iPhone は最初の操作のあとでないと鳴らない）
+let actx = null, voiceGain = null;
+function ac() {
+  if (!actx) { const AC = window.AudioContext || window.webkitAudioContext; actx = AC ? new AC() : null; }
+  if (actx && actx.state === 'suspended') actx.resume().catch(() => {});
+  return actx;
+}
+function vGain() {
+  const c = ac(); if (!c) return null;
+  if (!voiceGain) { voiceGain = c.createGain(); voiceGain.connect(c.destination); }
+  voiceGain.gain.value = CALL.cur && CALL.cur.muted ? 0 : ttsCfg().vol;
+  return voiceGain;
+}
+let toneTimer = null, toneNodes = [];
+function stopTones() { clearInterval(toneTimer); toneTimer = null; for (const n of toneNodes) { try { n.stop(); } catch (_) {} } toneNodes = []; }
+function beep(freq, dur, at = 0, vol = 0.12, mod = 0) {
+  const c = ac(); if (!c) return;
+  const o = c.createOscillator(), g = c.createGain(); o.frequency.value = freq; g.gain.value = vol;
+  if (mod) { const lfo = c.createOscillator(), lg = c.createGain(); lfo.frequency.value = mod; lg.gain.value = vol; lfo.connect(lg); lg.connect(g.gain); lfo.start(c.currentTime + at); lfo.stop(c.currentTime + at + dur); toneNodes.push(lfo); }
+  o.connect(g); g.connect(c.destination); o.start(c.currentTime + at); o.stop(c.currentTime + at + dur); toneNodes.push(o);
+}
+function playRingback() { stopTones(); const one = () => beep(400, 1, 0, 0.1, 16); one(); toneTimer = setInterval(one, 3000); } // 日本の呼び出し音（1秒鳴って2秒休む）
+async function playRingtone() {
+  stopTones();
+  const c = ac(); if (!c) return;
+  const file = await phoneIdb('get', 'ringtone').catch(() => null);
+  if (file && file.data) {
+    try {
+      const buf = await c.decodeAudioData(file.data.slice(0));
+      const src = c.createBufferSource(); src.buffer = buf; src.loop = true; src.connect(c.destination); src.start(); toneNodes.push(src); return;
+    } catch (_) {}
+  }
+  const one = () => { beep(1046, 0.18, 0, 0.12); beep(784, 0.18, 0.22, 0.12); beep(1046, 0.18, 0.5, 0.12); beep(784, 0.18, 0.72, 0.12); };
+  one(); toneTimer = setInterval(one, 2200);
+}
+// --- 着信音のファイル（iPhone の中に保存）
+function phoneIdb(op, key, val) {
+  return new Promise((res, rej) => {
+    const rq = indexedDB.open(LAB('chatPhone'), 1);
+    rq.onupgradeneeded = () => rq.result.createObjectStore('kv');
+    rq.onerror = () => rej(rq.error);
+    rq.onsuccess = () => {
+      const tx = rq.result.transaction('kv', op === 'get' ? 'readonly' : 'readwrite'), os = tx.objectStore('kv');
+      const r = op === 'get' ? os.get(key) : op === 'del' ? os.delete(key) : os.put(val, key);
+      r.onsuccess = () => res(r.result); r.onerror = () => rej(r.error);
+    };
+  });
+}
+// --- 声（Irodori-TTS）
+function speakText(t) { return String(t || '').replace(/《[^》]*》/g, '').replace(/[（(][^）)]*[）)]/g, '').replace(/^[＊*]+/, '').trim(); }
+const vmCache = {};
+async function ttsBuf(voice, text) {
+  const cfg = ttsCfg();
+  if (!cfg.url) throw new Error('ノベル画面の「読み上げ」で声のサーバーを設定してください');
+  const r = await fetch(cfg.url + '/v1/audio/speech', { method: 'POST', signal: AbortSignal.timeout(140000),
+    headers: Object.assign({ 'Content-Type': 'application/json' }, cfg.key ? { Authorization: 'Bearer ' + cfg.key } : {}),
+    body: JSON.stringify({ model: 'irodori-tts', input: text, voice, response_format: 'mp3', speed: cfg.speed }) });
+  if (!r.ok) throw new Error(`声のサーバー ${r.status}${r.status === 401 ? '（合言葉）' : ''}`);
+  const c = ac(); if (!c) throw new Error('この端末では音を鳴らせません');
+  return await c.decodeAudioData(await r.arrayBuffer());
+}
+let voiceSrc = null;
+function stopVoice() { if (voiceSrc) { try { voiceSrc.onended = null; voiceSrc.stop(); } catch (_) {} } voiceSrc = null; if (CALL.cur) CALL.cur.speakTok = (CALL.cur.speakTok || 0) + 1; }
+function playBuf(buf) {
+  return new Promise((res) => {
+    const c = ac(), g = vGain(); if (!c || !g) return res();
+    const s = c.createBufferSource(); s.buffer = buf; s.connect(g); s.onended = () => { if (voiceSrc === s) voiceSrc = null; res(); };
+    voiceSrc = s; s.start();
+  });
+}
+async function warmGPU(maxMs = 120000) { // 声のサーバー（GPU）を起こす。起きたら true
+  const cfg = ttsCfg(); if (!cfg.url) return true;
+  const t0 = Date.now();
+  while (Date.now() - t0 < maxMs) {
+    try { const r = await fetch(cfg.url + '/health', { cache: 'no-store', signal: AbortSignal.timeout(25000) }); if (r.ok) return true; if (r.status >= 400 && r.status < 500) return false; } catch (_) {}
+    await sleep(2000);
+  }
+  return false;
+}
+// --- 画面
+function cvAvatar(c) { const ic = S.icons[c.id] && S.icons[c.id].data; return ic ? `<img src="${ic}" alt="">` : esc([...c.name][0] || '?'); }
+function callScreen(c, mode) { // mode: dial / incoming / active / vm
+  CALL.screenMode = mode;
+  $('cvName').textContent = c.name;
+  $('cvAv').innerHTML = cvAvatar(c);
+  $('callView').className = 'on ' + mode;
+  $('cvBtns').innerHTML = mode === 'incoming'
+    ? '<button class="cvBtn" id="cvDecline">✕ 拒否</button><button class="cvBtn ok" id="cvAnswer">📞 応答</button>'
+    : mode === 'vm'
+      ? '<button class="cvBtn gray" id="cvVmPlay">▶ 再生</button><button class="cvBtn" id="cvVmClose">閉じる</button>'
+      : `<button class="cvBtn gray" id="cvMute">🔊 スピーカー</button><button class="cvBtn" id="cvEnd">📞 終了</button>`;
+  $('cvInput').hidden = mode !== 'active';
+  $('cvSub').innerHTML = ''; $('cvSub').hidden = mode === 'vm' ? !vmSubsOn() : !callSubsOn();
+  $('cvSubToggle').textContent = (mode === 'vm' ? vmSubsOn() : callSubsOn()) ? '字幕 ON' : '字幕 OFF';
+  const on = (id, f) => { const b = $(id); if (b) b.onclick = f; };
+  on('cvDecline', () => declineCall()); on('cvAnswer', () => answerCall());
+  on('cvEnd', () => endCall('me')); on('cvMute', toggleMute);
+  on('cvVmPlay', () => vmPlay()); on('cvVmClose', () => closeCallScreen());
+}
+function setStat(t) { $('cvStat').textContent = t; }
+function subLine(who, text) {
+  const box = $('cvSub');
+  box.insertAdjacentHTML('beforeend', `<div class="${who}">${who === 'me' ? 'あなた：' : ''}${esc(text)}</div>`);
+  while (box.children.length > 8) box.firstChild.remove();
+  box.scrollTop = box.scrollHeight;
+}
+function closeCallScreen() {
+  stopTones(); stopVoice(); micStop(true);
+  clearInterval(CALL.clock); clearInterval(CALL.hb); clearTimeout(CALL.ringTo);
+  CALL.cur = null; CALL.vm = null;
+  $('callView').className = '';
+}
+function startClock(from) { clearInterval(CALL.clock); const f = () => { $('cvTime').textContent = fmtClock(Date.now() - from); }; f(); CALL.clock = setInterval(f, 500); }
+function toggleMute() {
+  if (!CALL.cur) return;
+  CALL.cur.muted = !CALL.cur.muted; vGain();
+  $('cvMute').textContent = CALL.cur.muted ? '🔇 消音中' : '🔊 スピーカー';
+}
+$('cvSubToggle').onclick = () => {
+  const vm = CALL.screenMode === 'vm', k = vm ? 'vm.subs' : 'call.subs', v = !store.get(k, true);
+  store.set(k, v); $('cvSub').hidden = !v; $('cvSubToggle').textContent = v ? '字幕 ON' : '字幕 OFF';
+};
+// --- 話す（キャラの声）。話している途中にあなたが話し始めたら止める
+async function speakLines(lines) {
+  const cur = CALL.cur; if (!cur) return;
+  const tok = cur.speakTok = (cur.speakTok || 0) + 1;
+  const voice = (charById(cur.charId) || {}).voice;
+  const jobs = lines.map((t) => { const s = speakText(t); return s ? ttsBuf(voice, s).catch((e) => { logDiag('電話の声: ' + e.message); return null; }) : Promise.resolve(null); });
+  for (let i = 0; i < lines.length; i++) {
+    if (!CALL.cur || CALL.cur.speakTok !== tok) return;
+    subLine('them', lines[i]);
+    setStat('通話中');
+    const buf = await jobs[i];
+    if (!CALL.cur || CALL.cur.speakTok !== tok) return;
+    if (buf) await playBuf(buf); else await sleep(Math.min(6000, 600 + lines[i].length * 110)); // 声が作れなかったときは字幕を読む時間
+  }
+}
+// --- かける
+async function startOutgoing(c) {
+  if (CALL.cur) return;
+  if (!confirm(`${c.name}さんに電話をかけますか？`)) return;
+  ac();
+  CALL.cur = { charId: c.id, dir: 'out', gpuStart: Date.now(), muted: false };
+  callScreen(c, 'dial'); setStat('呼び出し中…'); $('cvTime').textContent = '';
+  playRingback();
+  const warm = warmGPU(90000);
+  let r;
+  try { r = await api('POST', '/call/start', { charId: c.id }); }
+  catch (e) { toast(e.message); closeCallScreen(); return; }
+  if (!CALL.cur) { api('POST', '/call/decline', { id: r.call.id }).catch(() => {}); return; }
+  CALL.cur.id = r.call.id;
+  await sleep(r.ringMs);
+  if (!CALL.cur) { api('POST', '/call/decline', { id: r.call.id }).catch(() => {}); return; }
+  if (r.ringMs < 25000 && !(await warm)) { // 声のサーバー（GPU）が起きない：無料分を使い切った・止まっているなど
+    api('POST', '/call/decline', { id: r.call.id }).catch(() => {});
+    stopTones(); setStat('ただいま電話に出ることができません'); await sleep(2200); closeCallScreen(); return;
+  }
+  if (!CALL.cur) return;
+  try {
+    const d = await api('POST', '/call/connect', { id: r.call.id });
+    stopTones();
+    if (!d.answered) { setStat('応答がありません'); if (d.message) { addMsg(d.message); renderAll(true); } await sleep(2200); closeCallScreen(); return; }
+    beginActive(d.call, d.lines, d.hangup);
+  } catch (e) { toast(e.message); closeCallScreen(); }
+}
+// --- かかってきた
+function showIncoming(call) {
+  if (CALL.cur || CALL.seen.has(call.id)) return;
+  const c = charById(call.charId); if (!c) return;
+  if (call.ringUntil && Date.now() > call.ringUntil) return;
+  CALL.seen.add(call.id);
+  CALL.cur = { id: call.id, charId: c.id, dir: 'in', gpuStart: call.ringAt || Date.now(), muted: false };
+  callScreen(c, 'incoming'); setStat('着信'); $('cvTime').textContent = '';
+  playRingtone();
+  CALL.ringTo = setTimeout(async () => { if (CALL.cur && CALL.cur.id === call.id && CALL.screenMode === 'incoming') { stopTones(); setStat('不在着信'); await sleep(1800); closeCallScreen(); sync(); } }, Math.max(3000, (call.ringUntil || Date.now() + 40000) - Date.now()));
+}
+async function answerCall() {
+  const cur = CALL.cur; if (!cur) return;
+  ac(); stopTones(); clearTimeout(CALL.ringTo); setStat('接続中…');
+  try { const d = await api('POST', '/call/answer', { id: cur.id }); beginActive(d.call, d.lines, d.hangup); }
+  catch (e) { setStat(e.message.includes('切れ') ? '電話は切れました' : e.message); await sleep(1800); closeCallScreen(); sync(); }
+}
+async function declineCall() {
+  const cur = CALL.cur; if (!cur) return;
+  stopTones(); closeCallScreen();
+  api('POST', '/call/decline', { id: cur.id }).then(() => setTimeout(sync, 4000)).catch((e) => toast(e.message));
+}
+// --- 通話中
+function beginActive(call, lines, hangup) {
+  if (!CALL.cur) return;
+  Object.assign(CALL.cur, { id: call.id, answeredAt: Date.now() });
+  const c = charById(CALL.cur.charId);
+  callScreen(c, 'active'); setStat('通話中'); startClock(CALL.cur.answeredAt);
+  setInputMode(store.get('call.mode', 'text'));
+  // GPU を起こし続ける（20秒ごと）・サーバーに「つながっている」と伝える（60秒ごと）
+  let n = 0;
+  CALL.hb = setInterval(() => { const u = ttsCfg().url; if (u) fetch(u + '/health', { cache: 'no-store' }).catch(() => {}); if (++n % 3 === 0 && CALL.cur) api('POST', '/call/ping', { id: CALL.cur.id }).catch(() => {}); }, 20000);
+  speakLines(lines || []).then(() => { if (hangup) endCall('char'); });
+}
+async function sayInCall(text) {
+  const cur = CALL.cur; if (!cur || !cur.answeredAt || cur.busy) return;
+  text = String(text || '').trim(); if (!text) return;
+  stopVoice(); // 話している途中なら止めて、あなたの言葉を優先
+  subLine('me', text); cur.busy = true; setStat('…');
+  try {
+    const d = await api('POST', '/call/say', { id: cur.id, text });
+    cur.busy = false;
+    if (d.ended) { endCall('char'); return; }
+    await speakLines(d.lines || []);
+    if (d.hangup && CALL.cur === cur) endCall('char');
+  } catch (e) { cur.busy = false; setStat('通話中'); toast(e.message); }
+}
+async function endCall(by) {
+  const cur = CALL.cur; if (!cur || cur.ending) return;
+  cur.ending = true;
+  const now = Date.now();
+  const gpuMs = (now - (cur.gpuStart || now)) + MODAL_IDLE_S * 1000, usd = gpuMs / 3600e3 * GPU_USD_PER_H;
+  if (by === 'char') { setStat('通話終了'); await sleep(900); }
+  closeCallScreen();
+  if (!cur.id || !cur.answeredAt) return;
+  try {
+    const d = await api('POST', '/call/end', { id: cur.id, by, est: { usd, gpuMs } });
+    if (d.message) { addMsg(d.message); renderAll(true); }
+    toast(`通話 ${durText(now - cur.answeredAt)}・GPU 約${Math.round(gpuMs / 60000) || 1}分・約$${usd.toFixed(3)}（約${yenOf(usd)}円）`, 5000);
+  } catch (e) { toast(e.message); }
+}
+// --- 文字／声
+function setInputMode(m) {
+  store.set('call.mode', m);
+  $('cvModeText').classList.toggle('on', m === 'text'); $('cvModeMic').classList.toggle('on', m === 'mic');
+  $('cvTextRow').hidden = m !== 'text'; $('cvMicRow').hidden = m !== 'mic';
+  if (m !== 'mic') micStop(true);
+}
+$('cvModeText').onclick = () => setInputMode('text');
+$('cvModeMic').onclick = () => setInputMode('mic');
+$('cvSend').onclick = () => { const v = $('cvText').value; $('cvText').value = ''; sayInCall(v); };
+$('cvText').addEventListener('keydown', (e) => { if (e.key === 'Enter' && !e.isComposing) { e.preventDefault(); $('cvSend').click(); } });
+let rec = null, recText = '', recFinal = '';
+function micStop(discard) {
+  if (!rec) return;
+  const r = rec; rec = null;
+  if (discard) recFinal = recText = '';
+  try { r.stop(); } catch (_) {}
+  $('cvMic').classList.remove('on'); $('cvMic').textContent = '🎤 話す'; $('cvMicX').hidden = true;
+  if (!discard) { const t = (recFinal + recText).trim(); recFinal = recText = ''; $('cvHeard').textContent = ''; if (t) sayInCall(t); }
+  else $('cvHeard').textContent = '';
+}
+function micStart() {
+  const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
+  if (!SR) { toast('この端末では音声認識が使えません。⌨ 文字で話してください', 4000); return; }
+  stopVoice();
+  recFinal = recText = '';
+  const r = new SR(); rec = r;
+  r.lang = 'ja-JP'; r.continuous = true; r.interimResults = true;
+  r.onresult = (e) => { let fin = '', mid = ''; for (let i = 0; i < e.results.length; i++) { if (e.results[i].isFinal) fin += e.results[i][0].transcript; else mid += e.results[i][0].transcript; } recFinal = fin; recText = mid; $('cvHeard').textContent = (fin + mid) || '聞いています…'; };
+  r.onerror = (e) => { if (rec === r && e.error !== 'no-speech' && e.error !== 'aborted') { toast('音声認識：' + (e.error === 'not-allowed' ? 'マイクが許可されていません' : e.error)); micStop(true); } };
+  r.onend = () => { if (rec === r) { try { r.start(); } catch (_) {} } }; // 押しているあいだ（もう一度押すまで）は聞き続ける
+  try { r.start(); } catch (e) { toast('音声認識を始められませんでした：' + e.message); rec = null; return; }
+  $('cvMic').classList.add('on'); $('cvMic').textContent = '⏹ 送る'; $('cvMicX').hidden = false; $('cvHeard').textContent = '聞いています…';
+}
+$('cvMic').onclick = () => (rec ? micStop(false) : micStart());
+$('cvMicX').onclick = () => micStop(true);
+// --- 留守電
+function vmOf(charId, id) { return ((S.vms || {})[charId] || []).find((v) => v.id === Number(id)); }
+function openVM(charId, id) {
+  const c = charById(charId), v = vmOf(charId, id);
+  if (!c) return;
+  if (!v) { toast('古い留守電なので、もう残っていません（新しい10件まで）'); return; }
+  ac();
+  CALL.vm = { charId, v, playing: false };
+  callScreen(c, 'vm'); setStat('留守番電話'); $('cvTime').textContent = new Date(v.at).toLocaleString('ja-JP', { month: 'numeric', day: 'numeric', hour: '2-digit', minute: '2-digit' });
+  subLine('them', v.text);
+  vmPlay();
+}
+async function vmPlay() {
+  const vm = CALL.vm; if (!vm) return;
+  if (vm.playing) { stopVoice(); vm.playing = false; $('cvVmPlay').textContent = '▶ 再生'; return; }
+  const c = charById(vm.charId);
+  vm.playing = true; $('cvVmPlay').textContent = '⏸ 止める'; setStat('留守番電話・再生中');
+  try {
+    const buf = vmCache[vm.v.id] || (vmCache[vm.v.id] = await ttsBuf(c.voice, speakText(vm.v.text)));
+    if (CALL.vm !== vm) return;
+    const t0 = Date.now(); startClock(t0);
+    await playBuf(buf);
+    if (!vm.v.heard) { vm.v.heard = true; api('POST', '/vm/heard', { charId: vm.charId, id: vm.v.id }).then((d) => { S.vms[vm.charId] = d.vms; renderAll(true); }).catch(() => {}); }
+  } catch (e) { toast('留守電を再生できませんでした：' + e.message); delete vmCache[vm.v.id]; }
+  if (CALL.vm === vm) { vm.playing = false; clearInterval(CALL.clock); $('cvVmPlay').textContent = '▶ もう一度'; setStat('留守番電話'); }
+}
+$('msgs').addEventListener('click', (e) => {
+  if (sel.on) return;
+  const v = e.target.closest('[data-vm]'); if (v) { openVM(baseId(curKey()), v.dataset.vm); return; }
+  const cl = e.target.closest('[data-callback]'); if (cl) { const c = charById(S.current); if (c && canPhone(c)) startOutgoing(c); }
+});
+$('btnCall').onclick = () => { const c = charById(S.current); if (c && canPhone(c)) startOutgoing(c); };
+// --- 同期のたび：かかってきた電話・留守電・GPU を起こす住所をサーバーに
+let ttsUrlSent = '';
+function phoneAfterSync(d) {
+  S.calls = d.calls || []; S.vms = d.vms || S.vms || {};
+  const u = ttsCfg().url;
+  if (u && u !== S.settings.ttsUrl && u !== ttsUrlSent) { ttsUrlSent = u; api('POST', '/settings', { settings: { ttsUrl: u } }).catch(() => {}); }
+  const ring = S.calls.find((x) => x.dir === 'in' && x.status === 'ringing');
+  if (ring) showIncoming(ring);
+}
+async function openCallFromNotice(id) {
+  try { const d = await api('GET', '/call?id=' + encodeURIComponent(id)); if (d.call && d.call.status === 'ringing') showIncoming(d.call); else toast('電話はもう切れました（不在着信）'); }
+  catch (e) { toast(e.message); }
+}
+// --- 設定
+function renderPhoneSettings() {
+  const st = S.settings;
+  $('stPhoneOn').checked = st.phoneEnabled !== false; $('stPhoneAllOff').checked = !!st.phoneAllOff;
+  const opts = Array.from({ length: 24 }, (_, h) => `<option value="${h}">${h}</option>`).join('');
+  $('stPhoneQS').innerHTML = opts; $('stPhoneQE').innerHTML = opts;
+  $('stPhoneQS').value = st.phoneQuietStart ?? 1; $('stPhoneQE').value = st.phoneQuietEnd ?? 7;
+  const mode = st.phoneQuietMode || 'same';
+  $('stPhoneQuiet').querySelectorAll('button').forEach((b) => b.classList.toggle('on', b.dataset.v === mode));
+  $('stPhoneQBox').style.display = mode === 'custom' ? '' : 'none';
+  $('stCallSubs').checked = callSubsOn(); $('stVmSubs').checked = vmSubsOn();
+  const cfg = ttsCfg();
+  $('stPhoneVoice').textContent = cfg.url ? `声のサーバー：${cfg.url}（ノベル画面の「読み上げ」の設定を使います）` : '声のサーバーが未設定です。ノベル画面の 設定 →「読み上げ」で住所と合言葉を入れてください。';
+  phoneIdb('get', 'ringtone').then((f) => { $('stRingName').textContent = f && f.name ? `着信音：${f.name}` : '着信音：アプリの電子音'; }).catch(() => {});
+  const list = (S.chars || []).filter((c) => !c.uraOnly);
+  $('stPhoneChars').innerHTML = list.map((c) => `<div>${esc(c.name)}：${c.voice ? `声「${esc(c.voice)}」・着信 ${({ none: 'かけてこない', rare: 'たまに', normal: 'ふつう', often: 'よく' })[c.callFreq || 'normal']}` : '<span style="opacity:.6">声の名前なし（電話は使いません）</span>'}</div>`).join('') || '<div class="hint">キャラがいません</div>';
+}
+async function savePhoneSettings() {
+  const mode = ($('stPhoneQuiet').querySelector('button.on') || {}).dataset?.v || 'same';
+  try {
+    const r = await api('POST', '/settings', { settings: { phoneEnabled: $('stPhoneOn').checked, phoneAllOff: $('stPhoneAllOff').checked, phoneQuietMode: mode, phoneQuietStart: +$('stPhoneQS').value, phoneQuietEnd: +$('stPhoneQE').value } });
+    S.settings = r.settings; renderPhoneSettings(); toast('電話の設定を保存しました');
+  } catch (e) { toast(e.message); renderPhoneSettings(); }
+}
+$('stPhoneOn').onchange = $('stPhoneAllOff').onchange = $('stPhoneQS').onchange = $('stPhoneQE').onchange = savePhoneSettings;
+$('stPhoneQuiet').addEventListener('click', (e) => { const b = e.target.closest('button'); if (!b) return; $('stPhoneQuiet').querySelectorAll('button').forEach((x) => x.classList.toggle('on', x === b)); savePhoneSettings(); });
+$('stCallSubs').onchange = () => store.set('call.subs', $('stCallSubs').checked);
+$('stVmSubs').onchange = () => store.set('vm.subs', $('stVmSubs').checked);
+$('stRingPick').onclick = () => $('stRingFile').click();
+$('stRingFile').onchange = async (e) => {
+  const f = e.target.files[0]; e.target.value = '';
+  if (!f) return;
+  if (f.size > 8e6) { toast('8MBまでの音のファイルにしてください'); return; }
+  try {
+    const data = await f.arrayBuffer();
+    const c = ac(); if (c) await c.decodeAudioData(data.slice(0)); // 鳴らせるか確かめる
+    await phoneIdb('put', 'ringtone', { name: f.name, data });
+    renderPhoneSettings(); toast('着信音を変えました');
+  } catch (err) { toast('この音のファイルは使えませんでした：' + err.message); }
+};
+$('stRingClear').onclick = async () => { await phoneIdb('del', 'ringtone').catch(() => {}); renderPhoneSettings(); toast('アプリの電子音に戻しました'); };
+$('stRingTest').onclick = async () => { ac(); await playRingtone(); setTimeout(stopTones, 4000); };
+// --- キャラ編集：テストで電話をかけてもらう
+$('edCallTest').onclick = async () => {
+  const c = edit && edit.id ? charById(edit.id) : null;
+  if (!c) return;
+  if (!c.voice) { toast('先に「電話の声」を入れて保存してください'); return; }
+  try {
+    await api('POST', '/call/test', { charId: c.id });
+    toast('GPU を起こしてから着信します（30秒〜1分）。このまま待ってください', 5000);
+    for (let i = 0; i < 24 && !CALL.cur; i++) { await sleep(5000); await sync(); }
+  } catch (e) { toast(e.message); }
+};
+
 // ------------------------------------------------ 起動
 (async function start() {
   registerSW();
   applyWorld();
   renderAll();
   const qs = new URLSearchParams(location.search);
-  const openId = qs.get('chat'), openTl = qs.get('tl'), openPostId = qs.get('post');
+  const openId = qs.get('chat'), openTl = qs.get('tl'), openPostId = qs.get('post'), openCall = qs.get('call');
   const openW = qs.get('w') === 'ura' ? 'ura' : 'omote'; // 試作：ノベル画面から戻るときは裏で開く
-  if (openId || openTl) history.replaceState(null, '', location.pathname);
+  if (openId || openTl || openCall) history.replaceState(null, '', location.pathname);
   if (!S.cfg.url) return;
   await sync();
+  if (openCall) openCallFromNotice(openCall);
   if (openTl) openTlFromNotice(openTl, openPostId);
   else if (openId && (charById(openId) || groupById(openId))) { setMode('talk'); openChat(openId, openW); }
   else if (S.mode === 'tl') loadTL(S.world, true);

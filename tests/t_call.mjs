@@ -85,7 +85,7 @@ await flush();
 let s = await call('GET', '/sync?since=0');
 let ring = s.calls.find((x) => x.status === 'ringing');
 ok(health >= 1 && ring && ring.dir === 'in', 'incoming: warmed GPU then ringing');
-ok(bark.length === 1 && bark[0].call === '1' && bark[0].url.includes('?call='), 'bark rings like a phone and opens the call');
+ok(bark.length === 1 && bark[0].call === '1' && !bark[0].url && bark[0].body.includes('アプリを開く'), 'bark rings like a phone (open the app to answer)');
 answer.reply = { messages: ['もしもし、朱里です。急にごめんね。'], hangup: false };
 r = await call('POST', '/call/answer', { id: ring.id });
 ok(r.lines[0].includes('もしもし') && ai.pop().sys.includes('あなたからかけた'), 'answer incoming → char speaks first');

@@ -2270,7 +2270,8 @@ async function warmTTS(env, st, ms = 20e3) { // GPU を起こす（返事が来�
 }
 async function callNotify(env, st, c, title, body, url, ring) {
   if (st.notifyVia !== 'bark') await pushPayload(env, { title, body, charId: c.id, tag: 'call-' + c.id, url }).catch((e) => log(env, '電話の通知: ' + e.message));
-  if (st.notifyVia !== 'web') await sendBark(env, st, { title, body, cid: c.id, group: c.name, url, ring }).catch((e) => log(env, '電話の通知（Bark）: ' + e.message));
+  // Bark はタップすると Safari で開く（ホーム画面のアプリではない）ので、住所は付けず「アプリを開いて出て」と知らせる。アプリを開くと同期で着信画面が出る
+  if (st.notifyVia !== 'web') await sendBark(env, st, { title, body: ring ? body + '（トークのアプリを開くと出られます）' : body, cid: c.id, group: c.name, ring }).catch((e) => log(env, '電話の通知（Bark）: ' + e.message));
 }
 async function callMsg(env, key, sender, kind, text, meta) {
   const at = Date.now();

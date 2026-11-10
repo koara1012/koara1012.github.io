@@ -358,6 +358,7 @@ body.ura #list.tlMode{background:#efe9f0}
     <button class="ib" id="btnEditChar" aria-label="キャラを編集" style="font-size:14px;font-weight:700;padding:0 8px">編集</button>
   </header>
   <div class="aialert" id="aiAlertChat" hidden></div>
+  <div class="pausebar paused" id="charPauseBar" style="display:none"><span id="charPauseText"></span><button id="charPauseBtn">再開する</button></div>
   <div class="meetbar" id="meetBar" hidden></div>
   <div id="selHint">消したいメッセージをタップして選んでください</div>
   <div class="scroll" id="msgs"></div>
@@ -446,6 +447,10 @@ body.ura #list.tlMode{background:#efe9f0}
       <label class="t" for="edVoice">電話の声（声の名前）</label>
       <input type="text" id="edVoice" maxlength="40" placeholder="例：akari（空なら電話を使いません）" autocapitalize="off" autocorrect="off">
       <div class="hint">ノベル画面の「読み上げ」で使っている、Irodori-TTS の声の名前です。声の名前を入れた子だけが電話を使います（あなたからかける・この子からかかってくる・留守電）。</div>
+    </div>
+    <div class="field" id="edPauseBox">
+      <label class="chk"><input type="checkbox" id="edPause"> この子の表のAIを止める</label>
+      <div class="hint">この子だけ、表のトークの返事・話しかけ・TLへの投稿と反応・くらし・電話・災害の連絡・会う場面を止めます（ほかの子は動きます）。押したらすぐ切り替わります（保存は要りません）。送ったメッセージには、再開したときに返事が来ます。</div>
     </div>
     <div class="field" id="edCallFreqBox">
       <label class="t">この子からの着信</label>
@@ -714,6 +719,9 @@ body.ura #list.tlMode{background:#efe9f0}
     <div class="field">
       <label class="chk"><input type="checkbox" id="stOmotePause"> 表のAIを止める（トークの返事・話しかけ・スタンプ、毎日の様子と記憶の整理、TLへの投稿・反応、災害の連絡、会う場面）</label>
       <div class="hint">止めているあいだ、表では AI（Gemini）を使いません。送ったメッセージには再開したときに返事が来ます。止めているあいだに予定されていた話しかけ・TLの反応も、再開したあとに届きます。会う約束の通知は届きます。</div>
+      <div class="t" style="margin-top:12px">キャラごとに止める（表）</div>
+      <div id="stOmotePauseChars"></div>
+      <div class="hint">チェックした子だけ、表の返事・話しかけ・TL・くらし・電話・災害の連絡・会う場面を止めます。ほかの子はいつもどおり動きます。上の「表のAIを止める」は全員まとめて止めます。キャラの編集画面からも切り替えられます。</div>
       <label class="chk" style="margin-top:8px"><input type="checkbox" id="stUraPause"> 裏の自動を止める（TLへの投稿・いいね・コメント、トークの返事）</label>
       <div class="hint">止めているあいだ、裏では Grok を使いません。トークで送ったメッセージには、再開したときに返事が来ます。止めているあいだに予定されていた TL の反応は、再開したあとに届きます。</div>
     </div>
@@ -860,7 +868,7 @@ body.ura #list.tlMode{background:#efe9f0}
 // 置き場所で切り替える：/lab/（試作）と /chat/（本番）で同じファイルを使う
 // 試作は本番と同じサイトなので、保存の名前に「lab.」を付けて本番の chat.* には書き込まない。通知も登録しない
 const IS_LAB = /\/lab\//.test(location.pathname);
-const APP_VERSION = '第47版（2026-11-10 06:00:00 更新・電話と留守電）' + (IS_LAB ? '【試作】' : '');
+const APP_VERSION = '第48版（2026-11-10 12:00:00 更新・表のAIをキャラごとに止める）' + (IS_LAB ? '【試作】' : '');
 if (IS_LAB) { document.title = '【試作】トーク（統合）'; const mt = document.querySelector('meta[name=apple-mobile-web-app-title]'); if (mt) mt.content = 'トーク試作'; }
 const $ = (id) => document.getElementById(id);
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
@@ -957,7 +965,7 @@ async function sync() {
     let more = true;
     while (more) {
       const d = await api('GET', '/sync?since=' + S.maxId);
-      S.chars = d.chars; S.groups = d.groups || []; S.aiAlerts = d.aiAlerts || {}; S.status = d.status || {}; S.reads = d.reads || {}; S.charRead = d.charRead || {}; S.outage = d.outage || null; S.cost = d.cost || S.cost; renderCost(); renderPause(); S.settings = d.settings || S.settings; S.appts = d.appts || S.appts || {}; renderAiAlert();
+      S.chars = d.chars; S.groups = d.groups || []; S.aiAlerts = d.aiAlerts || {}; S.status = d.status || {}; S.reads = d.reads || {}; S.charRead = d.charRead || {}; S.outage = d.outage || null; S.cost = d.cost || S.cost; S.settings = d.settings || S.settings; renderCost(); renderPause(); S.appts = d.appts || S.appts || {}; renderAiAlert();
       phoneAfterSync(d);
       const fresh = [];
       for (const m of d.messages) if (addMsg(m)) fresh.push(m);
@@ -1101,7 +1109,8 @@ async function requestReply(charId, opt = {}) {
   try {
     // 表：相手が今すぐ読めるかを先に聞く。今は手が離せないなら、既読も付かず、あとで返事が届く
     if (!isUraKey(charId)) {
-      if (S.settings.omotePaused) { toast('表は止めています。再開すると返事が来ます'); return; } // 表を止めているあいだは返事をしない（再開したら返す）
+      if (S.settings.omotePaused) { toast('表は止めています。再開すると返事が来ます'); return; }
+      if (charPaused(charId)) { toast(`${(charById(charId) || {}).name || 'この子'}は止めています。再開すると返事が来ます`); return; } // この子だけ止めている（第48版） // 表を止めているあいだは返事をしない（再開したら返す）
       const dd = await api('POST', '/reply/decide', { charId });
       if (!dd.now) return;
     } else if (S.settings.uraPaused) { // 裏を止めているあいだは返事をしない（再開したら返す）
@@ -1253,7 +1262,7 @@ function renderChat(keepPos, forceBottom) {
   if (!c) return;
   $('btnGrpReset').style.display = grp ? '' : 'none'; // .ib は display を指定しているので hidden 属性では消えない
   $('btnCall').style.display = !grp && S.world !== 'ura' && canPhone(c) ? '' : 'none';
-  renderMeetBar();
+  renderMeetBar(); renderCharPauseBar();
   const k = curKey(), ura = isUraKey(k);
   const nm = grp ? grp.name : dispName(c, ura ? 'ura' : 'omote');
   const so = !ura && (S.status || {})[c.id];
@@ -1402,6 +1411,31 @@ function renderPause() {   // 表・裏それぞれの「AIを止める」（今
   $('uraPauseBtn').textContent = p ? '再開する' : '止める';
   if ($('stUraPause')) $('stUraPause').checked = !!S.settings.uraPaused;
   if ($('stOmotePause')) $('stOmotePause').checked = !!S.settings.omotePaused;
+  renderCharPauseList(); renderCharPauseBar();
+}
+// ---- 表のAIをキャラごとに止める（第48版）。サーバーの settings.omotePausedIds に入っている子は止まる
+function charPaused(id) { return !!id && (S.settings.omotePausedIds || []).includes(String(id).replace(/#ura$/, '')); }
+function renderCharPauseList() {
+  const box = $('stOmotePauseChars'); if (!box) return;
+  const list = S.chars.filter((c) => !c.uraOnly);
+  box.innerHTML = list.length ? list.map((c) => `<label class="chk"><input type="checkbox" data-cpause="${esc(c.id)}"${charPaused(c.id) ? ' checked' : ''}> ${esc(c.name)}</label>`).join('') : '<div class="hint">（表に出てくる子がいません）</div>';
+}
+function renderCharPauseBar() {
+  const bar = $('charPauseBar'); if (!bar) return;
+  const c = !groupById(S.current) && S.world !== 'ura' && charById(S.current);
+  const on = !!(c && !c.uraOnly && charPaused(c.id));
+  bar.style.display = on ? '' : 'none';
+  if (on) $('charPauseText').textContent = `${c.name}は停止中（返事・話しかけ・TL・電話などを止めています）`;
+}
+async function setCharPaused(id, on) {
+  const c = charById(id); if (!c) return;
+  try {
+    const r = await api('POST', '/settings', { settings: { pauseChar: { id, on } } });
+    S.settings = r.settings; renderPause();
+    if ($('edPause') && edit && edit.id === id) $('edPause').checked = charPaused(id);
+    toast(on ? `${c.name}を止めました` : `${c.name}を再開しました`);
+    if (!on && !S.settings.omotePaused) { const arr = S.msgs[id] || []; if (arr.length && arr[arr.length - 1].sender === 'me') scheduleReply(id); } // 止めているあいだに送ったメッセージへ返事
+  } catch (e) { toast(e.message); renderPause(); }
 }
 async function setPaused(world, p) {
   const key = world === 'ura' ? 'uraPaused' : 'omotePaused', nm = world === 'ura' ? '裏' : '表';
@@ -1886,6 +1920,8 @@ function syncEditLabels() {
   $('edJealous').querySelectorAll('button').forEach((b) => b.classList.toggle('on', b.dataset.v === (edit.jealous || 'auto')));
   $('edSpeed').querySelectorAll('button').forEach((b) => b.classList.toggle('on', b.dataset.v === (edit.replySpeed || 'auto')));
   $('edCallFreq').querySelectorAll('button').forEach((b) => b.classList.toggle('on', b.dataset.v === (edit.callFreq || 'normal')));
+  $('edPause').checked = charPaused(edit.id);
+  $('edPauseBox').style.display = edit.uraOnly || !edit.id ? 'none' : ''; // 新しく作る子は、保存してから
   // 裏だけの子には、表でしか使わない設定を見せない
   $('edWorlds').querySelectorAll('button').forEach((b) => b.classList.toggle('on', (b.dataset.v === 'ura') === !!edit.uraOnly));
   $('edWorldsHint').textContent = edit.uraOnly
@@ -2067,6 +2103,7 @@ function openSettings() {
   loadWorldSettings();
   $('stUrl').value = S.cfg.url; $('stToken').value = S.cfg.token;
   $('verLine').textContent = 'アプリ ' + APP_VERSION;
+  renderPause(); // キャラごとの停止の一覧
   const opts = Array.from({ length: 24 }, (_, h) => `<option value="${h}">${h}</option>`).join('');
   $('stQuietS').innerHTML = opts; $('stQuietE').innerHTML = opts;
   $('stQuietOn').checked = !!S.settings.quietEnabled;
@@ -2250,6 +2287,9 @@ $('nfBarkTest').onclick = async () => {
 $('uraPauseBtn').onclick = () => { const w = S.world === 'ura' ? 'ura' : 'omote'; setPaused(w, !S.settings[w + 'Paused']); };
 $('stOmotePause').onchange = () => setPaused('omote', $('stOmotePause').checked);
 $('stUraPause').onchange = () => setUraPaused($('stUraPause').checked);
+$('stOmotePauseChars').addEventListener('change', (e) => { const t = e.target.closest('[data-cpause]'); if (t) setCharPaused(t.dataset.cpause, t.checked); });
+$('edPause').onchange = () => { if (edit && edit.id) setCharPaused(edit.id, $('edPause').checked); };
+$('charPauseBtn').onclick = () => { if (S.current) setCharPaused(S.current, false); };
 $('costSave').onclick = async () => {
   const cost = {};
   [['costGeminiIn', 'geminiIn'], ['costGeminiOut', 'geminiOut'], ['costGrokIn', 'grokIn'], ['costGrokOut', 'grokOut'], ['costImage', 'image']].forEach(([id, k]) => { if ($(id).value !== '') cost[k] = Number($(id).value); });
@@ -3022,6 +3062,7 @@ async function speakLines(lines) {
 // --- かける
 async function startOutgoing(c) {
   if (CALL.cur) return;
+  if (S.settings.omotePaused || charPaused(c.id)) { toast(`${S.settings.omotePaused ? '表' : c.name}は止めています（電話もできません）`); return; }
   if (!confirm(`${c.name}さんに電話をかけますか？`)) return;
   ac();
   CALL.cur = { charId: c.id, dir: 'out', gpuStart: Date.now(), muted: false };

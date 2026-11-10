@@ -14,7 +14,7 @@
 //    ・Cron トリガー  * * * * *  （毎分。実際に動くのは13分おき）
 // =====================================================================
 
-const VERSION = '第47版（2026-11-10 06:00:00 更新・電話と留守電）';
+const VERSION = '第48版（2026-11-10 12:00:00 更新・表のAIをキャラごとに止める）';
 const DEFAULT_MODEL = 'gemini-flash-latest';
 const DEFAULT_GROK_MODEL = 'grok-4.7';                 // X（Twitter）の Grok と同じ最新世代
 const FALLBACK_GROK_MODEL = 'grok-4-fast-non-reasoning'; // 上が使えないときの予備
@@ -194,7 +194,7 @@ const DEFAULT_SETTINGS = {
   quietEnabled: true, quietStart: 1, quietEnd: 7, omoteProvider: 'gemini', uraProvider: 'grok', grokModel: '',
   meName: '', meNameUra: '', meIconVer: 0, meUraIconVer: 0, // あなたのTLでの名前（表・裏）とアイコンの版
   newsEnabled: true, // 表で話題を切り替えるとき、最近のニュースも話題にする
-  uraPaused: false, omotePaused: false, lifeEnabled: true, imagesEnabled: true, delayEnabled: true, disasterEnabled: true, quakeMin: '4', notifyVia: 'web', barkSound: '', yen: 150, cost: {}, birthday: '', // くらし（記憶・毎日の様子など）、写真、あなたの誕生日 MM-DD
+  uraPaused: false, omotePaused: false, omotePausedIds: [], lifeEnabled: true, imagesEnabled: true, delayEnabled: true, disasterEnabled: true, quakeMin: '4', notifyVia: 'web', barkSound: '', yen: 150, cost: {}, birthday: '', // くらし（記憶・毎日の様子など）、写真、あなたの誕生日 MM-DD
   phoneEnabled: true, phoneAllOff: false, phoneQuietMode: 'same', phoneQuietStart: 1, phoneQuietEnd: 7, ttsUrl: '',
   weatherLat: 35.927, weatherLon: 139.604, weatherPlace: '埼玉県さいたま市北区日進町',
 };
@@ -204,6 +204,8 @@ async function getSettings(env) {
   return s;
 }
 
+// 表のAIをキャラごとに止める（第48版）：一括の omotePaused か、その子が omotePausedIds に入っていれば止める
+function omoteStop(st, id) { return !!(st && (st.omotePaused || (id && (st.omotePausedIds || []).includes(String(id).replace(/#ura$/, ''))))); }
 function num(v, d) { const n = Number(v); return Number.isFinite(n) ? n : d; }
 function clamp(v, a, b) { return Math.min(b, Math.max(a, v)); }
 
@@ -443,7 +445,7 @@ async function route(key, url, body, env, ctx) {
       if (!a || ['done', 'missed'].includes(a.status)) a = { date: '', time: '', place: '', at: 0, created: now }; // 約束なしで会いに行くこともできる
       if (a.status !== 'meeting') { a.status = 'meeting'; a.metAt = now; await kvSet(env, 'appt:' + c.id, a); }
       let lines = [];
-      if ((await getSettings(env)).omotePaused) return json({ appt: a, lines, log: await kvGet(env, 'meetlog:' + c.id, []), paused: true });
+      if (omoteStop(await getSettings(env), c.id)) return json({ appt: a, lines, log: await kvGet(env, 'meetlog:' + c.id, []), paused: true });
       if (!(await kvGet(env, 'meetlog:' + c.id, [])).length) lines = await meetReply(env, c, true);
       return json({ appt: a, lines, log: await kvGet(env, 'meetlog:' + c.id, []) });
     }
@@ -451,7 +453,7 @@ async function route(key, url, body, env, ctx) {
       const c = await omoteChar(env, body.charId);
       const text = String(body.text || '').trim().slice(0, 2000);
       if (text) { const lg = await kvGet(env, 'meetlog:' + c.id, []); lg.push({ who: 'me', text }); await kvSet(env, 'meetlog:' + c.id, lg.slice(-MEET_LOG_MAX)); }
-      if ((await getSettings(env)).omotePaused) return json({ lines: [], paused: true }); // 話したことは残す（再開したら返事）
+      if (omoteStop(await getSettings(env), c.id)) return json({ lines: [], paused: true }); // 話したことは残す（再開したら返事）
       return json({ lines: await meetReply(env, c, false, !text && body.cont) });
     }
     // ---- 電話（第47版）
@@ -473,7 +475,7 @@ async function route(key, url, body, env, ctx) {
       const cl = await getCall(env, body.id);
       const c = await omoteChar(env, cl.charId);
       if (cl.dir !== 'out' || cl.status !== 'dialing') throw new HttpError(409, 'この電話はもう終わっています');
-      if (!cl.answer || (await getSettings(env)).omotePaused) {
+      if (!cl.answer || omoteStop(await getSettings(env), c.id)) {
         await delCall(env, cl.id);
         const m = await callMsg(env, c.id, 'me', 'callout', '', null);
         if (cl.after === 'callback' && Math.random() < 0.7) await kvSet(env, 'callback:' + c.id, { due: Date.now() + (10 + Math.random() * 80) * MIN });
@@ -514,7 +516,7 @@ async function route(key, url, body, env, ctx) {
       if (text) cl.transcript.push({ who: 'me', text, at: Date.now() });
       cl.lastAt = Date.now();
       await putCall(env, cl);
-      if ((await getSettings(env)).omotePaused) return json({ lines: [], paused: true });
+      if (omoteStop(await getSettings(env), c.id)) return json({ lines: [], paused: true });
       const r = await keep(ctx, callReply(env, cl, c));
       const now2 = await kvGet(env, 'call:' + cl.id, null);
       if (!now2) return json({ lines: [], ended: true });
@@ -931,7 +933,7 @@ async function route(key, url, body, env, ctx) {
       if (!last || (last.sender !== 'me' && !cont && !(stamp && (STAMPS[stamp].cont || stamp === '😴')))) return json({ messages: [] });
       if (world === 'ura' && (await getSettings(env)).uraPaused) return json({ messages: [], paused: true }); // 裏は止めている（再開したら返す）
       if (cont) return json({ messages: await keep(ctx, generateAndStore(env, c, { mode: 'reply' }, [...hist, contMsg()], await getRead(env, key), world)) });
-      if (world === 'omote' && (await getSettings(env)).omotePaused) return json({ messages: [], paused: true }); // 表は止めている（再開したら返す）
+      if (world === 'omote' && omoteStop(await getSettings(env), base)) return json({ messages: [], paused: true }); // 表は止めている（再開したら返す）
       // 表：その子が今していることによって、すぐ返す／あとで返す（あとで返す分はサーバーが毎分確認して送る）
       const d = { mode: 'reply' };
       if (last.sender !== 'me' && stamp) d.stamp = stamp;
@@ -977,7 +979,7 @@ async function route(key, url, body, env, ctx) {
       if (isGroupId(base)) return json({ now: !(await getSettings(env)).uraPaused });
       const c = await getChar(env, base);
       if (world === 'ura' && (await getSettings(env)).uraPaused) return json({ now: false, paused: true });
-      if (world === 'omote' && (await getSettings(env)).omotePaused) return json({ now: false, paused: true });
+      if (world === 'omote' && omoteStop(await getSettings(env), base)) return json({ now: false, paused: true });
       if (world !== 'omote' || !delayOn(await getSettings(env))) return json({ now: true });
       const hist = await recent(env, key, 60);
       const last = hist[hist.length - 1];
@@ -1026,6 +1028,12 @@ async function route(key, url, body, env, ctx) {
       if ('delayEnabled' in s) v.delayEnabled = !!s.delayEnabled;
       if ('uraPaused' in s) v.uraPaused = !!s.uraPaused; // 裏の自動（TLの投稿・反応、トークの返事）を止める
       if ('omotePaused' in s) v.omotePaused = !!s.omotePaused; // 表のAIを止める（返事・話しかけ・くらし・TL・災害の連絡・会う場面）
+      if (Array.isArray(s.omotePausedIds)) v.omotePausedIds = [...new Set(s.omotePausedIds.map(String).filter((x) => /^[\w-]{1,64}$/.test(x)))].slice(0, 200);
+      if (s.pauseChar && typeof s.pauseChar === 'object' && /^[\w-]{1,64}$/.test(String(s.pauseChar.id || ''))) { // 1人だけ止める／再開する（ほかの子の設定を上書きしない）
+        const ids = new Set(Array.isArray(v.omotePausedIds) ? v.omotePausedIds : []);
+        if (s.pauseChar.on) ids.add(String(s.pauseChar.id)); else ids.delete(String(s.pauseChar.id));
+        v.omotePausedIds = [...ids].slice(0, 200);
+      }
       if ('notifyVia' in s && ['web', 'bark', 'both'].includes(s.notifyVia)) v.notifyVia = s.notifyVia;
       if ('yen' in s) v.yen = clamp(num(s.yen, 150), 50, 500);
       if (s.cost && typeof s.cost === 'object') { // 単価の上書き（空ならモデルに合わせて自動）
@@ -1305,7 +1313,7 @@ async function tick(env, minute) {
   const allChars = await loadChars(env);
   const due = tickDue(allChars, minute);
   const omoteAll = allChars.filter(inOmote); // 表の話しかけ・くらしは、表に登場する子だけ
-  const chars = settings.omotePaused ? [] : omoteAll.filter(due); // この分に担当の子（表を止めているあいだは、くらし・話しかけ・返事をしない）
+  const chars = settings.omotePaused ? [] : omoteAll.filter((c) => due(c) && !omoteStop(settings, c.id)); // この分に担当の子（表を止めているあいだ・その子を止めているあいだは、くらし・話しかけ・返事をしない）
   const done = [];
   await applyRetracts(env).catch(() => {});
   // くらし：毎日の様子と記憶の整理（話しかける前に）
@@ -2291,7 +2299,7 @@ function msgLine(m) {
 }
 // --- かけてくる：毎分の見回り（担当の分）で、頻度の設定と今していることから決める
 async function maybeRing(env, c, st, now) {
-  if (!phoneOn(st) || st.phoneAllOff || !phoneChar(c) || st.omotePaused) return false;
+  if (!phoneOn(st) || st.phoneAllOff || !phoneChar(c) || omoteStop(st, c.id)) return false;
   const per = CALL_FREQ[c.callFreq] ?? CALL_FREQ.normal;
   if (!per || phoneQuiet(now, st) || isQuiet(now, st)) return false;
   const state = await getState(env, c.id);
@@ -2346,7 +2354,7 @@ async function runCalls(env) {
     if (p && p.due > now) continue;
     await env.DB.prepare('DELETE FROM kv WHERE k=?').bind(r.k).run();
     const c = chars.find((x) => x.id === r.k.slice(9));
-    if (!c || !p || !phoneOn(st) || st.phoneAllOff || !phoneChar(c) || st.omotePaused || phoneQuiet(now, st)) continue;
+    if (!c || !p || !phoneOn(st) || st.phoneAllOff || !phoneChar(c) || omoteStop(st, c.id) || phoneQuiet(now, st)) continue;
     await startIncoming(env, c, st, now, 'callback').catch((e) => log(env, `折り返しの電話（${c.name}）: ${e.message}`));
   }
 }
@@ -2358,7 +2366,7 @@ async function callMissed(env, cl, c, how) {
   const now = Date.now(), st = await getSettings(env);
   const miss = await callMsg(env, c.id, 'char', 'call', '', how === 'declined' ? { declined: true } : null);
   let r = null;
-  if (!st.omotePaused) {
+  if (!omoteStop(st, c.id)) {
     try {
       const state = await getState(env, c.id);
       const sys = `あなたは${c.name}として、ユーザーに電話をかけたが${how === 'declined' ? '切られた（拒否された）' : '出てもらえなかった'}直後の行動を決めます。
@@ -2393,7 +2401,7 @@ ${await callTalk(env, c, 14) || '（なし）'}
 // --- ユーザーからかける：出るかどうか（今していること・時間・喧嘩中・気分）
 const ANSWER_SCHEMA = { type: 'object', properties: { answer: { type: 'boolean' }, after: { type: 'string', enum: ['none', 'callback', 'line'] }, line: { type: 'string' } }, required: ['answer', 'after', 'line'], additionalProperties: false };
 async function decideAnswer(env, c, st, now) {
-  if (st.omotePaused) return { answer: false, after: 'none', line: '' };
+  if (omoteStop(st, c.id)) return { answer: false, after: 'none', line: '' };
   const state = await getState(env, c.id);
   const sys = `あなたは${c.name}として、ユーザーから電話がかかってきたときに、出るかどうかを決めます。
 # キャラクター: ${c.name}
@@ -2464,7 +2472,7 @@ async function finishCall(env, cl, c, { by = 'me', est = null } = {}) {
   if (cl.status !== 'active') return null;
   const now = Date.now(), dur = Math.max(0, now - (cl.answeredAt || now));
   let sum = '';
-  if (cl.transcript.some((m) => m.who === 'me') && !(await getSettings(env)).omotePaused) {
+  if (cl.transcript.some((m) => m.who === 'me') && !omoteStop(await getSettings(env), c.id)) {
     const text = cl.transcript.slice(-80).map((m) => (m.who === 'me' ? 'ユーザー: ' : c.name + ': ') + trunc(m.text, 200)).join('\n');
     try {
       const r = await aiJson(env, 'omote', `あなたは、${c.name}とユーザーが電話で話した内容を、${c.name}があとでトークで思い出せるように、短くまとめる係です。何の話をして、どんな雰囲気だったかを、1〜2文で具体的に書きます。`, text, CALL_SUM_SCHEMA, 'call_summary');
@@ -2487,7 +2495,8 @@ function quoteCandidates(hist) {
 }
 // 追伸・不在着信のあとの言葉（毎分確認）。その間にやり取りが進んでいたら送らない
 async function runDuePostscripts(env) {
-  if ((await getSettings(env)).omotePaused) return 0; // 表を止めているあいだは待たせておく
+  const pst = await getSettings(env);
+  if (pst.omotePaused) return 0; // 表を止めているあいだは待たせておく
   const now = Date.now();
   const { results } = await env.DB.prepare("SELECT k,v FROM kv WHERE k >= 'ps:' AND k < 'ps;'").all();
   if (!results.length) return 0;
@@ -2496,6 +2505,7 @@ async function runDuePostscripts(env) {
   for (const row of results) {
     let p; try { p = JSON.parse(row.v); } catch (_) { p = null; }
     if (p && p.due > now) continue;
+    if (omoteStop(pst, row.k.slice(3))) continue; // その子を止めているあいだは待たせておく
     const claimed = await env.DB.prepare('DELETE FROM kv WHERE k=? RETURNING k').bind(row.k).first();
     if (!claimed || !p) continue;
     const key = row.k.slice(3), c = chars.find((x) => x.id === key);
@@ -3091,7 +3101,7 @@ async function planReactions(env, post) {
   const world = post.world;
   if (world === 'ura' && st.uraPaused) return []; // 裏は止めている（この投稿には反応しない）
   if (world === 'omote' && st.omotePaused) return []; // 表は止めている
-  const chars = await loadChars(env);
+  const chars = (await loadChars(env)).filter((c) => world !== 'omote' || !omoteStop(st, c.id)); // 止めている子は反応しない
   const author = post.author === ME ? null : chars.find((c) => c.id === post.author);
   if (post.author !== ME && !author) return [];
   const cands = chars.filter((c) => c.id !== post.author && (post.world === 'ura' || inOmote(c)));
@@ -3300,7 +3310,7 @@ async function shouldCharPost(env, c, world, now, st) {
   const perDay = nz(world === 'ura' ? c.uraTlPerDay : c.tlPerDay, world === 'ura' ? 1 : 2);
   if (perDay <= 0) return false;
   if (world === 'ura' && st.uraPaused) return false; // 裏は止めている
-  if (world === 'omote' && st.omotePaused) return false; // 表は止めている
+  if (world === 'omote' && omoteStop(st, c.id)) return false; // 表は止めている（その子だけ止めているときも）
   const boost = world === 'omote' ? await activityBoost(env, c, st, now).catch(() => ({ f: 1 })) : { f: 1 };
   const last = await env.DB.prepare('SELECT at FROM tl_posts WHERE world=? AND author=? ORDER BY id DESC LIMIT 1').bind(world, c.id).first();
   if (last && now - last.at < 60 * MIN) return false; // 続けて投稿しすぎない
@@ -3335,7 +3345,9 @@ async function runTlJobs(env, limit) {
   }
   // 2) 時間が来た いいね・コメント・返信
   const pst = await getSettings(env), paused = pst.uraPaused, opaused = pst.omotePaused;
-  const { results: due } = await env.DB.prepare(`SELECT * FROM tl_jobs WHERE due<=? ${paused ? "AND world<>'ura'" : ''} ${opaused ? "AND world<>'omote'" : ''} ORDER BY due LIMIT ?`).bind(Date.now(), limit).all(); // 裏を止めているあいだ、裏の反応は待たせておく
+  const pids = opaused ? [] : (pst.omotePausedIds || []).filter((x) => /^[\w-]{1,64}$/.test(x)); // その子を止めているあいだは、表の反応を待たせておく
+  const pidSql = pids.length ? `AND NOT (world='omote' AND char_id IN (${pids.map(() => '?').join(',')}))` : '';
+  const { results: due } = await env.DB.prepare(`SELECT * FROM tl_jobs WHERE due<=? ${paused ? "AND world<>'ura'" : ''} ${opaused ? "AND world<>'omote'" : ''} ${pidSql} ORDER BY due LIMIT ?`).bind(Date.now(), ...pids, limit).all(); // 裏を止めているあいだ、裏の反応は待たせておく
   for (const j of due) {
     const claimed = await env.DB.prepare('DELETE FROM tl_jobs WHERE id=? RETURNING id').bind(j.id).first();
     if (!claimed) continue; // ほかの処理が先に実行した
@@ -3989,10 +4001,11 @@ async function nextProactiveSlot(env, now) {
 }
 async function runDueProactive(env) {
   await ensureSchema(env);
-  if ((await getSettings(env)).omotePaused) return 0; // 表を止めているあいだは待たせておく
+  const pst = await getSettings(env);
+  if (pst.omotePaused) return 0; // 表を止めているあいだは待たせておく
   const now = Date.now();
   const { results } = await env.DB.prepare("SELECT k,v FROM kv WHERE k >= 'proj:' AND k < 'proj;'").all();
-  const due = results.map((r) => { try { return { k: r.k, ...JSON.parse(r.v) }; } catch (_) { return null; } }).filter((p) => p && p.due <= now).sort((a, b) => a.due - b.due);
+  const due = results.map((r) => { try { return { k: r.k, ...JSON.parse(r.v) }; } catch (_) { return null; } }).filter((p) => p && p.due <= now && !omoteStop(pst, p.k.slice(5))).sort((a, b) => a.due - b.due);
   if (!due.length) return 0;
   const chars = await loadChars(env);
   let n = 0;
@@ -4017,12 +4030,14 @@ async function runDueProactive(env) {
 // 予約していた返事（毎分確認する）
 async function runDueReplies(env) {
   await ensureSchema(env);
-  if ((await getSettings(env)).omotePaused) return 0; // 表を止めているあいだは待たせておく（再開したら返す）
+  const pst = await getSettings(env);
+  if (pst.omotePaused) return 0; // 表を止めているあいだは待たせておく（再開したら返す）
   const now = Date.now();
   const { results } = await env.DB.prepare("SELECT k,v FROM kv WHERE k >= 'reply:' AND k < 'reply;'").all();
   let n = 0;
   for (const row of results) {
     let p; try { p = JSON.parse(row.v); } catch (_) { p = null; }
+    if (omoteStop(pst, (p && p.key) || row.k.slice(6))) continue; // その子を止めているあいだは待たせておく（スタンプも付けない）
     if (p && p.stamp && !p.stamped && p.readAt <= now) { // 読んだ瞬間にスタンプだけ付ける
       await setReaction(env, p.stamp.id, p.stamp.r);
       p.stamped = 1;
@@ -4497,7 +4512,7 @@ async function addEvent(env, st, s, ev, now) {
     if (e) ev.eewSent = Object.keys(e.sent || {});
     await env.DB.prepare("DELETE FROM kv WHERE k LIKE ?").bind('disjob:' + ev.eew + ':%').run();
   }
-  let chars = (await loadChars(env)).filter(inOmote);
+  let chars = (await loadChars(env)).filter((c) => inOmote(c) && !omoteStop(st, c.id)); // 止めている子は連絡しない
   if (ev.type === 'far') { // 遠くのニュースは、1〜2人だけ（心配性な子ほど選ばれやすい）
     const scored = [];
     for (const c of chars) { const rh = await getRhythm(env, c, false); scored.push({ c, w: (100 - nz(rh.calm, 50)) / 100 + Math.random() }); }
@@ -4526,7 +4541,7 @@ async function runDisJobs(env, st, now, limit = 6) {
   if (st.omotePaused) return 0; // 表を止めているあいだは、災害の連絡も待たせておく
   const { results } = await env.DB.prepare("SELECT k,v FROM kv WHERE k >= 'disjob:' AND k < 'disjob;'").all();
   const dueJobs = results.map((r) => { try { return { k: r.k, ...JSON.parse(r.v) }; } catch (_) { return null; } })
-    .filter((j) => j && j.due <= now).sort((a, b) => a.due - b.due).slice(0, limit);
+    .filter((j) => j && j.due <= now && !omoteStop(st, j.cid)).sort((a, b) => a.due - b.due).slice(0, limit); // 止めている子の分は待たせておく
   if (!dueJobs.length) return 0;
   const chars = await loadChars(env);
   let n = 0;

@@ -14,7 +14,7 @@
 //    ・Cron トリガー  * * * * *  （毎分。実際に動くのは13分おき）
 // =====================================================================
 
-const VERSION = '第48版（2026-11-10 12:00:00 更新・表のAIをキャラごとに止める）';
+const VERSION = '第49版（2026-11-11 13:45:00 更新・必ず出るテスト電話）';
 const DEFAULT_MODEL = 'gemini-flash-latest';
 const DEFAULT_GROK_MODEL = 'grok-4.7';                 // X（Twitter）の Grok と同じ最新世代
 const FALLBACK_GROK_MODEL = 'grok-4-fast-non-reasoning'; // 上が使えないときの予備
@@ -467,9 +467,12 @@ async function route(key, url, body, env, ctx) {
       if (busy && busy.status === 'active') throw new HttpError(409, 'いまは別の電話中です');
       for (const x of calls) if (x.status === 'dialing') await delCall(env, x.id);
       const d = await decideAnswer(env, c, st, Date.now());
-      const cl = { id: newCallId(), charId: c.id, members: [c.id], dir: 'out', status: 'dialing', created: Date.now(), answer: !!d.answer, after: d.after || 'none', line: String(d.line || '').slice(0, 200), transcript: [] };
+      const test = !!body.test; // テスト発信（第49版）：AI がどう決めても必ず出る。ふだんなら出たかどうかと、その理由を返す
+      const cl = { id: newCallId(), charId: c.id, members: [c.id], dir: 'out', status: 'dialing', created: Date.now(), answer: test || !!d.answer, after: d.after || 'none', line: String(d.line || '').slice(0, 200), transcript: [], test };
       await putCall(env, cl);
-      return json({ call: callPublic(cl), ringMs: cl.answer ? Math.round(4000 + Math.random() * 9000) : CALL_RING_MS });
+      const out = { call: callPublic(cl), ringMs: test ? 3000 : cl.answer ? Math.round(4000 + Math.random() * 9000) : CALL_RING_MS };
+      if (test) out.test = { wouldAnswer: !!d.answer, reason: String(d.reason || '').slice(0, 200), now: activityText(await getState(env, c.id), Date.now(), c.id).slice(0, 200) };
+      return json(out);
     }
     case 'POST /call/connect': { // 呼び出しが終わった：出たなら第一声、出なかったら記録と（たまに）折り返し・LINE
       const cl = await getCall(env, body.id);
@@ -2399,7 +2402,7 @@ ${await callTalk(env, c, 14) || '（なし）'}
   if (line && Math.random() < 0.6) await kvSet(env, 'ps:' + c.id, { texts: [line], due: now + (3 + Math.random() * 12) * MIN, after: out[out.length - 1].id });
 }
 // --- ユーザーからかける：出るかどうか（今していること・時間・喧嘩中・気分）
-const ANSWER_SCHEMA = { type: 'object', properties: { answer: { type: 'boolean' }, after: { type: 'string', enum: ['none', 'callback', 'line'] }, line: { type: 'string' } }, required: ['answer', 'after', 'line'], additionalProperties: false };
+const ANSWER_SCHEMA = { type: 'object', properties: { answer: { type: 'boolean' }, reason: { type: 'string' }, after: { type: 'string', enum: ['none', 'callback', 'line'] }, line: { type: 'string' } }, required: ['answer', 'reason', 'after', 'line'], additionalProperties: false };
 async function decideAnswer(env, c, st, now) {
   if (omoteStop(st, c.id)) return { answer: false, after: 'none', line: '' };
   const state = await getState(env, c.id);
@@ -2414,6 +2417,7 @@ ${await callTalk(env, c, 14) || '（なし）'}
 - 手が空いていれば、ふつうは出る。
 - 寝ている・お風呂・仕事や授業の最中・移動中で出られない、喧嘩中で出たくない、気分が乗らない、などのときは出ない。キャラの性格と今の様子・最近のやり取りから自然に決める。出ないのは、はっきり理由があるときだけ。
 - 出ないとき、あとでどうするか：折り返し電話をかける（callback）・トークで一言送る（line。例：「ごめん、さっき出られなかった」）・何もしない（none）。性格に合うときだけ、たまに。line のときはその一言（1文）を書く。
+- reason：出る・出ないの理由を、ひとことで（例：「授業中」「手が空いている」。ユーザーには見せない。確認用）。
 - 自分がAIであることには触れない。`;
   try { return await aiJson(env, 'omote', sys, '（いま着信が鳴っている）', ANSWER_SCHEMA, 'answer_call'); }
   catch (e) { await log(env, `電話に出るか（${c.name}）: ${e.message}`); return { answer: true, after: 'none', line: '' }; }

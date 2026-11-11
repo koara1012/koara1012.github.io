@@ -541,6 +541,7 @@ body.ura #list.tlMode{background:#efe9f0}
       <div class="sec">テスト・管理</div>
       <button class="btn sub" id="edPoke">今すぐ話しかけてもらう（表・テスト）</button>
       <button class="btn sub" id="edCallTest">今すぐ電話をかけてもらう（テスト）</button>
+      <button class="btn sub" id="edCallOutTest">こちらから電話をかける・必ず出る（テスト）</button>
       <button class="btn sub" id="edNewsPoke">ニュースの話題で話しかけてもらう（表・テスト）</button>
       <button class="btn sub" id="edTlPoke">今すぐ表のタイムラインに投稿してもらう（テスト）</button>
       <button class="btn sub" id="edUraTlPoke">今すぐ裏のタイムラインに投稿してもらう（テスト）</button>
@@ -868,7 +869,7 @@ body.ura #list.tlMode{background:#efe9f0}
 // 置き場所で切り替える：/lab/（試作）と /chat/（本番）で同じファイルを使う
 // 試作は本番と同じサイトなので、保存の名前に「lab.」を付けて本番の chat.* には書き込まない。通知も登録しない
 const IS_LAB = /\/lab\//.test(location.pathname);
-const APP_VERSION = '第48版（2026-11-10 12:00:00 更新・表のAIをキャラごとに止める）' + (IS_LAB ? '【試作】' : '');
+const APP_VERSION = '第49版（2026-11-11 13:45:00 更新・必ず出るテスト電話）' + (IS_LAB ? '【試作】' : '');
 if (IS_LAB) { document.title = '【試作】トーク（統合）'; const mt = document.querySelector('meta[name=apple-mobile-web-app-title]'); if (mt) mt.content = 'トーク試作'; }
 const $ = (id) => document.getElementById(id);
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
@@ -1931,7 +1932,7 @@ function syncEditLabels() {
     const f = $(id).closest('.field');
     f.style.display = edit.uraOnly || (id === 'edLifeBox' && !edit.id) ? 'none' : '';
   }
-  for (const id of ['edPoke', 'edNewsPoke', 'edTlPoke', 'edClear', 'edCallTest']) $(id).style.display = edit.uraOnly ? 'none' : '';
+  for (const id of ['edPoke', 'edNewsPoke', 'edTlPoke', 'edClear', 'edCallTest', 'edCallOutTest']) $(id).style.display = edit.uraOnly ? 'none' : '';
 }
 function drawEditIcon() {
   const el = $('edIcon');
@@ -3060,24 +3061,26 @@ async function speakLines(lines) {
   }
 }
 // --- かける
-async function startOutgoing(c) {
+async function startOutgoing(c, test) { // test：必ず出るテスト発信（第49版）。ふだんなら出たか・理由・今の様子をトーストで出す
   if (CALL.cur) return;
   if (S.settings.omotePaused || charPaused(c.id)) { toast(`${S.settings.omotePaused ? '表' : c.name}は止めています（電話もできません）`); return; }
-  if (!confirm(`${c.name}さんに電話をかけますか？`)) return;
+  if (!confirm(test ? `テスト：${c.name}さんに電話をかけます（必ず出ます）。よろしいですか？` : `${c.name}さんに電話をかけますか？`)) return;
   ac();
   CALL.cur = { charId: c.id, dir: 'out', gpuStart: Date.now(), muted: false };
   callScreen(c, 'dial'); setStat('呼び出し中…'); $('cvTime').textContent = '';
   playRingback();
   const warm = warmGPU(90000);
   let r;
-  try { r = await api('POST', '/call/start', { charId: c.id }); }
+  try { r = await api('POST', '/call/start', { charId: c.id, test: !!test }); }
   catch (e) { toast(e.message); closeCallScreen(); return; }
+  if (r.test) toast(`テスト：ふだんなら${r.test.wouldAnswer ? '出ていました' : '出ませんでした'}${r.test.reason ? '（' + r.test.reason + '）' : ''}${r.test.now ? '。今の様子：' + r.test.now : ''}`, 9000);
   if (!CALL.cur) { api('POST', '/call/decline', { id: r.call.id }).catch(() => {}); return; }
   CALL.cur.id = r.call.id;
   await sleep(r.ringMs);
   if (!CALL.cur) { api('POST', '/call/decline', { id: r.call.id }).catch(() => {}); return; }
   if (r.ringMs < 25000 && !(await warm)) { // 声のサーバー（GPU）が起きない：無料分を使い切った・止まっているなど
     api('POST', '/call/decline', { id: r.call.id }).catch(() => {});
+    if (test) toast('テスト：声のサーバー（GPU）が90秒たっても起きませんでした。Modal の様子を見てください', 8000);
     stopTones(); setStat('ただいま電話に出ることができません'); await sleep(2200); closeCallScreen(); return;
   }
   if (!CALL.cur) return;
@@ -3273,6 +3276,13 @@ $('stRingFile').onchange = async (e) => {
 $('stRingClear').onclick = async () => { await phoneIdb('del', 'ringtone').catch(() => {}); renderPhoneSettings(); toast('アプリの電子音に戻しました'); };
 $('stRingTest').onclick = async () => { ac(); await playRingtone(); setTimeout(stopTones, 4000); };
 // --- キャラ編集：テストで電話をかけてもらう
+$('edCallOutTest').onclick = () => {
+  const c = edit && edit.id ? charById(edit.id) : null;
+  if (!c) return;
+  if (!c.voice) { toast('先に「電話の声」を入れて保存してください'); return; }
+  openChat(c.id); // トーク画面に戻ってからかける（通話の記録がそこに出る）
+  startOutgoing(c, true);
+};
 $('edCallTest').onclick = async () => {
   const c = edit && edit.id ? charById(edit.id) : null;
   if (!c) return;

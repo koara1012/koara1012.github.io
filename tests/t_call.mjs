@@ -77,6 +77,16 @@ ok(!r.answered && r.message.kind === 'callout', 'not answered → callout record
 const cb = DB.raw.prepare("SELECT v FROM kv WHERE k=?").get('callback:' + c.id);
 ok(cb && JSON.parse(cb.v).due > Date.now(), 'callback scheduled');
 
+// ---- テスト発信（第49版）：AI が出ないと決めても必ず出る。ふだんの判断と理由を返す
+answer.ans = { answer: false, reason: '授業中', after: 'line', line: 'あとで' };
+r = await call('POST', '/call/start', { charId: c.id, test: true });
+ok(r.ringMs === 3000 && r.test && r.test.wouldAnswer === false && r.test.reason === '授業中' && typeof r.test.now === 'string', 'test call: short ring + would-answer info');
+ok(ai.pop().sch.includes('reason'), 'answer schema asks for reason');
+r = await call('POST', '/call/connect', { id: r.call.id });
+ok(r.answered && r.call.status === 'active', 'test call always answered');
+await call('POST', '/call/end', { id: r.call.id, by: 'me' }); await flush();
+answer.ans = { answer: false, after: 'callback', line: '' };
+
 // ---- 着信（テスト）：GPU を起こしてから鳴らす・Bark は着信音を鳴らし続ける
 DB.raw.prepare("DELETE FROM kv WHERE k LIKE 'callback:%'").run();
 health = 0; bark.length = 0;

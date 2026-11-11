@@ -98,6 +98,28 @@ ok(ai.pop().sys.includes('週末の予定'), 'group memory in next call prompt')
 await call('POST', '/gcall/end', { id: r.call.id });
 await flush();
 
+// ---- 通話ごとの会話の文字・続きから話す（第57版）
+const logMsgId = (await call('GET', '/sync?since=0')).messages.filter((x) => x.charId === g.id && x.kind === 'callog')[0].id;
+let lg = (await call('GET', `/gcall/log?group=${g.id}&id=${logMsgId}`)).log;
+ok(lg.transcript.some((x) => x.text === '待って、私も行きたい！' && x.who === 'me') && lg.transcript.some((x) => x.who === a.id) && !lg.transcript.some((x) => x.text === 'じゃあ決まり！'), 'log keeps what was said (not the unheard line)');
+answer.reply = { lines: [{ speaker: 'マリ', text: 'さっきの続きだけどさ。' }], wait_user: false };
+r = await call('POST', '/gcall/start', { groupId: g.id, test: true, from: logMsgId });
+await call('POST', '/gcall/connect', { id: r.call.id });
+q = ai.pop();
+ok(q.sys.includes('前回') && q.sys.includes('続き') && q.user.includes('待って、私も行きたい！') && q.user.includes('続きで'), 'continue: previous lines and continue prompt');
+ok(!q.sys.includes('「もしもし」など、通話に入ったときの言葉から'), 'continue: not a fresh hello');
+await call('POST', '/gcall/say', { id: r.call.id, text: '続きだね' });
+const m2 = (await call('POST', '/gcall/end', { id: r.call.id })).message;
+await flush();
+ok(m2.meta.log && m2.meta.from === logMsgId, 'continued call record links to previous');
+const lg2 = (await call('GET', `/gcall/log?group=${g.id}&id=${m2.id}`)).log;
+ok(lg2.transcript.some((x) => x.old && x.text === '待って、私も行きたい！') && lg2.transcript.some((x) => !x.old && x.text === '続きだね'), 'continued log: old lines marked, new lines kept');
+// 選んで消す：記録と会話の文字が一緒に消える
+await call('POST', '/messages/delete', { charId: g.id, ids: [logMsgId] });
+ok(!DB.raw.prepare('SELECT 1 FROM messages WHERE id=?').get(logMsgId), 'record deleted');
+try { await call('GET', `/gcall/log?group=${g.id}&id=${logMsgId}`); ok(false, 'log deleted with record'); } catch (e) { ok(e.status === 404, 'log deleted with record'); }
+try { await call('POST', '/gcall/start', { groupId: g.id, from: logMsgId }); ok(false, 'continue from deleted refused'); } catch (e) { ok(e.status === 404, 'continue from deleted refused'); }
+
 // ---- 遅れて入るがオン：AI が出る子を決める・テストは全員
 g = (await call('POST', '/ogroup', { group: { ...g, lateJoin: true } })).group;
 answer.gans = { members: [{ name: '朱里', answer: true, reason: '空いている' }, { name: 'マリ', answer: false, reason: '授業中' }, { name: 'すもも', answer: true, reason: '' }] };
@@ -138,5 +160,6 @@ ok(!ck.warnings.some((w) => w.includes('持ち主のいない')), 'no orphan war
 await call('DELETE', '/ogroup?id=' + g.id);
 const sy2 = await call('GET', '/sync?since=0');
 ok(!sy2.ogroups.length && !DB.raw.prepare('SELECT 1 FROM messages WHERE char_id=?').get(g.id) && !DB.raw.prepare('SELECT 1 FROM kv WHERE k=?').get('gmem:' + g.id), 'delete group removes logs and memory');
+ok(!DB.raw.prepare("SELECT 1 FROM kv WHERE k LIKE 'gclog:%'").get(), 'delete group removes call texts');
 
 console.log(fails ? `${fails} FAILED` : 'ALL PASSED');

@@ -290,13 +290,17 @@ body.ura #list.tlMode{background:#efe9f0}
 .cvModes{display:flex;gap:6px;justify-content:center;margin-bottom:8px}
 .cvModes button{border:1px solid #9fb6d3;background:#fff;color:#33506f;border-radius:16px;padding:5px 14px;font-size:13px}
 .cvModes button.on{background:#3672c7;color:#fff;border-color:#3672c7}
+#cvAuto.on{background:#2fb46c;border-color:#2fb46c}
 #cvTextRow{display:flex;gap:6px}
 #cvText{flex:1;min-width:0;border:1px solid #c6d4e6;border-radius:20px;padding:10px 14px;font-size:16px;color:#1d2a3a;background:#fff}
 #cvSend{border:0;border-radius:20px;background:#3672c7;color:#fff;padding:0 16px;font-size:15px}
-#cvMicRow{display:flex;gap:8px;align-items:center;justify-content:center;flex-wrap:wrap}
-#cvMic{border:0;border-radius:24px;background:#3672c7;color:#fff;padding:12px 26px;font-size:16px;font-weight:700}
+/* 🎤のボタン（第56版）：押したときに幅が変わって［✕ やめる］が急に出ると、iPhone の Safari が前のボタンの縁を描き残していた。大きさを固定し、［✕］は場所を取ったまま見えなくするだけにする */
+#cvMicRow{display:flex;gap:8px;align-items:center;justify-content:center;flex-wrap:wrap;transform:translateZ(0)}
+#cvMic,#cvMicX{-webkit-appearance:none;appearance:none;border:0;outline:0;box-shadow:none;background-clip:padding-box;height:46px;border-radius:23px;color:#fff;font-size:16px;font-weight:700;padding:0;-webkit-tap-highlight-color:transparent}
+#cvMic{width:150px;background:#3672c7}
 #cvMic.on{background:#e5566b}
-#cvMicX{border:0;border-radius:20px;background:#8a97a8;color:#fff;padding:10px 14px}
+#cvMicX{width:110px;background:#8a97a8;font-size:15px}
+#cvMicX.off{visibility:hidden}
 #cvHeard{width:100%;min-height:20px;text-align:center;color:#33506f;font-size:14px;margin-top:6px}
 #cvBtns{display:flex;gap:14px;width:100%;max-width:440px;flex:none;margin-top:auto;position:relative;z-index:2}
 #cvInput,#cvSub{position:relative;z-index:2}#cvSubToggle{z-index:3}
@@ -930,9 +934,9 @@ body.ura #list.tlMode{background:#efe9f0}
   <div id="cvMembers"></div>
   <div id="cvSub"></div>
   <div id="cvInput" hidden>
-    <div class="cvModes"><button id="cvModeText">⌨ 文字</button><button id="cvModeMic">🎤 声</button></div>
+    <div class="cvModes"><button id="cvModeText">⌨ 文字</button><button id="cvModeMic">🎤 声</button><button id="cvAuto" hidden>💬 勝手に話す</button></div>
     <div id="cvTextRow"><input type="text" id="cvText" placeholder="話しかける" autocomplete="off"><button id="cvSend">送る</button></div>
-    <div id="cvMicRow" hidden><button id="cvMic">🎤 話す</button><button id="cvMicX" hidden>✕ やめる</button><div id="cvHeard"></div></div>
+    <div id="cvMicRow" hidden><button id="cvMic">🎤 話す</button><button id="cvMicX" class="off">✕ やめる</button><div id="cvHeard"></div></div>
   </div>
   <div id="cvBtns"></div>
 </section>
@@ -946,7 +950,7 @@ body.ura #list.tlMode{background:#efe9f0}
 // 置き場所で切り替える：/lab/（試作）と /chat/（本番）で同じファイルを使う
 // 試作は本番と同じサイトなので、保存の名前に「lab.」を付けて本番の chat.* には書き込まない。通知も登録しない
 const IS_LAB = /\/lab\//.test(location.pathname);
-const APP_VERSION = '第55版（2026-11-12 00:30:00 更新・表のグループ通話（作る・設定・記憶・あなたからかける））' + (IS_LAB ? '【試作】' : '');
+const APP_VERSION = '第56版（2026-11-11 23:45:00 更新・グループ通話の［勝手に話す］・🎤ボタンの表示）' + (IS_LAB ? '【試作】' : '');
 if (IS_LAB) { document.title = '【試作】トーク（統合）'; const mt = document.querySelector('meta[name=apple-mobile-web-app-title]'); if (mt) mt.content = 'トーク試作'; }
 const $ = (id) => document.getElementById(id);
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
@@ -3143,7 +3147,7 @@ function closeCallScreen() {
   stopTones(); stopVoice(); micStop(true);
   clearInterval(CALL.clock); clearInterval(CALL.hb); clearTimeout(CALL.ringTo);
   CALL.cur = null; CALL.vm = null;
-  $('callView').className = ''; $('cvMembers').innerHTML = '';
+  $('callView').className = ''; $('cvMembers').innerHTML = ''; $('cvAuto').hidden = true;
 }
 function startClock(from) { clearInterval(CALL.clock); const f = () => { $('cvTime').textContent = fmtClock(Date.now() - from); }; f(); CALL.clock = setInterval(f, 500); }
 function toggleMute() {
@@ -3288,7 +3292,7 @@ function micStop(discard) {
   const r = rec; rec = null;
   if (discard) recFinal = recText = '';
   try { r.stop(); } catch (_) {}
-  $('cvMic').classList.remove('on'); $('cvMic').textContent = '🎤 話す'; $('cvMicX').hidden = true;
+  $('cvMic').classList.remove('on'); $('cvMic').textContent = '🎤 話す'; $('cvMicX').classList.add('off');
   if (!discard) { const t = (recFinal + recText).trim(); recFinal = recText = ''; $('cvHeard').textContent = ''; if (t) sayInCall(t); else groupResume(); }
   else { $('cvHeard').textContent = ''; groupResume(); }
 }
@@ -3303,7 +3307,7 @@ function micStart() {
   r.onerror = (e) => { if (rec === r && e.error !== 'no-speech' && e.error !== 'aborted') { toast('音声認識：' + (e.error === 'not-allowed' ? 'マイクが許可されていません' : e.error)); micStop(true); } };
   r.onend = () => { if (rec === r) { try { r.start(); } catch (_) {} } }; // 押しているあいだ（もう一度押すまで）は聞き続ける
   try { r.start(); } catch (e) { toast('音声認識を始められませんでした：' + e.message); rec = null; return; }
-  $('cvMic').classList.add('on'); $('cvMic').textContent = '⏹ 送る'; $('cvMicX').hidden = false; $('cvHeard').textContent = '聞いています…';
+  $('cvMic').classList.add('on'); $('cvMic').textContent = '■ 送る'; $('cvMicX').classList.remove('off'); $('cvHeard').textContent = '聞いています…';
 }
 $('cvMic').onclick = () => (rec ? micStop(false) : micStart());
 $('cvMicX').onclick = () => micStop(true);
@@ -3522,6 +3526,7 @@ function gcScreen(g, mode) {
   callScreen({ id: g.id, name: g.name }, mode);
   $('callView').classList.add('grp');
   $('cvMembers').innerHTML = gcMembersHTML(CALL.cur);
+  $('cvAuto').hidden = mode !== 'active'; syncAutoBtn();
 }
 function gcSub(id, text) {
   if (id === 'me') { subLine('me', text); return; }
@@ -3599,14 +3604,23 @@ async function gcPlay(lines, wait) {
   }
   if (!CALL.cur || CALL.cur.speakTok !== tok) return;
   cur.batchDone = true; gcTalking('');
-  gcNext(wait ? 15000 : 900);
+  if (gcAuto()) gcNext(wait ? 7000 : 700); // ［勝手に話す］オン：話を振られたときだけ少し待って、あとは話し続ける
 }
+// ［勝手に話す］（第56版）：オンのあいだ、みんなで話し続ける（ときどきあなたに話題を振る）。オフなら、あなたが話したときだけ返事をする。端末ごとに覚える
+const gcAuto = () => store.get('gcall.auto', false);
+function syncAutoBtn() { const on = gcAuto(); $('cvAuto').classList.toggle('on', on); $('cvAuto').textContent = on ? '💬 勝手に話す：オン' : '💬 勝手に話す'; }
+$('cvAuto').onclick = () => {
+  const on = !gcAuto(); store.set('gcall.auto', on); syncAutoBtn();
+  const cur = CALL.cur; if (!cur || !cur.group) return;
+  if (!on) { clearTimeout(cur.contTimer); return; }
+  if (!cur.busy && cur.batchDone && !rec) gcNext(200); // 静かなら、すぐ話し始める
+};
 // 黙っていたら、キャラどうしで続ける（画面が見えていて、文字を打っていない・🎤で話していないとき）
 function gcNext(ms) {
   const cur = CALL.cur; if (!cur || !cur.group || cur.ending) return;
   clearTimeout(cur.contTimer);
   cur.contTimer = setTimeout(() => {
-    if (CALL.cur !== cur || cur.busy || rec) return;
+    if (CALL.cur !== cur || cur.busy || rec || !gcAuto()) return;
     if (document.visibilityState !== 'visible' || $('cvText').value.trim()) { gcNext(5000); return; }
     gcAsk('');
   }, ms);
@@ -3614,8 +3628,7 @@ function gcNext(ms) {
 function groupResume() { // 🎤をやめた（何も言わなかった）：待っていたセリフを流す・続きを頼む
   const cur = CALL.cur; if (!cur || !cur.group || cur.ending || CALL.screenMode !== 'active') return;
   if (cur.pending) { const p = cur.pending; cur.pending = null; gcPlay(p.lines, p.wait); }
-  else if (!cur.busy && cur.batchDone) gcNext(1500);
-  else if (!cur.busy && !cur.batchDone) gcNext(1500); // 途中で止めたまま：続きを頼む（聞いたところまで）
+  else if (!cur.busy && gcAuto()) gcNext(1500); // ［勝手に話す］オン：続きを頼む（途中で止めていたら、聞いたところまで）
 }
 async function gcAsk(text) {
   const cur = CALL.cur; if (!cur || cur.ending) return;
@@ -3624,14 +3637,14 @@ async function gcAsk(text) {
   cur.pending = null; cur.batchDone = true;
   cur.busy = true; if (text) setStat('…');
   try {
-    const d = await api('POST', '/gcall/say', { id: cur.id, text, heard });
+    const d = await api('POST', '/gcall/say', { id: cur.id, text, heard, auto: !text && gcAuto() });
     cur.busy = false;
     if (CALL.cur !== cur) return;
     if (d.ended) { endGroupCall(); return; }
     if (cur.queued.length) { cur.pending = { lines: d.lines || [], wait: d.wait }; const t = cur.queued.splice(0).join('\n'); gcAsk(t); return; } // 待っている間にあなたが話した：届いたセリフは聞かずに、あなたの言葉を先に
     if (d.paused) { setStat('止めています'); return; }
     gcPlay(d.lines || [], d.wait);
-  } catch (e) { cur.busy = false; setStat('通話中'); toast(e.message); gcNext(8000); }
+  } catch (e) { cur.busy = false; setStat('通話中'); toast(e.message); if (gcAuto()) gcNext(8000); }
 }
 function sayInGroupCall(text) {
   const cur = CALL.cur; if (!cur || !cur.answeredAt) return;

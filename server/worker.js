@@ -14,7 +14,7 @@
 //    ・Cron トリガー  * * * * *  （毎分。実際に動くのは13分おき）
 // =====================================================================
 
-const VERSION = '第55版（2026-11-12 00:30:00 更新・表のグループ通話（作る・設定・記憶・あなたからかける））';
+const VERSION = '第56版（2026-11-11 23:45:00 更新・グループ通話の［勝手に話す］・🎤ボタンの表示）';
 const DEFAULT_MODEL = 'gemini-flash-latest';
 const DEFAULT_GROK_MODEL = 'grok-4.7';                 // X（Twitter）の Grok と同じ最新世代
 const FALLBACK_GROK_MODEL = 'grok-4-fast-non-reasoning'; // 上が使えないときの予備
@@ -677,7 +677,7 @@ async function route(key, url, body, env, ctx) {
       if (cl.transcript.length > 400) cl.transcript = cl.transcript.slice(-300);
       await putCall(env, cl);
       if ((await getSettings(env)).omotePaused || g.paused) return json({ lines: [], paused: true });
-      const r = await keep(ctx, gcallReply(env, cl, g, !text));
+      const r = await keep(ctx, gcallReply(env, cl, g, !text ? (body.auto ? 'auto' : true) : false)); // auto：［勝手に話す］がオン（第56版）
       const now2 = await kvGet(env, 'call:' + cl.id, null);
       if (!now2) return json({ lines: [], ended: true });
       now2.batch = (now2.batch || 0) + 1;
@@ -2717,7 +2717,7 @@ ${fmtTime(now)}。ユーザーがみんなにかけたグループ通話。通�
 ${el >= 90 * MIN ? '- かなり長く話している。疲れや眠気を自然ににじませてもよい。\n' : ''}${DIR_RULE}- ユーザーの行動・発言・気持ちを勝手に決めない。
 - 自分たちがAIであることには触れない。
 - キャラクターが未成年の設定である場合、性的な内容は一切話さない。
-${cl.transcript.length ? '' : `\n# 今回\nいま、みんなが通話に入ったところ。「もしもし」など、通話に入ったときの言葉から。最初にだれが話すかは、性格と関係から自然に決める。\n`}${cont && cl.transcript.length ? '\n# 今回\nユーザーは黙って聞いている。キャラどうしで自然に会話を続ける（ユーザーに話を振ってもよい）。\n' : ''}
+${cl.transcript.length ? '' : `\n# 今回\nいま、みんなが通話に入ったところ。「もしもし」など、通話に入ったときの言葉から。最初にだれが話すかは、性格と関係から自然に決める。\n`}${cont === 'auto' && cl.transcript.length ? '\n# 今回\nユーザーは「みんなで話していて」と、聞き役にまわっている。キャラどうしで、どんどん会話を続ける（話題を広げる・掘り下げる・ときどき新しい話題に移る・掛け合う。同じことのくり返しにしない）。ユーザーの返事を待たない。ときどき（数回に1回くらい）ユーザーに話題を振ってもよい。振ったときだけ wait_user を true にする。\n' : cont && cl.transcript.length ? '\n# 今回\nユーザーは黙って聞いている。キャラどうしで自然に会話を続ける（ユーザーに話を振ってもよい）。\n' : ''}
 出力は {"lines": [{"speaker": "名前", "text": "セリフ"}], "wait_user": false} の形のJSONのみ。`;
 }
 async function gcallReply(env, cl, g, cont = false) {

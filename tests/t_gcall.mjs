@@ -77,6 +77,11 @@ ok(q.user.includes('私は……空いてます。（ここで、ユーザーに
 ok(q.user.includes('待って、私も行きたい！'), 'user line in transcript');
 let kvc = JSON.parse(DB.raw.prepare('SELECT v FROM kv WHERE k=?').get('call:' + cid).v);
 ok(!kvc.transcript.some((x) => x.text === 'じゃあ決まり！'), 'transcript stored without unheard line');
+// ［勝手に話す］（第56版）：auto のときは、どんどん話し続ける・ときどき話を振る
+answer.reply = { lines: [{ speaker: 'マリ', text: 'そういえば新しいカフェできたよね。' }], wait_user: false };
+r = await call('POST', '/gcall/say', { id: cid, text: '', auto: true });
+q = ai.pop();
+ok(q.sys.includes('聞き役にまわっている') && q.sys.includes('ユーザーの返事を待たない'), 'auto: keep talking prompt');
 // 終わる
 r = await call('POST', '/gcall/end', { id: cid, est: { usd: 0.02, gpuMs: 80000 } });
 await flush();

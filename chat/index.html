@@ -312,6 +312,20 @@ body.ura #list.tlMode{background:#efe9f0}
 .cvBtn{flex:1;border:0;border-radius:40px;padding:18px 8px;font-size:18px;font-weight:700;color:#fff;background:#e5566b;box-shadow:0 4px 14px rgba(0,0,0,.12)}
 .cvBtn.ok{background:#2fb46c}.cvBtn.gray{background:#e5566b;opacity:.92}
 #callView.active .cvBtn.gray,#callView.dial .cvBtn.gray{background:#e5566b}
+/* 表のグループ通話（第55版） */
+#cvMembers{display:none;flex-wrap:wrap;justify-content:center;gap:10px 12px;margin:14px 0 8px;max-width:440px;flex:none}
+#callView.grp #cvMembers{display:flex}#callView.grp .cvAvWrap{display:none}
+.cvM{display:flex;flex-direction:column;align-items:center;width:58px;font-size:11px;color:#fff;text-shadow:0 1px 2px rgba(0,30,80,.4);transition:opacity .2s}
+.cvM .av{width:50px;height:50px;font-size:20px;border:3px solid rgba(255,255,255,.85);box-shadow:0 2px 8px rgba(0,40,100,.2);transition:transform .15s,border-color .15s}
+.cvM span{margin-top:3px;max-width:58px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.cvM.off{opacity:.45}.cvM.talk .av{border-color:#ffe066;transform:scale(1.12)}
+#callView.grp #cvSub{text-align:left}#callView.grp #cvSub b{color:#2a5596;font-weight:700}
+@media (orientation:landscape) and (max-height:520px){#cvMembers{margin:4px 0}.cvM .av{width:36px;height:36px;font-size:14px}}
+#chatView.ogrp .inbar,#chatView.ogrp #btnSelect,#chatView.ogrp #btnNovel{display:none!important}
+.ogMem{display:flex;gap:8px;align-items:flex-start;padding:8px 0;border-bottom:1px solid var(--line);font-size:14px;line-height:1.5}
+.ogMem div{flex:1}.ogMem small{display:block;color:var(--sub,#8a97a8);font-size:12px}
+.ogMem button{flex:none;border:1px solid var(--line);background:var(--bg);border-radius:8px;padding:4px 10px;font-size:13px;color:#d0473c}
+.grMembers label.dis{opacity:.5}
 .bub.call.vm .ic{background:#3672c7}.bub.call.log .ic{background:#2fb46c}.bub.call.out .ic{background:#8a97a8}
 .bub.call .new{display:inline-block;width:8px;height:8px;border-radius:50%;background:#e74c3c;margin-left:6px;vertical-align:middle}
 #toast{position:fixed;left:50%;bottom:calc(env(safe-area-inset-bottom) + 80px);transform:translateX(-50%);
@@ -608,6 +622,58 @@ body.ura #list.tlMode{background:#efe9f0}
   </div></div>
 </section>
 
+<!-- 表の通話グループ（第55版） -->
+<section class="view" id="ogrView">
+  <header class="bar">
+    <button class="ib" id="btnOgrBack" aria-label="戻る">‹</button>
+    <h1 id="ogrTitle">通話グループを作る</h1>
+  </header>
+  <div class="scroll"><div class="form">
+    <div class="field">
+      <label class="t" for="ogName">グループ名</label>
+      <input type="text" id="ogName" maxlength="40" placeholder="例：テニス部">
+    </div>
+    <div class="field">
+      <label class="t">メンバー（7人まで）</label>
+      <div class="grMembers" id="ogMembers"></div>
+      <div class="hint">グループ通話だけをするグループです（トークはしません）。「電話の声」がない子は選べません。チェックした子の下の欄に、このグループでのその子のプロンプト（立場・ふるまいなど）を書くと、このグループの中だけ、その子の設定より優先されます。</div>
+    </div>
+    <div class="field">
+      <label class="t" for="ogPrompt">グループ設定（AIだけが読む）</label>
+      <textarea id="ogPrompt" style="min-height:140px" placeholder="例：3人は同じテニス部。部活のあとの通話。朱里は部長なので話をまとめがち。"></textarea>
+      <div class="hint">画面には出ません。メンバーどうしの関係・雰囲気・ルールなどを書きます。各キャラの設定と食い違うときは、こちらが優先されます。</div>
+    </div>
+    <div class="field">
+      <label class="chk"><input type="checkbox" id="ogLate"> 遅れて入る</label>
+      <div class="hint">オン：かけたとき、今していることによって出られない子がいます。オフ：全員すぐに出ます。</div>
+    </div>
+    <div class="field">
+      <label class="chk"><input type="checkbox" id="ogRing"> 向こうからかけてくる</label>
+      <div class="hint">メンバーのだれかがグループ通話を始めることがあります（この機能はまだ準備中です）。</div>
+    </div>
+    <div class="field">
+      <label class="chk"><input type="checkbox" id="ogPaused"> このグループを止める</label>
+      <div class="hint">止めているあいだは、グループ通話をかけられません。キャラごとに表のAIを止めている子でも、このグループの通話では話します。</div>
+    </div>
+    <button class="btn" id="ogSave">保存</button>
+    <div id="ogMore" style="margin-top:18px">
+      <div class="field">
+        <label class="t">テスト</label>
+        <button class="btn" id="ogTest" style="background:#2fb46c">テスト通話（必ず全員出る）</button>
+      </div>
+      <div class="field">
+        <label class="t">このグループの記憶</label>
+        <div id="ogMemList"><div class="hint">読み込み中…</div></div>
+        <div class="hint">グループ通話のあとに、話したことがここにたまります。次のグループ通話でみんなが思い出します。1対1のトークには持ち出しません。</div>
+        <button class="btn danger" id="ogMemClear" style="margin-top:8px">記憶を全部消す</button>
+      </div>
+      <div class="btns">
+        <button class="btn danger" id="ogDelete">グループを削除</button>
+      </div>
+    </div>
+  </div></div>
+</section>
+
 <section class="view" id="setView">
   <header class="bar">
     <button class="ib" id="btnSetBack" aria-label="戻る">‹</button>
@@ -861,6 +927,7 @@ body.ura #list.tlMode{background:#efe9f0}
   <div class="cvStat" id="cvStat"></div>
   <div class="cvTime" id="cvTime"></div>
   <div class="cvAvWrap"><i></i><i class="r2"></i><div class="cvAv" id="cvAv"></div></div>
+  <div id="cvMembers"></div>
   <div id="cvSub"></div>
   <div id="cvInput" hidden>
     <div class="cvModes"><button id="cvModeText">⌨ 文字</button><button id="cvModeMic">🎤 声</button></div>
@@ -879,7 +946,7 @@ body.ura #list.tlMode{background:#efe9f0}
 // 置き場所で切り替える：/lab/（試作）と /chat/（本番）で同じファイルを使う
 // 試作は本番と同じサイトなので、保存の名前に「lab.」を付けて本番の chat.* には書き込まない。通知も登録しない
 const IS_LAB = /\/lab\//.test(location.pathname);
-const APP_VERSION = '第54版（2026-11-11 14:55:00 更新・残った通話を片付ける・横向きの通話画面）' + (IS_LAB ? '【試作】' : '');
+const APP_VERSION = '第55版（2026-11-12 00:30:00 更新・表のグループ通話（作る・設定・記憶・あなたからかける））' + (IS_LAB ? '【試作】' : '');
 if (IS_LAB) { document.title = '【試作】トーク（統合）'; const mt = document.querySelector('meta[name=apple-mobile-web-app-title]'); if (mt) mt.content = 'トーク試作'; }
 const $ = (id) => document.getElementById(id);
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
@@ -942,6 +1009,7 @@ const curKey = () => (S.current ? keyOf(S.current) : null);
 const charById = (id) => S.chars.find((c) => c.id === baseId(id));
 const groupById = (id) => (S.groups || []).find((g) => g.id === baseId(id)); // 裏のグループ
 const isGroupKey = (id) => baseId(id).startsWith('grp-');
+const ogroupById = (id) => (S.ogroups || []).find((g) => g.id === baseId(id)); // 表の通話グループ（第55版）
 
 // ------------------------------------------------ サーバー通信
 async function api(method, path, body) {
@@ -976,7 +1044,7 @@ async function sync() {
     let more = true;
     while (more) {
       const d = await api('GET', '/sync?since=' + S.maxId);
-      S.chars = d.chars; S.groups = d.groups || []; S.aiAlerts = d.aiAlerts || {}; S.status = d.status || {}; S.reads = d.reads || {}; S.charRead = d.charRead || {}; S.outage = d.outage || null; S.cost = d.cost || S.cost; S.settings = d.settings || S.settings; renderCost(); renderPause(); S.appts = d.appts || S.appts || {}; renderAiAlert();
+      S.chars = d.chars; S.groups = d.groups || []; S.ogroups = d.ogroups || []; S.aiAlerts = d.aiAlerts || {}; S.status = d.status || {}; S.reads = d.reads || {}; S.charRead = d.charRead || {}; S.outage = d.outage || null; S.cost = d.cost || S.cost; S.settings = d.settings || S.settings; renderCost(); renderPause(); S.appts = d.appts || S.appts || {}; renderAiAlert();
       phoneAfterSync(d);
       const fresh = [];
       for (const m of d.messages) if (addMsg(m)) fresh.push(m);
@@ -986,10 +1054,10 @@ async function sync() {
       more = !!d.more;
     }
     // 消えたキャラの片付け
-    for (const id of Object.keys(S.msgs)) if (!charById(id) && !groupById(id)) delete S.msgs[id];
+    for (const id of Object.keys(S.msgs)) if (!charById(id) && !groupById(id) && !ogroupById(id)) delete S.msgs[id];
     S.synced = true;
     await loadIcons();
-    if (S.view === 'chat' && !charById(S.current) && !groupById(S.current)) show('list');
+    if (S.view === 'chat' && !charById(S.current) && !groupById(S.current) && !ogroupById(S.current)) show('list');
     renderAll();
     updateBadge();
   } catch (e) {
@@ -1229,12 +1297,13 @@ function renderList() {
   const rows = shown.map((c) => {
     const v = visibleMsgs(keyOf(c.id)); const last = v[v.length - 1];
     return { c, last, sortAt: last ? last.at : c.created || 0 };
-  }).concat(ura ? (S.groups || []).map((g) => {
+  }).concat((ura ? S.groups || [] : S.ogroups || []).map((g) => {
     const v = visibleMsgs(keyOf(g.id)); const last = v[v.length - 1];
-    return { g, last, sortAt: last ? last.at : g.created || 0 };
-  }) : []).sort((a, b) => b.sortAt - a.sortAt);
-  el.innerHTML = (ura ? '<button class="newgrp" id="btnNewGroup">👥 グループを作る</button>' : '') + rows.map(({ c, g, last }) => {
+    return ura ? { g, last, sortAt: last ? last.at : g.created || 0 } : { og: g, last, sortAt: last ? last.at : g.created || 0 };
+  })).sort((a, b) => b.sortAt - a.sortAt);
+  el.innerHTML = (ura ? '<button class="newgrp" id="btnNewGroup">👥 グループを作る</button>' : '<button class="newgrp" id="btnNewOGroup">📞 グループ通話を作る</button>') + rows.map(({ c, g, og, last }) => {
     if (g) return groupRowHTML(g, last);
+    if (og) return ogroupRowHTML(og, last);
     const k = keyOf(c.id);
     const n = ura ? 0 : unreadCount(c.id); // 裏は未読バッジなし
     const empty = ura ? 'まだ会っていません' : 'メッセージはまだありません';
@@ -1250,10 +1319,20 @@ function renderList() {
 }
 
 // 裏のグループ：アイコン（メンバーを並べる）・一覧の行
-function groupAvatarHTML(g, cls = '') {
+function groupAvatarHTML(g, cls = '', world = 'ura') {
   const ms = g.members.map((id) => charById(id)).filter(Boolean).slice(0, 4);
   if (!ms.length) return `<div class="av ${cls}" style="background:#5b6b86">👥</div>`;
-  return `<div class="av grp ${cls} ${ms.length === 1 ? 'one' : ''}">${ms.map((c) => avatarHTML(c, '', 'ura')).join('')}</div>`;
+  return `<div class="av grp ${cls} ${ms.length === 1 ? 'one' : ''}">${ms.map((c) => avatarHTML(c, '', world)).join('')}</div>`;
+}
+// 表の通話グループ（第55版）：一覧の行
+const callRecText = (m) => (m.kind === 'callout' ? '📞 発信（応答なし）' : m.kind === 'callog' ? `📞 グループ通話 ${durText((m.meta || {}).dur)}` : m.text || '');
+function ogroupRowHTML(g, last) {
+  const pv = last ? callRecText(last) : 'まだ通話していません';
+  return `<div class="row" role="button" tabindex="0" data-id="${esc(g.id)}"><div class="avw">${groupAvatarHTML(g, '', 'omote')}</div>
+    <div class="mid"><div class="nm">${esc(g.name)}<span class="stm">${g.paused ? '止めています・' : ''}${g.members.length}人</span></div><div class="pv">${esc(pv)}</div></div>
+    <div class="rt"><div class="tm">${last ? listTime(last.at) : ''}</div></div>
+    <button class="edbtn" data-ogedit="${esc(g.id)}" aria-label="${esc(g.name)}を編集">✎</button>
+  </div>`;
 }
 function speakerName(id) { const c = charById(id); return c ? dispName(c, 'ura') : '（いなくなった人）'; }
 function groupRowHTML(g, last) {
@@ -1268,6 +1347,9 @@ function groupRowHTML(g, last) {
 }
 
 function renderChat(keepPos, forceBottom) {
+  const og = S.world !== 'ura' && ogroupById(S.current);
+  $('chatView').classList.toggle('ogrp', !!og);
+  if (og) { renderOGroupChat(og, keepPos, forceBottom); return; }
   const grp = groupById(S.current);
   const c = grp ? { id: grp.id, name: grp.name } : charById(S.current);
   if (!c) return;
@@ -1497,7 +1579,7 @@ function renderAll(keepPos, forceBottom) {
 
 function show(view) {
   S.view = view;
-  for (const [v, id] of [['list', 'listView'], ['chat', 'chatView'], ['edit', 'editView'], ['set', 'setView'], ['post', 'postView'], ['grp', 'grpView']]) $(id).classList.toggle('on', v === view);
+  for (const [v, id] of [['list', 'listView'], ['chat', 'chatView'], ['edit', 'editView'], ['set', 'setView'], ['post', 'postView'], ['grp', 'grpView'], ['ogr', 'ogrView']]) $(id).classList.toggle('on', v === view);
   if (view !== 'chat') {
     // 別画面に移ったら、待ち中の吹き出しはすぐ出す
     if (revealQ.length) { revealQ.forEach((m) => S.hidden.delete(m.id)); revealQ.length = 0; }
@@ -1507,8 +1589,9 @@ function show(view) {
 
 function openChat(id, world) {
   endSelect();
-  if (!charById(id) && !groupById(id)) return;
+  if (!charById(id) && !groupById(id) && !ogroupById(id)) return;
   if (groupById(id) || (charById(id) || {}).uraOnly) world = 'ura'; // グループと裏だけの子は、裏で開く
+  if (ogroupById(id)) world = 'omote'; // 表の通話グループ
   if (world) setWorld(world);
   S.current = baseId(id);
   show('chat');
@@ -1516,7 +1599,7 @@ function openChat(id, world) {
   markReadIfOpen();
   const k = curKey();
   const arr = S.msgs[k] || [];
-  if (arr.length && arr[arr.length - 1].sender === 'me' && !S.replyBusy[k]) scheduleReply(k);
+  if (arr.length && arr[arr.length - 1].sender === 'me' && !S.replyBusy[k] && !ogroupById(id)) scheduleReply(k);
 }
 
 // ------------------------------------------------ タイムライン（表と裏は完全に別）
@@ -1803,8 +1886,8 @@ function bubHTML(m) {
   const src = m.localImg || (m.image && imgCache[m.image]);
   if (m.kind === 'call') return `<div class="bub call"><span class="ic">📞</span><span><b>${m.meta && m.meta.declined ? '着信（拒否）' : '不在着信'}</b><small>${m.meta && m.meta.declined ? 'あなたが拒否しました' : '応答なし'}</small></span></div>`;
   if (m.kind === 'vm') { const v = vmOf(baseId(m.charId), m.id); return `<div class="bub call vm" data-vm="${m.id}"><span class="ic">▶</span><span><b>留守番電話${v && !v.heard ? '<span class="new"></span>' : ''}</b><small>${v ? (v.heard ? 'タップで再生' : '新しい留守電・タップで再生') : '古い留守電（もう残っていません）'}</small></span></div>`; }
-  if (m.kind === 'callout') return `<div class="bub call out" data-callback="1"><span class="ic">📞</span><span><b>発信</b><small>応答なし・タップでかけ直す</small></span></div>`;
-  if (m.kind === 'callog') { const mt = m.meta || {}; return `<div class="bub call log" data-callback="1"><span class="ic">📞</span><span><b>通話 ${durText(mt.dur)}</b><small>${mt.usd != null ? `約$${Number(mt.usd).toFixed(3)}（約${yenOf(Number(mt.usd))}円）` : 'タップでかけ直す'}</small></span></div>`; }
+  if (m.kind === 'callout') return `<div class="bub call out" data-callback="1"><span class="ic">📞</span><span><b>${m.meta && m.meta.group ? 'グループ通話' : '発信'}</b><small>${m.meta && m.meta.group ? 'だれも出ませんでした' : '応答なし'}・タップでかけ直す</small></span></div>`;
+  if (m.kind === 'callog') { const mt = m.meta || {}; return `<div class="bub call log" data-callback="1"><span class="ic">📞</span><span><b>${mt.group ? 'グループ通話' : '通話'} ${durText(mt.dur)}</b><small>${mt.usd != null ? `約$${Number(mt.usd).toFixed(3)}（約${yenOf(Number(mt.usd))}円）` : 'タップでかけ直す'}</small></span></div>`; }
   if (m.image || m.localImg) return `<div class="bub photo"><img ${src ? `src="${src}"` : `data-img="${esc(m.image)}"`} alt="${esc(m.alt || '写真')}"></div>${m.text ? `<div class="bub">${esc(m.text)}</div>` : ''}`;
   return `<div class="bub">${quoteHTML(m)}${esc(m.text)}</div>`;
 }
@@ -2276,6 +2359,9 @@ function autosize() {
 // ------------------------------------------------ イベント
 $('list').addEventListener('click', (e) => {
   if (e.target.closest('#btnNewGroup')) { grpFrom = 'list'; openGroupEdit(null); return; }
+  if (e.target.closest('#btnNewOGroup')) { ogrFrom = 'list'; openOGroupEdit(null); return; }
+  const oge = e.target.closest('[data-ogedit]');
+  if (oge) { ogrFrom = 'list'; openOGroupEdit(oge.dataset.ogedit); return; }
   const ge = e.target.closest('[data-gedit]');
   if (ge) { grpFrom = 'list'; openGroupEdit(ge.dataset.gedit); return; }
   const ed = e.target.closest('.edbtn');
@@ -2336,7 +2422,7 @@ $('msgs').addEventListener('click', (e) => {
   e.stopPropagation(); e.preventDefault();
   if (el && !el.classList.contains('typing')) selTap(el);
 }, true);
-$('btnEditChar').onclick = () => { if (groupById(S.current)) { grpFrom = 'chat'; openGroupEdit(S.current); return; } editFrom = 'chat'; openEdit(S.current); };
+$('btnEditChar').onclick = () => { if (S.world !== 'ura' && ogroupById(S.current)) { ogrFrom = 'chat'; openOGroupEdit(S.current); return; } if (groupById(S.current)) { grpFrom = 'chat'; openGroupEdit(S.current); return; } editFrom = 'chat'; openEdit(S.current); };
 // ---- 裏のグループ
 let grpEdit = null, grpFrom = 'list';
 function openGroupEdit(id) {
@@ -3048,14 +3134,16 @@ function setStat(t) { $('cvStat').textContent = t; }
 function subLine(who, text) {
   const box = $('cvSub');
   box.insertAdjacentHTML('beforeend', `<div class="${who}">${who === 'me' ? 'あなた：' : ''}${esc(text)}</div>`);
-  while (box.children.length > 8) box.firstChild.remove();
+  while (box.children.length > (CALL.cur && CALL.cur.group ? 400 : 8)) box.firstChild.remove(); // グループ通話は始まりから読めるように
   box.scrollTop = box.scrollHeight;
 }
 function closeCallScreen() {
+  CALL.screenMode = 'closed';
+  if (CALL.cur) clearTimeout(CALL.cur.contTimer);
   stopTones(); stopVoice(); micStop(true);
   clearInterval(CALL.clock); clearInterval(CALL.hb); clearTimeout(CALL.ringTo);
   CALL.cur = null; CALL.vm = null;
-  $('callView').className = '';
+  $('callView').className = ''; $('cvMembers').innerHTML = '';
 }
 function startClock(from) { clearInterval(CALL.clock); const f = () => { $('cvTime').textContent = fmtClock(Date.now() - from); }; f(); CALL.clock = setInterval(f, 500); }
 function toggleMute() {
@@ -3155,6 +3243,7 @@ function beginActive(call, lines, hangup) {
   speakLines(lines || []).then(() => { if (hangup) endCall('char'); });
 }
 async function sayInCall(text) {
+  if (CALL.cur && CALL.cur.group) return sayInGroupCall(text);
   const cur = CALL.cur; if (!cur || !cur.answeredAt || cur.busy) return;
   text = String(text || '').trim(); if (!text) return;
   stopVoice(); // 話している途中なら止めて、あなたの言葉を優先
@@ -3168,6 +3257,7 @@ async function sayInCall(text) {
   } catch (e) { cur.busy = false; setStat('通話中'); toast(e.message); }
 }
 async function endCall(by) {
+  if (CALL.cur && CALL.cur.group) return endGroupCall();
   const cur = CALL.cur; if (!cur || cur.ending) return;
   cur.ending = true;
   const now = Date.now();
@@ -3199,8 +3289,8 @@ function micStop(discard) {
   if (discard) recFinal = recText = '';
   try { r.stop(); } catch (_) {}
   $('cvMic').classList.remove('on'); $('cvMic').textContent = '🎤 話す'; $('cvMicX').hidden = true;
-  if (!discard) { const t = (recFinal + recText).trim(); recFinal = recText = ''; $('cvHeard').textContent = ''; if (t) sayInCall(t); }
-  else $('cvHeard').textContent = '';
+  if (!discard) { const t = (recFinal + recText).trim(); recFinal = recText = ''; $('cvHeard').textContent = ''; if (t) sayInCall(t); else groupResume(); }
+  else { $('cvHeard').textContent = ''; groupResume(); }
 }
 function micStart() {
   const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
@@ -3246,9 +3336,9 @@ async function vmPlay() {
 $('msgs').addEventListener('click', (e) => {
   if (sel.on) return;
   const v = e.target.closest('[data-vm]'); if (v) { openVM(baseId(curKey()), v.dataset.vm); return; }
-  const cl = e.target.closest('[data-callback]'); if (cl) { const c = charById(S.current); if (c && canPhone(c)) startOutgoing(c); }
+  const cl = e.target.closest('[data-callback]'); if (cl) { const og = S.world !== 'ura' && ogroupById(S.current); if (og) { startGroupCall(og); return; } const c = charById(S.current); if (c && canPhone(c)) startOutgoing(c); }
 });
-$('btnCall').onclick = () => { const c = charById(S.current); if (c && canPhone(c)) startOutgoing(c); };
+$('btnCall').onclick = () => { const og = S.world !== 'ura' && ogroupById(S.current); if (og) { startGroupCall(og); return; } const c = charById(S.current); if (c && canPhone(c)) startOutgoing(c); };
 // --- 同期のたび：かかってきた電話・留守電・GPU を起こす住所をサーバーに
 let ttsUrlSent = '';
 function phoneAfterSync(d) {
@@ -3322,6 +3412,249 @@ $('edCallTest').onclick = async () => {
     for (let i = 0; i < 24 && !CALL.cur; i++) { await sleep(5000); await sync(); }
   } catch (e) { toast(e.message); }
 };
+
+// ------------------------------------------------ 表のグループ通話（第55版）
+// 通話だけをするグループ。トーク画面は通話の記録だけ（入力欄なし）。右上の📞でかける。テスト（全員出る）はグループの設定の中
+function renderOGroupChat(g, keepPos, forceBottom) {
+  $('btnGrpReset').style.display = 'none';
+  $('btnCall').style.display = S.settings.phoneEnabled !== false ? '' : 'none';
+  renderMeetBar(); renderCharPauseBar();
+  $('chatTitle').innerHTML = esc(g.name) + `<small>${esc(g.members.map((id) => (charById(id) || {}).name || '（いなくなった人）').join('・'))}${g.paused ? '・止めています' : ''}</small>`;
+  const box = $('msgs'), k = g.id;
+  box.classList.remove('uraMode');
+  const nearBottom = box.scrollHeight - box.scrollTop - box.clientHeight < 120;
+  let html = '', prevDay = '';
+  for (const m of visibleMsgs(k)) {
+    const dk = dayKey(m.at);
+    if (dk !== prevDay) { html += `<div class="day"><span>${dayLabel(m.at)}</span></div>`; prevDay = dk; }
+    const who = m.sender === 'me' ? 'me' : 'them';
+    const sum = m.kind === 'callog' && m.meta && m.meta.sum ? `<div class="bub" style="font-size:13px;opacity:.85">${esc(m.meta.sum)}</div>` : '';
+    html += who === 'me'
+      ? `<div class="msg me" data-id="${esc(m.id)}"><div class="meta"><span>${hm(m.at)}</span></div><div class="mecol">${bubHTML(m)}${sum}</div></div>`
+      : `<div class="msg them" data-id="${esc(m.id)}"><div class="who">${groupAvatarHTML(g, 'sm', 'omote')}</div><div class="col"><div class="name">${esc(g.name)}</div>${bubHTML(m)}${sum}</div><div class="meta"><span>${hm(m.at)}</span></div></div>`;
+  }
+  if (!html) html = `<div class="empty" style="color:#fff">${esc(g.members.map((id) => (charById(id) || {}).name).filter(Boolean).join('・'))}とのグループ通話です。<br>右上の 📞 からかけられます。<br>（ここには通話の記録だけが残ります）</div>`;
+  box.innerHTML = html;
+  if (!keepPos || nearBottom || forceBottom) box.scrollTop = box.scrollHeight;
+}
+// --- 作る・設定
+let ogrEdit = null, ogrFrom = 'list';
+function openOGroupEdit(id) {
+  const voiced = S.chars.filter((c) => !c.uraOnly);
+  if (!voiced.length) return toast('先にキャラを登録してください');
+  const g = id ? ogroupById(id) : null;
+  ogrEdit = { id: g ? g.id : null };
+  $('ogrTitle').textContent = g ? `${g.name} を編集` : 'グループ通話を作る';
+  $('ogName').value = g ? g.name : '';
+  $('ogPrompt').value = g ? g.prompt || '' : '';
+  $('ogLate').checked = g ? g.lateJoin !== false : true;
+  $('ogRing').checked = g ? g.ringIn !== false : true;
+  $('ogPaused').checked = !!(g && g.paused);
+  const mem = new Set(g ? g.members : []), roles = (g && g.roles) || {};
+  $('ogMembers').innerHTML = voiced.map((c) => {
+    const ok = !!c.voice;
+    return `<label class="${ok ? '' : 'dis'}"><input type="checkbox" value="${esc(c.id)}" ${mem.has(c.id) && ok ? 'checked' : ''} ${ok ? '' : 'disabled'}>${avatarHTML(c)}<span>${esc(c.name)}${ok ? '' : '<small style="display:block;font-size:12px;opacity:.8">電話の声がないので選べません</small>'}</span></label>
+    ${ok ? `<textarea data-role="${esc(c.id)}" maxlength="1500" placeholder="このグループでの${esc(c.name)}のプロンプト（任意）　例：部長。話をまとめがち" ${mem.has(c.id) ? '' : 'hidden'}>${esc(roles[c.id] || '')}</textarea>` : ''}`;
+  }).join('');
+  $('ogMore').style.display = g ? '' : 'none';
+  if (g) loadOGroupMemory(g.id);
+  show('ogr');
+  $('ogrView').querySelector('.scroll').scrollTop = 0;
+}
+$('ogMembers').addEventListener('change', (e) => {
+  const cb = e.target.closest('input[type=checkbox]'); if (!cb) return;
+  if (cb.checked && $('ogMembers').querySelectorAll('input:checked').length > 7) { cb.checked = false; toast('メンバーは7人までです'); return; }
+  const ta = $('ogMembers').querySelector(`textarea[data-role="${CSS.escape(cb.value)}"]`); if (ta) ta.hidden = !cb.checked;
+});
+$('btnOgrBack').onclick = () => { if (ogrEdit && ogrEdit.id && ogrFrom === 'chat' && ogroupById(ogrEdit.id)) openChat(ogrEdit.id, 'omote'); else { show('list'); renderAll(); } };
+function ogroupFromForm() {
+  const members = [...$('ogMembers').querySelectorAll('input:checked')].map((x) => x.value);
+  const roles = {};
+  for (const ta of $('ogMembers').querySelectorAll('textarea[data-role]')) if (members.includes(ta.dataset.role) && ta.value.trim()) roles[ta.dataset.role] = ta.value.trim();
+  return { id: ogrEdit.id || undefined, name: $('ogName').value.trim() || members.map((id) => (charById(id) || {}).name || '').join('・').slice(0, 40), members, prompt: $('ogPrompt').value, roles, lateJoin: $('ogLate').checked, ringIn: $('ogRing').checked, paused: $('ogPaused').checked };
+}
+async function saveOGroup(quiet) {
+  const group = ogroupFromForm();
+  if (!group.members.length) { toast('メンバーを1人以上選んでください'); return null; }
+  if (group.members.length > 7) { toast('メンバーは7人までです'); return null; }
+  const d = await api('POST', '/ogroup', { group });
+  S.ogroups = (S.ogroups || []).filter((g) => g.id !== d.group.id).concat(d.group);
+  ogrEdit.id = d.group.id;
+  if (!quiet) toast('保存しました');
+  return d.group;
+}
+$('ogSave').onclick = async () => {
+  $('ogSave').disabled = true;
+  try { const g = await saveOGroup(); if (g) openChat(g.id, 'omote'); } catch (e) { toast(e.message); } finally { $('ogSave').disabled = false; }
+};
+$('ogTest').onclick = async () => { // 保存してから、トーク画面に戻ってテスト通話（全員出る）
+  try { const g = await saveOGroup(true); if (!g) return; openChat(g.id, 'omote'); startGroupCall(g, true); } catch (e) { toast(e.message); }
+};
+$('ogDelete').onclick = async () => {
+  const g = ogrEdit && ogroupById(ogrEdit.id); if (!g) return;
+  if (!confirm(`グループ「${g.name}」を削除します。通話の記録とグループの記憶も消えます。よろしいですか？`)) return;
+  try { await api('DELETE', '/ogroup?id=' + encodeURIComponent(g.id)); S.ogroups = S.ogroups.filter((x) => x.id !== g.id); delete S.msgs[g.id]; toast('削除しました'); show('list'); renderAll(); }
+  catch (e) { toast(e.message); }
+};
+// --- グループの記憶（見る・消す）
+function renderOGroupMemory(list) {
+  $('ogMemList').innerHTML = list.length ? list.slice().reverse().map((m) => `<div class="ogMem"><div>${esc(m.text)}<small>${new Date(m.at).toLocaleString('ja-JP', { month: 'numeric', day: 'numeric', hour: '2-digit', minute: '2-digit' })}</small></div><button data-ogmem="${esc(m.id)}">消す</button></div>`).join('') : '<div class="hint">まだありません</div>';
+  $('ogMemClear').style.display = list.length ? '' : 'none';
+}
+async function loadOGroupMemory(id) {
+  $('ogMemList').innerHTML = '<div class="hint">読み込み中…</div>';
+  try { const d = await api('GET', '/ogroup/memory?id=' + encodeURIComponent(id)); if (ogrEdit && ogrEdit.id === id) renderOGroupMemory(d.memory); }
+  catch (e) { $('ogMemList').innerHTML = `<div class="hint">${esc(e.message)}</div>`; }
+}
+async function deleteOGroupMemory(mid) {
+  const id = ogrEdit && ogrEdit.id; if (!id) return;
+  if (!confirm(mid === 'all' ? 'このグループの記憶を全部消します。よろしいですか？' : 'この記憶を消しますか？')) return;
+  try { const d = await api('POST', '/ogroup/memory/delete', { id, mid }); renderOGroupMemory(d.memory); } catch (e) { toast(e.message); }
+}
+$('ogMemList').addEventListener('click', (e) => { const b = e.target.closest('[data-ogmem]'); if (b) deleteOGroupMemory(b.dataset.ogmem); });
+$('ogMemClear').onclick = () => deleteOGroupMemory('all');
+// --- 通話の画面
+function gcMembersHTML(cur) {
+  return cur.invited.map((id) => { const c = charById(id); if (!c) return ''; return `<div class="cvM ${cur.members.includes(id) ? '' : 'off'}" data-cvm="${esc(id)}">${avatarHTML(c)}<span>${esc(c.name)}</span></div>`; }).join('');
+}
+function gcTalking(id) { $('cvMembers').querySelectorAll('.cvM').forEach((el) => el.classList.toggle('talk', el.dataset.cvm === id)); }
+function gcScreen(g, mode) {
+  callScreen({ id: g.id, name: g.name }, mode);
+  $('callView').classList.add('grp');
+  $('cvMembers').innerHTML = gcMembersHTML(CALL.cur);
+}
+function gcSub(id, text) {
+  if (id === 'me') { subLine('me', text); return; }
+  const box = $('cvSub'), c = charById(id);
+  box.insertAdjacentHTML('beforeend', `<div class="them"><b>${esc(c ? c.name : '？')}：</b>${esc(text)}</div>`);
+  while (box.children.length > 400) box.firstChild.remove();
+  box.scrollTop = box.scrollHeight;
+}
+// --- かける
+async function startGroupCall(g, test) {
+  if (CALL.cur) return;
+  if (S.settings.phoneEnabled === false) { toast('電話はオフになっています（設定）'); return; }
+  if (S.settings.omotePaused) { toast('表は止めています（電話もできません）'); return; }
+  if (g.paused) { toast('このグループは止めています（グループの設定で再開できます）'); return; }
+  const ms = g.members.map((id) => charById(id)).filter((c) => c && c.voice);
+  if (!ms.length) { toast('声の名前があるメンバーがいません'); return; }
+  if (!confirm(test ? `テスト：「${g.name}」にグループ通話をかけます（全員出ます）。よろしいですか？` : `「${g.name}」にグループ通話をかけますか？`)) return;
+  ac();
+  CALL.cur = { group: g.id, dir: 'out', gpuStart: Date.now(), muted: false, invited: ms.map((c) => c.id), members: [], started: 0, batchDone: true, queued: [] };
+  gcScreen(g, 'dial'); setStat('呼び出し中…'); $('cvTime').textContent = '';
+  playRingback();
+  const gpuT0 = Date.now(), warm = warmGPU(test ? 180000 : 90000);
+  let r;
+  try { r = await api('POST', '/gcall/start', { groupId: g.id, test: !!test, force: true }); }
+  catch (e) { toast(e.message); closeCallScreen(); return; }
+  const cancel = () => api('POST', '/gcall/end', { id: r.call.id }).catch(() => {});
+  if (!CALL.cur) { cancel(); return; }
+  CALL.cur.id = r.call.id; CALL.cur.invited = r.call.invited || CALL.cur.invited;
+  await sleep(r.ringMs);
+  if (!CALL.cur) { cancel(); return; }
+  if (r.call.members.length) {
+    setStat('声のサーバー（GPU）を起こしています…');
+    const ok = await warm;
+    if (test && ok) toast(`テスト：声のサーバーは${Math.round((Date.now() - gpuT0) / 1000)}秒で起きました`, 5000);
+    if (!ok) {
+      cancel();
+      if (test) toast(`テスト：声のサーバー（GPU）が起きませんでした（${Math.round((Date.now() - gpuT0) / 1000)}秒・${warmInfo.tries}回・最後：${warmInfo.last || '不明'}）`, 15000);
+      stopTones(); setStat('ただいま通話をつなげることができません'); await sleep(2200); closeCallScreen(); return;
+    }
+  }
+  if (!CALL.cur) { cancel(); return; }
+  try {
+    const d = await api('POST', '/gcall/connect', { id: r.call.id });
+    stopTones();
+    if (!d.answered) { setStat('だれも出ませんでした'); if (d.message) { addMsg(d.message); renderAll(true); } await sleep(2200); closeCallScreen(); return; }
+    const absent = (r.absent || []).map((x) => (charById(x.id) || {}).name).filter(Boolean);
+    if (absent.length) toast(`${absent.join('・')}さんは出られませんでした`, 4000);
+    beginGroupActive(g, d);
+  } catch (e) { toast(e.message); closeCallScreen(); }
+}
+function beginGroupActive(g, d) {
+  const cur = CALL.cur; if (!cur) return;
+  Object.assign(cur, { id: d.call.id, answeredAt: Date.now(), members: d.call.members });
+  gcScreen(g, 'active'); setStat('通話中'); startClock(cur.answeredAt);
+  setInputMode(store.get('call.mode', 'text'));
+  let n = 0;
+  clearInterval(CALL.hb);
+  CALL.hb = setInterval(() => { wakeTTS(); if (++n % 3 === 0 && CALL.cur) api('POST', '/call/ping', { id: CALL.cur.id }).catch(() => {}); }, 20000);
+  gcPlay(d.lines || [], d.wait);
+}
+// --- セリフを順に流す（声は全部いっしょに頼む＝1人目を流している間に次ができる）。流し終えたら、黙っていれば続きを頼む
+async function gcPlay(lines, wait) {
+  const cur = CALL.cur; if (!cur || cur.ending) return;
+  if (rec) { cur.pending = { lines, wait }; return; } // 🎤で話している最中に届いた：話し終えるまで待つ
+  const tok = cur.speakTok = (cur.speakTok || 0) + 1;
+  cur.started = 0; cur.batchDone = false;
+  const jobs = lines.map((x) => { const c = charById(x.id), t = speakText(x.text); return c && c.voice && t ? ttsBuf(c.voice, t).catch((e) => { logDiag('グループ通話の声: ' + e.message); return null; }) : Promise.resolve(null); });
+  for (let i = 0; i < lines.length; i++) {
+    if (!CALL.cur || CALL.cur.speakTok !== tok) return;
+    const buf = await jobs[i];
+    if (!CALL.cur || CALL.cur.speakTok !== tok) return;
+    cur.started = i + 1;
+    gcSub(lines[i].id, lines[i].text); gcTalking(lines[i].id); setStat('通話中');
+    if (buf) await playBuf(buf); else await sleep(Math.min(6000, 600 + lines[i].text.length * 110));
+  }
+  if (!CALL.cur || CALL.cur.speakTok !== tok) return;
+  cur.batchDone = true; gcTalking('');
+  gcNext(wait ? 15000 : 900);
+}
+// 黙っていたら、キャラどうしで続ける（画面が見えていて、文字を打っていない・🎤で話していないとき）
+function gcNext(ms) {
+  const cur = CALL.cur; if (!cur || !cur.group || cur.ending) return;
+  clearTimeout(cur.contTimer);
+  cur.contTimer = setTimeout(() => {
+    if (CALL.cur !== cur || cur.busy || rec) return;
+    if (document.visibilityState !== 'visible' || $('cvText').value.trim()) { gcNext(5000); return; }
+    gcAsk('');
+  }, ms);
+}
+function groupResume() { // 🎤をやめた（何も言わなかった）：待っていたセリフを流す・続きを頼む
+  const cur = CALL.cur; if (!cur || !cur.group || cur.ending || CALL.screenMode !== 'active') return;
+  if (cur.pending) { const p = cur.pending; cur.pending = null; gcPlay(p.lines, p.wait); }
+  else if (!cur.busy && cur.batchDone) gcNext(1500);
+  else if (!cur.busy && !cur.batchDone) gcNext(1500); // 途中で止めたまま：続きを頼む（聞いたところまで）
+}
+async function gcAsk(text) {
+  const cur = CALL.cur; if (!cur || cur.ending) return;
+  clearTimeout(cur.contTimer);
+  const heard = cur.pending ? 0 : cur.batchDone ? null : cur.started; // さえぎったら、聞いたところまで
+  cur.pending = null; cur.batchDone = true;
+  cur.busy = true; if (text) setStat('…');
+  try {
+    const d = await api('POST', '/gcall/say', { id: cur.id, text, heard });
+    cur.busy = false;
+    if (CALL.cur !== cur) return;
+    if (d.ended) { endGroupCall(); return; }
+    if (cur.queued.length) { cur.pending = { lines: d.lines || [], wait: d.wait }; const t = cur.queued.splice(0).join('\n'); gcAsk(t); return; } // 待っている間にあなたが話した：届いたセリフは聞かずに、あなたの言葉を先に
+    if (d.paused) { setStat('止めています'); return; }
+    gcPlay(d.lines || [], d.wait);
+  } catch (e) { cur.busy = false; setStat('通話中'); toast(e.message); gcNext(8000); }
+}
+function sayInGroupCall(text) {
+  const cur = CALL.cur; if (!cur || !cur.answeredAt) return;
+  text = String(text || '').trim(); if (!text) return;
+  stopVoice(); gcTalking(''); // 話している途中なら止めて、あなたの言葉を優先
+  gcSub('me', text);
+  if (cur.busy) { cur.queued.push(text); return; }
+  gcAsk(text);
+}
+async function endGroupCall() {
+  const cur = CALL.cur; if (!cur || cur.ending) return;
+  cur.ending = true; clearTimeout(cur.contTimer);
+  const now = Date.now();
+  const gpuMs = (now - (cur.gpuStart || now)) + MODAL_IDLE_S * 1000, usd = gpuMs / 3600e3 * GPU_USD_PER_H;
+  const heard = cur.batchDone ? null : cur.started;
+  closeCallScreen();
+  if (!cur.id || !cur.answeredAt) { if (cur.id) api('POST', '/gcall/end', { id: cur.id }).catch(() => {}); return; }
+  try {
+    const d = await api('POST', '/gcall/end', { id: cur.id, heard, est: { usd, gpuMs } });
+    if (d.message) { addMsg(d.message); renderAll(true); }
+    toast(`グループ通話 ${durText(now - cur.answeredAt)}・GPU 約${Math.round(gpuMs / 60000) || 1}分・約$${usd.toFixed(3)}（約${yenOf(usd)}円）`, 5000);
+  } catch (e) { toast(e.message); }
+}
 
 // ------------------------------------------------ 起動
 (async function start() {

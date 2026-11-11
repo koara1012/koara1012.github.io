@@ -1127,7 +1127,7 @@ async function route(key, url, body, env, ctx) {
 
     case 'POST /read': {
       const { base, world, key } = splitCid(body.charId);
-      await getOwner(env, base, world);
+      if (isOGroupId(base) && world === 'omote') await getOGroup(env, base); else await getOwner(env, base, world); // 表の通話グループ（第55版）も既読を付けられる
       await setRead(env, key, Date.now());
       return json({ ok: true, badge: await totalUnread(env) });
     }

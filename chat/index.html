@@ -279,7 +279,7 @@ body.ura #list.tlMode{background:#efe9f0}
 .cvStat{font-size:17px;margin-top:8px;opacity:.95;text-align:center}
 .cvTime{font-size:28px;font-weight:700;font-variant-numeric:tabular-nums;min-height:34px;text-align:center}
 .cvAvWrap{position:relative;width:min(56vw,210px);height:min(56vw,210px);margin:22px 0 12px;flex:none}
-.cvAvWrap i{position:absolute;inset:-26px;border-radius:50%;background:rgba(255,255,255,.2);animation:cvRip 2.4s ease-out infinite}
+.cvAvWrap i{pointer-events:none;position:absolute;inset:-26px;border-radius:50%;background:rgba(255,255,255,.2);animation:cvRip 2.4s ease-out infinite}
 .cvAvWrap i.r2{animation-delay:1.2s}
 @keyframes cvRip{0%{transform:scale(.78);opacity:.95}100%{transform:scale(1.32);opacity:0}}
 .cvAv{position:relative;width:100%;height:100%;border-radius:50%;border:4px solid rgba(255,255,255,.92);overflow:hidden;background:#b9c9de;display:grid;place-items:center;font-size:72px;color:#fff;box-shadow:0 6px 24px rgba(0,40,100,.25)}
@@ -298,7 +298,17 @@ body.ura #list.tlMode{background:#efe9f0}
 #cvMic.on{background:#e5566b}
 #cvMicX{border:0;border-radius:20px;background:#8a97a8;color:#fff;padding:10px 14px}
 #cvHeard{width:100%;min-height:20px;text-align:center;color:#33506f;font-size:14px;margin-top:6px}
-#cvBtns{display:flex;gap:14px;width:100%;max-width:440px;flex:none;margin-top:auto}
+#cvBtns{display:flex;gap:14px;width:100%;max-width:440px;flex:none;margin-top:auto;position:relative;z-index:2}
+#cvInput,#cvSub{position:relative;z-index:2}#cvSubToggle{z-index:3}
+/* 横向き（第54版）：丸い写真の波紋がボタンの上に重なって押せなくなっていた。横では写真を小さく、全体をスクロールできるように */
+@media (orientation:landscape) and (max-height:520px){
+  #callView{overflow-y:auto;padding-top:calc(env(safe-area-inset-top) + 10px);padding-left:calc(env(safe-area-inset-left) + 18px);padding-right:calc(env(safe-area-inset-right) + 18px)}
+  .cvName{font-size:22px}.cvStat{font-size:14px;margin-top:2px}.cvTime{font-size:20px;min-height:24px}
+  .cvAvWrap{width:60px;height:60px;margin:6px 0 4px}.cvAvWrap i{inset:-8px}.cvAv{font-size:28px;border-width:3px}
+  #cvSub{min-height:36px;flex:1 1 auto;max-height:26vh;font-size:14px;line-height:1.5}
+  #cvInput{margin:4px 0 6px}.cvModes{margin-bottom:4px}#cvText{padding:7px 12px}
+  .cvBtn{padding:9px 8px;font-size:15px}
+}
 .cvBtn{flex:1;border:0;border-radius:40px;padding:18px 8px;font-size:18px;font-weight:700;color:#fff;background:#e5566b;box-shadow:0 4px 14px rgba(0,0,0,.12)}
 .cvBtn.ok{background:#2fb46c}.cvBtn.gray{background:#e5566b;opacity:.92}
 #callView.active .cvBtn.gray,#callView.dial .cvBtn.gray{background:#e5566b}
@@ -869,7 +879,7 @@ body.ura #list.tlMode{background:#efe9f0}
 // 置き場所で切り替える：/lab/（試作）と /chat/（本番）で同じファイルを使う
 // 試作は本番と同じサイトなので、保存の名前に「lab.」を付けて本番の chat.* には書き込まない。通知も登録しない
 const IS_LAB = /\/lab\//.test(location.pathname);
-const APP_VERSION = '第53版（2026-11-11 14:15:00 更新・GPU を起こす頼みの直しと原因の表示）' + (IS_LAB ? '【試作】' : '');
+const APP_VERSION = '第54版（2026-11-11 14:55:00 更新・残った通話を片付ける・横向きの通話画面）' + (IS_LAB ? '【試作】' : '');
 if (IS_LAB) { document.title = '【試作】トーク（統合）'; const mt = document.querySelector('meta[name=apple-mobile-web-app-title]'); if (mt) mt.content = 'トーク試作'; }
 const $ = (id) => document.getElementById(id);
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
@@ -3083,7 +3093,7 @@ async function startOutgoing(c, test) { // test：必ず出るテスト発信（
   playRingback();
   const gpuT0 = Date.now(), warm = warmGPU(test ? 180000 : 90000); // テストは3分まで待って、起きるまでの秒数を出す（第50版）
   let r;
-  try { r = await api('POST', '/call/start', { charId: c.id, test: !!test }); }
+  try { r = await api('POST', '/call/start', { charId: c.id, test: !!test, force: true }); } // force：残っている通話を片付けてからかける（第54版）
   catch (e) { toast(e.message); closeCallScreen(); return; }
   if (r.test) toast(`テスト：ふだんなら${r.test.wouldAnswer ? '出ていました' : '出ませんでした'}${r.test.reason ? '（' + r.test.reason + '）' : ''}${r.test.now ? '。今の様子：' + r.test.now : ''}`, 9000);
   if (!CALL.cur) { api('POST', '/call/decline', { id: r.call.id }).catch(() => {}); return; }
@@ -3307,7 +3317,7 @@ $('edCallTest').onclick = async () => {
   if (!c) return;
   if (!c.voice) { toast('先に「電話の声」を入れて保存してください'); return; }
   try {
-    await api('POST', '/call/test', { charId: c.id });
+    await api('POST', '/call/test', { charId: c.id, force: !CALL.cur });
     toast('GPU を起こしてから着信します（30秒〜1分）。このまま待ってください', 5000);
     for (let i = 0; i < 24 && !CALL.cur; i++) { await sleep(5000); await sync(); }
   } catch (e) { toast(e.message); }

@@ -85,6 +85,16 @@ ok(ai.pop().sch.includes('reason'), 'answer schema asks for reason');
 r = await call('POST', '/call/connect', { id: r.call.id });
 ok(r.answered && r.call.status === 'active', 'test call always answered');
 await call('POST', '/call/end', { id: r.call.id, by: 'me' }); await flush();
+// ---- 残った通話（第54版）：force で片付けてからかけられる
+answer.ans = { answer: true, reason: '手が空いている', after: 'none', line: '' };
+r = await call('POST', '/call/start', { charId: c.id });
+r = await call('POST', '/call/connect', { id: r.call.id });
+const stale = r.call.id;
+try { await call('POST', '/call/start', { charId: c.id }); ok(false, 'busy without force → 409'); } catch (e) { ok(e.status === 409, 'busy without force → 409'); }
+r = await call('POST', '/call/start', { charId: c.id, force: true }); await flush();
+ok(r.call && r.call.id !== stale && !(await call('GET', '/sync?since=0')).calls.some((x) => x.id === stale), 'force clears the stale active call');
+await call('POST', '/call/decline', { id: r.call.id }).catch(() => {});
+for (const x of (await call('GET', '/sync?since=0')).calls) DB.raw.prepare('DELETE FROM kv WHERE k=?').run('call:' + x.id);
 answer.ans = { answer: false, after: 'callback', line: '' };
 
 // ---- 着信（テスト）：GPU を起こしてから鳴らす・Bark は着信音を鳴らし続ける

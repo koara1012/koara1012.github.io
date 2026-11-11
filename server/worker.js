@@ -14,7 +14,7 @@
 //    ・Cron トリガー  * * * * *  （毎分。実際に動くのは13分おき）
 // =====================================================================
 
-const VERSION = '第53版（2026-11-11 14:15:00 更新・GPU を起こす頼みの直しと原因の表示）';
+const VERSION = '第54版（2026-11-11 14:55:00 更新・残った通話を片付ける・横向きの通話画面）';
 const DEFAULT_MODEL = 'gemini-flash-latest';
 const DEFAULT_GROK_MODEL = 'grok-4.7';                 // X（Twitter）の Grok と同じ最新世代
 const FALLBACK_GROK_MODEL = 'grok-4-fast-non-reasoning'; // 上が使えないときの予備
@@ -462,6 +462,7 @@ async function route(key, url, body, env, ctx) {
       if (!phoneChar(c)) throw new HttpError(400, 'このキャラには声の名前がないので、電話は使えません');
       const st = await getSettings(env);
       if (!phoneOn(st)) throw new HttpError(400, '電話はオフになっています（設定）');
+      if (body.force) await clearStaleCalls(env); // アプリは通話していない＝残っている通話は切れたもの（第54版）
       const calls = await listCalls(env);
       const busy = busyCall(calls);
       if (busy && busy.status === 'active') throw new HttpError(409, 'いまは別の電話中です');
@@ -555,6 +556,7 @@ async function route(key, url, body, env, ctx) {
       const c = await omoteChar(env, body.charId);
       if (!phoneChar(c)) throw new HttpError(400, 'このキャラには声の名前がありません');
       const st = await getSettings(env);
+      if (body.force) await clearStaleCalls(env);
       if (busyCall(await listCalls(env))) throw new HttpError(409, 'いまは別の電話中です');
       const cl = { id: newCallId(), charId: c.id, members: [c.id], dir: 'in', status: 'warming', created: Date.now(), why: 'ring', transcript: [] };
       await putCall(env, cl);
@@ -2271,6 +2273,18 @@ async function getCall(env, id) {
 const putCall = (env, cl) => kvSet(env, 'call:' + cl.id, cl);
 const delCall = (env, id) => env.DB.prepare('DELETE FROM kv WHERE k=?').bind('call:' + id).run();
 const callPublic = (cl) => ({ id: cl.id, charId: cl.charId, members: cl.members, dir: cl.dir, status: cl.status, created: cl.created, ringAt: cl.ringAt || 0, answeredAt: cl.answeredAt || 0, ringUntil: cl.ringAt ? cl.ringAt + CALL_RING_MS + CALL_GRACE_MS : 0 });
+// アプリが「今は通話していない」と言ったときに、残っている通話（画面が固まった・アプリを閉じたなどで切れなかったもの）を片付ける。
+// 話していた通話は、ふつうに切ったときと同じく記録とまとめを残す（第54版）
+async function clearStaleCalls(env) {
+  const chars = await loadChars(env);
+  for (const cl of await listCalls(env)) {
+    if (!['active', 'dialing', 'ringing', 'warming'].includes(cl.status)) continue;
+    if (cl.status === 'ringing' || cl.status === 'warming') { if (Date.now() - (cl.ringAt || cl.created) < CALL_RING_MS + CALL_GRACE_MS) continue; } // 鳴っている途中の着信は残す
+    const c = chars.find((x) => x.id === cl.charId);
+    if (cl.status === 'active' && c) await finishCall(env, cl, c, { by: 'me' });
+    else await delCall(env, cl.id);
+  }
+}
 const busyCall = (calls) => calls.find((x) => ['warming', 'ringing', 'dialing', 'active'].includes(x.status));
 async function warmTTS(env, st, ms = 20e3) { // GPU を起こす（返事が来れば起きている）
   if (!st.ttsUrl) return true; // 住所が分からないときは、起こさずに鳴らす（声は遅れるかも）

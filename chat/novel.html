@@ -317,13 +317,15 @@ body.rotmode #rotwrap{transform:var(--RT)}
 <script>
 'use strict';
 /* ====== 版 ====== */
-const VERSION = { no: 26, at: '2026-11-11 12:45:00' };
+const VERSION = { no: 27, at: '2026-11-11 14:15:00' };
 const VERSION_TEXT = `${/\/lab\//.test(location.pathname) ? '試作・' : ''}統合 第${VERSION.no}回（${VERSION.at} 更新・akari.html 第6回がもと）`;
 
 /* ====== 改善ログ（他のAIへの引き継ぎ用）======
    改善のたびに「## 第〜回」を先頭側へ追記し、概要も最新に保つ */
 const DEV_LOG = `# 朱里ノベル 統合の試作（lab/novel.html） 改善ログ
 ※ 本番 akari.html 第6回をもとにした試作。保存先は本番と分けている（localStorage lab.settings / lab.logs、IndexedDB akariLab）。
+## 統合 第27回（2026-11-11 14:15:00）
+- GPU を起こし続ける /health の頼みから { cache:'no-store' } を外し、?t= で毎回ちがう住所に（Safari では余計な見出しが付いて CORS の前の確認で弾かれ、起こし続けられていなかったかもしれない。LINE風アプリ第53版と同じ直し）
 ## 統合 第26回（2026-11-11 12:45:00）
 - 声の名前が無いと言われたら、GPU を起こし続けるのをやめる（ttsLastUse=0）。新しく足した声は、動いている GPU が一度止まって起き直すまで使えないのに、［▶ 声を試す］を押すたびに起こし続けて、いつまでも古い一覧のままになっていた。エラーの文にも「足したばかりなら、ノベル画面を閉じて1分待つ」を出す
 ## 統合 第25回（2026-11-10 06:00:00）
@@ -899,7 +901,7 @@ let ttsWarmAt = 0, ttsWakeToastAt = 0, ttsLastUse = 0;
 // アプリを閉じる・画面を消すと止まるので、GPU も30秒で止まる（料金の節約）
 setInterval(() => {
   if (document.visibilityState !== 'visible' || !S.ttsOn || !ttsBase() || Date.now() - ttsLastUse > 240000) return;
-  fetch(ttsBase() + '/health', { cache:'no-store' }).catch(() => {});
+  fetch(ttsBase() + '/health?t=' + Date.now()).catch(() => {});
 }, 20000);
 function ttsEnqueue(fn){ const p = ttsQueue.catch(() => {}).then(fn); ttsQueue = p.catch(() => {}); return p; }   // パソコンも Modal も1つずつ作るので、こちらも1列に並べる
 const ttsIsBad = v => { const t = ttsBad.get(v); return !!t && Date.now() - t < 600000; };
@@ -968,7 +970,7 @@ function ttsWarm(){   // 考えている間に GPU を起こしておく（返�
   if (ttsReady()) ttsLastUse = Date.now();
   if (!ttsReady() || Date.now() - ttsWarmAt < 120000) return;
   ttsWarmAt = Date.now();
-  fetch(ttsBase() + '/health', { cache:'no-store' }).catch(() => {});
+  fetch(ttsBase() + '/health?t=' + Date.now()).catch(() => {});
 }
 async function ttsPlayLine(line, st){
   ttsStop(); if (!ttsReady()) return;

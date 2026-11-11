@@ -137,6 +137,26 @@ ok(r.ringMs === 25000 && !r.call.members.length, 'nobody → long ring');
 r = await call('POST', '/gcall/connect', { id: r.call.id });
 ok(!r.answered && r.message.kind === 'callout' && r.message.charId === g.id, 'nobody answered → callout record');
 
+// ---- 第58版：GPU を長く待っている呼び出しは消さない（ping が来ていれば）・つなぐときの失敗は記録に残す
+r = await call('POST', '/gcall/start', { groupId: g.id, test: true });
+kvc = JSON.parse(DB.raw.prepare('SELECT v FROM kv WHERE k=?').get('call:' + r.call.id).v);
+kvc.created = Date.now() - 4 * 60e3; DB.raw.prepare('UPDATE kv SET v=? WHERE k=?').run(JSON.stringify(kvc), 'call:' + r.call.id);
+await call('POST', '/call/ping', { id: r.call.id });
+await W.scheduled({}, env, ctx); await flush();
+ok(!!DB.raw.prepare('SELECT 1 FROM kv WHERE k=?').get('call:' + r.call.id), 'dialing call kept while app pings (long GPU wake)');
+kvc = JSON.parse(DB.raw.prepare('SELECT v FROM kv WHERE k=?').get('call:' + r.call.id).v);
+kvc.lastAt = Date.now() - 3 * 60e3; DB.raw.prepare('UPDATE kv SET v=? WHERE k=?').run(JSON.stringify(kvc), 'call:' + r.call.id);
+await W.scheduled({}, env, ctx); await flush();
+ok(!DB.raw.prepare('SELECT 1 FROM kv WHERE k=?').get('call:' + r.call.id), 'dialing call removed when app stopped pinging');
+try { await call('POST', '/gcall/connect', { id: r.call.id }); ok(false, 'connect after removed'); } catch (e) { ok(e.status === 409 && e.message.includes('途中で切れて'), 'connect after removed: clear message'); }
+const saveReply = answer.reply;
+answer.reply = { lines: [], wait_user: false };
+r = await call('POST', '/gcall/start', { groupId: g.id, test: true });
+try { await call('POST', '/gcall/connect', { id: r.call.id }); ok(false, 'connect AI failure'); } catch (e) { ok(e.status === 500, 'connect AI failure returns error'); }
+const lgs = JSON.parse(DB.raw.prepare("SELECT v FROM kv WHERE k='log'").get().v);
+ok(lgs.some((x) => x.msg.includes('最初の言葉')) && !DB.raw.prepare('SELECT 1 FROM kv WHERE k=?').get('call:' + r.call.id), 'connect AI failure logged and call removed');
+answer.reply = saveReply;
+
 // ---- 放置された通話は毎分の見回りで終わる・残った通話の片付け
 r = await call('POST', '/gcall/start', { groupId: g.id, test: true });
 await call('POST', '/gcall/connect', { id: r.call.id });

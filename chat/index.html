@@ -966,7 +966,7 @@ body.ura #list.tlMode{background:#efe9f0}
 // 置き場所で切り替える：/lab/（試作）と /chat/（本番）で同じファイルを使う
 // 試作は本番と同じサイトなので、保存の名前に「lab.」を付けて本番の chat.* には書き込まない。通知も登録しない
 const IS_LAB = /\/lab\//.test(location.pathname);
-const APP_VERSION = '第58版（2026-11-12 02:40:00 更新・グループ通話：つながる前のアイコンを薄くしない）' + (IS_LAB ? '【試作】' : '');
+const APP_VERSION = '第58版（2026-11-12 02:55:00 更新・グループ通話：GPU を待つ間に呼び出しが消える・つながらない理由を出す）' + (IS_LAB ? '【試作】' : '');
 if (IS_LAB) { document.title = '【試作】トーク（統合）'; const mt = document.querySelector('meta[name=apple-mobile-web-app-title]'); if (mt) mt.content = 'トーク試作'; }
 const $ = (id) => document.getElementById(id);
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
@@ -3611,6 +3611,10 @@ async function startGroupCall(g, test, from, old) { // from：続きから話す
   const cancel = () => api('POST', '/gcall/end', { id: r.call.id }).catch(() => {});
   if (!CALL.cur) { cancel(); return; }
   CALL.cur.id = r.call.id; CALL.cur.invited = r.call.invited || CALL.cur.invited; CALL.cur.old = old || [];
+  const pinger = setInterval(() => api('POST', '/call/ping', { id: r.call.id }).catch(() => {}), 20000); // GPU を待つ間も、呼び出しが消されないように（第58版）
+  try { await gcDial(g, test, r, warm, gpuT0, cancel); } finally { clearInterval(pinger); }
+}
+async function gcDial(g, test, r, warm, gpuT0, cancel) {
   await sleep(r.ringMs);
   if (!CALL.cur) { cancel(); return; }
   if (r.call.members.length) {
@@ -3631,7 +3635,11 @@ async function startGroupCall(g, test, from, old) { // from：続きから話す
     const absent = (r.absent || []).map((x) => (charById(x.id) || {}).name).filter(Boolean);
     if (absent.length) toast(`${absent.join('・')}さんは出られませんでした`, 4000);
     beginGroupActive(g, d);
-  } catch (e) { toast(e.message); closeCallScreen(); }
+  } catch (e) { // 第58版：何が起きたか分かるように、通話画面に理由を出してから閉じる
+    stopTones(); logDiag('グループ通話につなげませんでした: ' + e.message);
+    setStat('つながりませんでした'); toast('つながりませんでした：' + e.message, 12000);
+    await sleep(3500); closeCallScreen();
+  }
 }
 function beginGroupActive(g, d) {
   const cur = CALL.cur; if (!cur) return;

@@ -14,7 +14,7 @@
 //    ・Cron トリガー  * * * * *  （毎分。実際に動くのは13分おき）
 // =====================================================================
 
-const VERSION = '第58版（2026-11-12 02:40:00 更新・グループ通話：つながる前のアイコンを薄くしない）';
+const VERSION = '第58版（2026-11-12 02:55:00 更新・グループ通話：GPU を待つ間に呼び出しが消える・つながらない理由を出す）';
 const DEFAULT_MODEL = 'gemini-flash-latest';
 const DEFAULT_GROK_MODEL = 'grok-4.7';                 // X（Twitter）の Grok と同じ最新世代
 const FALLBACK_GROK_MODEL = 'grok-4-fast-non-reasoning'; // 上が使えないときの予備
@@ -558,7 +558,7 @@ async function route(key, url, body, env, ctx) {
     }
     case 'POST /call/ping': { // 通話中：まだつながっている（放置で切れないように）
       const cl = await getCall(env, body.id);
-      if (cl.status === 'active') { cl.lastAt = Date.now(); await putCall(env, cl); }
+      if (cl.status === 'active' || (cl.group && cl.status === 'dialing')) { cl.lastAt = Date.now(); await putCall(env, cl); } // グループ通話は、GPU を待っている呼び出し中も（第58版）
       return json({ call: callPublic(cl) });
     }
     case 'POST /call/end': { // 切った（by: me / char）。内容をまとめて記憶に・トークに記録
@@ -664,7 +664,8 @@ async function route(key, url, body, env, ctx) {
       return json(out);
     }
     case 'POST /gcall/connect': { // 呼び出しが終わった：出た子がいれば最初の言葉、だれも出なければ記録だけ
-      const cl = await getCall(env, body.id);
+      const cl = await kvGet(env, 'call:' + String(body.id || ''), null);
+      if (!cl) { await log(env, 'グループ通話：つなぐ前に呼び出しが消えていました'); throw new HttpError(409, '呼び出しが途中で切れてしまいました（声のサーバーを待つのが長すぎたかもしれません）。もう一度かけてください'); }
       if (!cl.group || cl.dir !== 'out' || cl.status !== 'dialing') throw new HttpError(409, 'この通話はもう終わっています');
       const g = await getOGroup(env, cl.group);
       if (!cl.members.length || (await getSettings(env)).omotePaused || g.paused) {
@@ -673,7 +674,9 @@ async function route(key, url, body, env, ctx) {
       }
       cl.status = 'active'; cl.answeredAt = Date.now(); cl.lastAt = Date.now();
       await putCall(env, cl);
-      const r = await keep(ctx, gcallReply(env, cl, g));
+      let r;
+      try { r = await keep(ctx, gcallReply(env, cl, g)); }
+      catch (e) { await delCall(env, cl.id); await log(env, `グループ通話（${g.name}）の最初の言葉: ${e.message}`); throw e; } // 第58版：失敗を記録に残す
       cl.batch = (cl.batch || 0) + 1;
       cl.transcript.push(...r.lines.map((x) => ({ who: x.id, text: x.text, at: Date.now(), b: cl.batch })));
       await putCall(env, cl);
@@ -691,7 +694,9 @@ async function route(key, url, body, env, ctx) {
       if (cl.transcript.length > 400) cl.transcript = cl.transcript.slice(-300);
       await putCall(env, cl);
       if ((await getSettings(env)).omotePaused || g.paused) return json({ lines: [], paused: true });
-      const r = await keep(ctx, gcallReply(env, cl, g, !text ? (body.auto ? 'auto' : true) : false)); // auto：［勝手に話す］がオン（第56版）
+      let r;
+      try { r = await keep(ctx, gcallReply(env, cl, g, !text ? (body.auto ? 'auto' : true) : false)); } // auto：［勝手に話す］がオン（第56版）
+      catch (e) { await log(env, `グループ通話（${g.name}）の返事: ${e.message}`); throw e; }
       const now2 = await kvGet(env, 'call:' + cl.id, null);
       if (!now2) return json({ lines: [], ended: true });
       now2.batch = (now2.batch || 0) + 1;
@@ -2505,7 +2510,7 @@ async function runCalls(env) {
   for (const cl of await listCalls(env)) {
     if (cl.group) { // グループ通話（第55版）：呼び出しのまま・放置
       try {
-        if (cl.status === 'dialing' && now - cl.created > 3 * MIN) await delCall(env, cl.id);
+        if (cl.status === 'dialing' && now - (cl.lastAt || cl.created) > 2 * MIN) await delCall(env, cl.id); // 第58版：アプリは GPU を待つ間も20秒ごとに知らせる。前は作ってから3分で消していて、テスト通話（GPU を3分まで待つ）がつながる直前に消えることがあった
         else if (cl.status === 'active' && now - (cl.lastAt || cl.answeredAt || cl.created) > CALL_IDLE_END) await finishGroupCall(env, cl, { by: 'idle' });
       } catch (e) { await log(env, `グループ通話: ${e.message}`); }
       continue;

@@ -869,7 +869,7 @@ body.ura #list.tlMode{background:#efe9f0}
 // 置き場所で切り替える：/lab/（試作）と /chat/（本番）で同じファイルを使う
 // 試作は本番と同じサイトなので、保存の名前に「lab.」を付けて本番の chat.* には書き込まない。通知も登録しない
 const IS_LAB = /\/lab\//.test(location.pathname);
-const APP_VERSION = '第50版（2026-11-11 14:00:00 更新・テスト電話は GPU を3分待つ）' + (IS_LAB ? '【試作】' : '');
+const APP_VERSION = '第51版（2026-11-11 14:10:00 更新・着信が鳴っている間も GPU を起こし続ける）' + (IS_LAB ? '【試作】' : '');
 if (IS_LAB) { document.title = '【試作】トーク（統合）'; const mt = document.querySelector('meta[name=apple-mobile-web-app-title]'); if (mt) mt.content = 'トーク試作'; }
 const $ = (id) => document.getElementById(id);
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
@@ -3103,6 +3103,10 @@ function showIncoming(call) {
   CALL.cur = { id: call.id, charId: c.id, dir: 'in', gpuStart: call.ringAt || Date.now(), muted: false };
   callScreen(c, 'incoming'); setStat('着信'); $('cvTime').textContent = '';
   playRingtone();
+  // 鳴っている間も GPU を起こし続ける（第51版）。サーバーは起こしてから鳴らすが、Modal は30秒で止まるので、遅れて出ると最初の声が遅くなっていた
+  clearInterval(CALL.hb);
+  const wake = () => { const u = ttsCfg().url; if (u) fetch(u + '/health', { cache: 'no-store' }).catch(() => {}); };
+  wake(); CALL.hb = setInterval(wake, 10000);
   CALL.ringTo = setTimeout(async () => { if (CALL.cur && CALL.cur.id === call.id && CALL.screenMode === 'incoming') { stopTones(); setStat('不在着信'); await sleep(1800); closeCallScreen(); sync(); } }, Math.max(3000, (call.ringUntil || Date.now() + 40000) - Date.now()));
 }
 async function answerCall() {
@@ -3125,6 +3129,7 @@ function beginActive(call, lines, hangup) {
   setInputMode(store.get('call.mode', 'text'));
   // GPU を起こし続ける（20秒ごと）・サーバーに「つながっている」と伝える（60秒ごと）
   let n = 0;
+  clearInterval(CALL.hb);
   CALL.hb = setInterval(() => { const u = ttsCfg().url; if (u) fetch(u + '/health', { cache: 'no-store' }).catch(() => {}); if (++n % 3 === 0 && CALL.cur) api('POST', '/call/ping', { id: CALL.cur.id }).catch(() => {}); }, 20000);
   speakLines(lines || []).then(() => { if (hangup) endCall('char'); });
 }

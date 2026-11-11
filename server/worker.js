@@ -14,7 +14,7 @@
 //    ・Cron トリガー  * * * * *  （毎分。実際に動くのは13分おき）
 // =====================================================================
 
-const VERSION = '第57版（2026-11-12 00:40:00 更新・グループ通話の会話履歴・続きから話す）';
+const VERSION = '第58版（2026-11-12 02:40:00 更新・グループ通話：つながる前のアイコンを薄くしない）';
 const DEFAULT_MODEL = 'gemini-flash-latest';
 const DEFAULT_GROK_MODEL = 'grok-4.7';                 // X（Twitter）の Grok と同じ最新世代
 const FALLBACK_GROK_MODEL = 'grok-4-fast-non-reasoning'; // 上が使えないときの予備

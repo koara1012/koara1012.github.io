@@ -14,7 +14,7 @@
 //    ・Cron トリガー  * * * * *  （毎分。実際に動くのは13分おき）
 // =====================================================================
 
-const VERSION = '第52版（2026-11-11 14:20:00 更新・GPU を起こすときは長く待つ1回の頼みで）';
+const VERSION = '第53版（2026-11-11 14:15:00 更新・GPU を起こす頼みの直しと原因の表示）';
 const DEFAULT_MODEL = 'gemini-flash-latest';
 const DEFAULT_GROK_MODEL = 'grok-4.7';                 // X（Twitter）の Grok と同じ最新世代
 const FALLBACK_GROK_MODEL = 'grok-4-fast-non-reasoning'; // 上が使えないときの予備

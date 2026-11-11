@@ -869,7 +869,7 @@ body.ura #list.tlMode{background:#efe9f0}
 // 置き場所で切り替える：/lab/（試作）と /chat/（本番）で同じファイルを使う
 // 試作は本番と同じサイトなので、保存の名前に「lab.」を付けて本番の chat.* には書き込まない。通知も登録しない
 const IS_LAB = /\/lab\//.test(location.pathname);
-const APP_VERSION = '第49版（2026-11-11 13:45:00 更新・必ず出るテスト電話）' + (IS_LAB ? '【試作】' : '');
+const APP_VERSION = '第50版（2026-11-11 14:00:00 更新・テスト電話は GPU を3分待つ）' + (IS_LAB ? '【試作】' : '');
 if (IS_LAB) { document.title = '【試作】トーク（統合）'; const mt = document.querySelector('meta[name=apple-mobile-web-app-title]'); if (mt) mt.content = 'トーク試作'; }
 const $ = (id) => document.getElementById(id);
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
@@ -3069,7 +3069,7 @@ async function startOutgoing(c, test) { // test：必ず出るテスト発信（
   CALL.cur = { charId: c.id, dir: 'out', gpuStart: Date.now(), muted: false };
   callScreen(c, 'dial'); setStat('呼び出し中…'); $('cvTime').textContent = '';
   playRingback();
-  const warm = warmGPU(90000);
+  const gpuT0 = Date.now(), warm = warmGPU(test ? 180000 : 90000); // テストは3分まで待って、起きるまでの秒数を出す（第50版）
   let r;
   try { r = await api('POST', '/call/start', { charId: c.id, test: !!test }); }
   catch (e) { toast(e.message); closeCallScreen(); return; }
@@ -3078,9 +3078,12 @@ async function startOutgoing(c, test) { // test：必ず出るテスト発信（
   CALL.cur.id = r.call.id;
   await sleep(r.ringMs);
   if (!CALL.cur) { api('POST', '/call/decline', { id: r.call.id }).catch(() => {}); return; }
-  if (r.ringMs < 25000 && !(await warm)) { // 声のサーバー（GPU）が起きない：無料分を使い切った・止まっているなど
+  if (test) setStat('声のサーバー（GPU）を起こしています…');
+  const warmOk = r.ringMs < 25000 ? await warm : true;
+  if (test && warmOk) toast(`テスト：声のサーバーは${Math.round((Date.now() - gpuT0) / 1000)}秒で起きました`, 5000);
+  if (r.ringMs < 25000 && !warmOk) { // 声のサーバー（GPU）が起きない：無料分を使い切った・止まっているなど
     api('POST', '/call/decline', { id: r.call.id }).catch(() => {});
-    if (test) toast('テスト：声のサーバー（GPU）が90秒たっても起きませんでした。Modal の様子を見てください', 8000);
+    if (test) toast('テスト：声のサーバー（GPU）が3分たっても起きませんでした。Modal の Containers に新しい行があるか見てください', 9000);
     stopTones(); setStat('ただいま電話に出ることができません'); await sleep(2200); closeCallScreen(); return;
   }
   if (!CALL.cur) return;

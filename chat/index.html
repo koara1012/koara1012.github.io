@@ -869,7 +869,7 @@ body.ura #list.tlMode{background:#efe9f0}
 // 置き場所で切り替える：/lab/（試作）と /chat/（本番）で同じファイルを使う
 // 試作は本番と同じサイトなので、保存の名前に「lab.」を付けて本番の chat.* には書き込まない。通知も登録しない
 const IS_LAB = /\/lab\//.test(location.pathname);
-const APP_VERSION = '第51版（2026-11-11 14:10:00 更新・着信が鳴っている間も GPU を起こし続ける）' + (IS_LAB ? '【試作】' : '');
+const APP_VERSION = '第52版（2026-11-11 14:20:00 更新・GPU を起こすときは長く待つ1回の頼みで）' + (IS_LAB ? '【試作】' : '');
 if (IS_LAB) { document.title = '【試作】トーク（統合）'; const mt = document.querySelector('meta[name=apple-mobile-web-app-title]'); if (mt) mt.content = 'トーク試作'; }
 const $ = (id) => document.getElementById(id);
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
@@ -2997,7 +2997,9 @@ async function warmGPU(maxMs = 120000) { // 声のサーバー（GPU）を起こ
   const cfg = ttsCfg(); if (!cfg.url) return true;
   const t0 = Date.now();
   while (Date.now() - t0 < maxMs) {
-    try { const r = await fetch(cfg.url + '/health', { cache: 'no-store', signal: AbortSignal.timeout(25000) }); if (r.ok) return true; if (r.status >= 400 && r.status < 500) return false; } catch (_) {}
+    // 1回の頼みで長く待つ（第52版。ノベル画面の読み上げと同じ。25秒で切って頼み直すと、Modal の起動を待てていないようだった）
+    const left = maxMs - (Date.now() - t0);
+    try { const r = await fetch(cfg.url + '/health', { cache: 'no-store', signal: AbortSignal.timeout(Math.max(5000, Math.min(140000, left))) }); if (r.ok) return true; if (r.status >= 400 && r.status < 500) return false; } catch (_) {}
     await sleep(2000);
   }
   return false;

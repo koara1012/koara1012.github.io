@@ -85,7 +85,8 @@ image = (
     gpu=GPU,
     volumes={HF_CACHE: hf_cache, VOICE_VOL_PATH: voices},
     secrets=[modal.Secret.from_name("irodori-tts")],   # IRODORI_API_KEY=合言葉
-    max_containers=1,                 # GPU を2台以上起こさない（料金が倍にならないように）
+    max_containers=2,                 # ふだんは1台（声の頼みは1台で8つまで同時に受ける）。2026-11-11：1 にしていたら、GPU が一度止まったあと
+                                      # 置き直すまで次が起動せず、頼みが Pending のままになった（止まった1台が残っている扱いになった疑い）ので、2 にして逃げ道を作る
     scaledown_window=SCALEDOWN_SECONDS,
     timeout=600,                      # 1回目はモデルのダウンロードで長くかかるので余裕を持たせる
 )

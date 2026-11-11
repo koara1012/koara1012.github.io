@@ -317,13 +317,15 @@ body.rotmode #rotwrap{transform:var(--RT)}
 <script>
 'use strict';
 /* ====== 版 ====== */
-const VERSION = { no: 25, at: '2026-11-10 06:00:00' };
+const VERSION = { no: 26, at: '2026-11-11 12:45:00' };
 const VERSION_TEXT = `${/\/lab\//.test(location.pathname) ? '試作・' : ''}統合 第${VERSION.no}回（${VERSION.at} 更新・akari.html 第6回がもと）`;
 
 /* ====== 改善ログ（他のAIへの引き継ぎ用）======
    改善のたびに「## 第〜回」を先頭側へ追記し、概要も最新に保つ */
 const DEV_LOG = `# 朱里ノベル 統合の試作（lab/novel.html） 改善ログ
 ※ 本番 akari.html 第6回をもとにした試作。保存先は本番と分けている（localStorage lab.settings / lab.logs、IndexedDB akariLab）。
+## 統合 第26回（2026-11-11 12:45:00）
+- 声の名前が無いと言われたら、GPU を起こし続けるのをやめる（ttsLastUse=0）。新しく足した声は、動いている GPU が一度止まって起き直すまで使えないのに、［▶ 声を試す］を押すたびに起こし続けて、いつまでも古い一覧のままになっていた。エラーの文にも「足したばかりなら、ノベル画面を閉じて1分待つ」を出す
 ## 統合 第25回（2026-11-10 06:00:00）
 - Modal の GPU は最後に使ってから30秒で止まる設定に（tts-modal の SCALEDOWN_SECONDS=30。ユーザーが 4-deploy.bat を押したら有効）。ノベル画面は、トークを開いて話している間（最後に声を頼んだ・話しかけてから4分）だけ20秒ごとに /health を叩いて起こし続ける（ttsLastUse）。アプリを閉じる・画面を消すと叩かなくなるので30秒で止まる。電話（LINE風アプリ・第47版）も通話中は20秒ごとに起こす。
 
@@ -944,8 +946,8 @@ async function ttsRequest(voice, text, fmt){
     const t = await r.text().catch(() => '');
     if (fmt !== 'wav' && /ffmpeg/i.test(t)){ S.ttsFmt = 'wav'; saveS(); log('warn', '声のサーバーに FFmpeg が無いので、WAV で受け取ります（データが大きくなります）'); return ttsRequest(voice, text, 'wav'); }
     const badVoice = r.status !== 401 && (r.status === 404 || /voice/i.test(t));
-    if (badVoice) ttsBad.set(voice, Date.now());   // 同じ名前で何度も頼まない（10分。設定を変えたら解除）
-    throw new Error(`声のサーバー ${r.status}：${t.slice(0, 200)}${r.status === 401 ? '（合言葉が違います）' : badVoice ? `（声の名前「${voice}」を確かめてください。10分は頼みません）` : ''}`);
+    if (badVoice){ ttsBad.set(voice, Date.now()); ttsLastUse = 0; }   // 同じ名前で何度も頼まない（10分。設定を変えたら解除）。足したばかりの声なら GPU が起き直すまで使えないので、起こし続けるのもやめる（第26回）
+    throw new Error(`声のサーバー ${r.status}：${t.slice(0, 200)}${r.status === 401 ? '（合言葉が違います）' : badVoice ? `（声の名前「${voice}」を確かめてください。足したばかりの声なら、ノベル画面を閉じて1分待ってからもう一度。10分は頼みません）` : ''}`);
   }
   const buf = await r.arrayBuffer();
   const c = ensureCtx(); if (!c) throw new Error('この端末では音を鳴らせません');

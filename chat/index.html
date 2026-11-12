@@ -304,6 +304,8 @@ body.ura #list.tlMode{background:#efe9f0}
 #cvHeard{width:100%;min-height:20px;text-align:center;color:#33506f;font-size:14px;margin-top:6px}
 #cvBtns{display:flex;gap:14px;width:100%;max-width:440px;flex:none;margin-top:auto;position:relative;z-index:2}
 #cvInput,#cvSub{position:relative;z-index:2}#cvSubToggle{z-index:3}
+#cvFxToggle{position:absolute;top:calc(env(safe-area-inset-top) + 10px);left:12px;z-index:3;border:0;border-radius:14px;background:rgba(255,255,255,.22);color:#fff;font-size:12px;padding:5px 10px}
+#cvFxToggle.on{background:rgba(255,255,255,.9);color:#2a5596}
 /* 横向き（第54版）：丸い写真の波紋がボタンの上に重なって押せなくなっていた。横では写真を小さく、全体をスクロールできるように */
 @media (orientation:landscape) and (max-height:520px){
   #callView{overflow-y:auto;padding-top:calc(env(safe-area-inset-top) + 10px);padding-left:calc(env(safe-area-inset-left) + 18px);padding-right:calc(env(safe-area-inset-right) + 18px)}
@@ -880,6 +882,12 @@ body.ura #list.tlMode{background:#efe9f0}
       <div class="hint">この時間は、キャラから電話がかかってきません（あなたからはかけられます）。「通知と同じ」は、下の「静かな時間」と同じです。</div>
       <label class="chk" style="margin-top:8px"><input type="checkbox" id="stCallSubs"> 通話の字幕を出す</label>
       <label class="chk"><input type="checkbox" id="stVmSubs"> 留守電の字幕を出す</label>
+      <label class="chk" style="margin-top:8px"><input type="checkbox" id="stCallFx"> 通話の声を電話っぽくする（電話の音）</label>
+      <div class="t" style="margin-top:8px">電話の音の強さ</div>
+      <div class="seg" id="stCallFxLevel"><button data-v="light">ふつうの電話</button><button data-v="strong">古い電話・無線</button></div>
+      <div class="t" style="margin-top:8px">電話の音の雑音（サーッという音）</div>
+      <div class="seg" id="stCallFxNoise"><button data-v="off">なし</button><button data-v="low">小さめ</button><button data-v="high">大きめ</button></div>
+      <div class="hint">通話中に、画面の左上の［☎ 電話の音］でもオン・オフできます。iPhone の中だけで加工するので、声のサーバーの使用量は増えません（この iPhone にだけ保存）。</div>
       <div class="t" style="margin-top:10px" id="stRingName">着信音</div>
       <div class="btns"><button class="btn sub" id="stRingPick">着信音のファイルを選ぶ</button><button class="btn sub" id="stRingTest">鳴らしてみる</button><button class="btn sub" id="stRingClear">電子音に戻す</button></div>
       <input type="file" id="stRingFile" accept="audio/*" hidden>
@@ -973,6 +981,7 @@ body.ura #list.tlMode{background:#efe9f0}
 <!-- 電話（第47版） -->
 <section id="callView" aria-label="電話">
   <button id="cvSubToggle">字幕 ON</button>
+  <button id="cvFxToggle">☎ 電話の音 OFF</button>
   <div class="cvName" id="cvName"></div>
   <div class="cvStat" id="cvStat"></div>
   <div class="cvTime" id="cvTime"></div>
@@ -996,7 +1005,7 @@ body.ura #list.tlMode{background:#efe9f0}
 // 置き場所で切り替える：/lab/（試作）と /chat/（本番）で同じファイルを使う
 // 試作は本番と同じサイトなので、保存の名前に「lab.」を付けて本番の chat.* には書き込まない。通知も登録しない
 const IS_LAB = /\/lab\//.test(location.pathname);
-const APP_VERSION = '第62版（2026-11-12 13:50:00 更新・裏のグループ通話も「ふつう／必ず全員出る」）' + (IS_LAB ? '【試作】' : '');
+const APP_VERSION = '第63版（2026-11-12 16:30:00 更新・通話の声を電話っぽくする）' + (IS_LAB ? '【試作】' : '');
 if (IS_LAB) { document.title = '【試作】トーク（統合）'; const mt = document.querySelector('meta[name=apple-mobile-web-app-title]'); if (mt) mt.content = 'トーク試作'; }
 const $ = (id) => document.getElementById(id);
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
@@ -3085,10 +3094,56 @@ function ac() {
 }
 function vGain() {
   const c = ac(); if (!c) return null;
-  if (!voiceGain) { voiceGain = c.createGain(); voiceGain.connect(c.destination); }
+  if (!voiceGain) { voiceGain = c.createGain(); fxRoute(); }
   voiceGain.gain.value = CALL.cur && CALL.cur.muted ? 0 : ttsCfg().vol;
+  fxNoiseSync();
   return voiceGain;
 }
+// ---- 電話の音（第63版）：通話の声を電話っぽくする。iPhone の中の Web Audio だけで加工（声のサーバーは関係なし）
+// 声：voiceGain → 低音を切る → 高音を切る → 中音を少し上げる → 少し割る → つぶす → 出力。雑音：白い雑音をループで、帯域をしぼって小さく（声とは別の道）
+const callFx = () => ({ on: store.get('call.fx', false), level: store.get('call.fxLevel', 'light'), noise: store.get('call.fxNoise', 'low') });
+const FX_LEVEL = {
+  light: { hp: 300, lp: 3400, q: 0.7, peak: 3, drive: 3, out: 0.48 },   // ふつうの電話（out：割る加工で小さい音が大きくなる分を戻して、素の声と同じくらいの大きさに）
+  strong: { hp: 550, lp: 2500, q: 1.4, peak: 7, drive: 18, out: 0.36 },  // 古い電話・無線
+};
+const FX_NOISE = { off: 0, low: 0.012, high: 0.035 };
+let fxNodes = [], fxNoise = null;
+function fxCurve(k) { const n = 1024, a = new Float32Array(n); for (let i = 0; i < n; i++) { const x = i / (n - 1) * 2 - 1; a[i] = (1 + k) * x / (1 + k * Math.abs(x)); } return a; }
+function fxRoute() { // 声の道をつなぎ直す（オン・オフ・強さを変えたとき）
+  const c = actx; if (!c || !voiceGain) return;
+  try { voiceGain.disconnect(); } catch (_) {}
+  for (const n of fxNodes) { try { n.disconnect(); } catch (_) {} }
+  fxNodes = [];
+  const f = callFx();
+  if (!f.on) { voiceGain.connect(c.destination); return; }
+  const L = FX_LEVEL[f.level] || FX_LEVEL.light;
+  const hp = c.createBiquadFilter(); hp.type = 'highpass'; hp.frequency.value = L.hp; hp.Q.value = L.q;
+  const hp2 = c.createBiquadFilter(); hp2.type = 'highpass'; hp2.frequency.value = L.hp; hp2.Q.value = 0.7;
+  const lp = c.createBiquadFilter(); lp.type = 'lowpass'; lp.frequency.value = L.lp; lp.Q.value = L.q;
+  const lp2 = c.createBiquadFilter(); lp2.type = 'lowpass'; lp2.frequency.value = L.lp; lp2.Q.value = 0.7;
+  const pk = c.createBiquadFilter(); pk.type = 'peaking'; pk.frequency.value = 1700; pk.Q.value = 1; pk.gain.value = L.peak;
+  const sh = c.createWaveShaper(); sh.curve = fxCurve(L.drive); sh.oversample = '2x';
+  const cp = c.createDynamicsCompressor(); cp.threshold.value = -24; cp.ratio.value = 6; cp.attack.value = 0.003; cp.release.value = 0.15;
+  const out = c.createGain(); out.gain.value = L.out;
+  fxNodes = [hp, hp2, lp, lp2, pk, sh, cp, out];
+  voiceGain.connect(hp); hp.connect(hp2); hp2.connect(lp); lp.connect(lp2); lp2.connect(pk); pk.connect(sh); sh.connect(cp); cp.connect(out); out.connect(c.destination);
+}
+function fxNoiseSync() { // 雑音：通話中（話している画面・留守電）で、電話の音がオン、消音していないときだけ
+  const c = actx; if (!c) return;
+  const f = callFx(), vol = FX_NOISE[f.noise] || 0;
+  const want = f.on && vol > 0 && (CALL.screenMode === 'active' || CALL.screenMode === 'vm') && !(CALL.cur && CALL.cur.muted);
+  if (!want) { if (fxNoise) { try { fxNoise.src.stop(); } catch (_) {} fxNoise = null; } return; }
+  const v = vol * ttsCfg().vol * (f.level === 'strong' ? 1.4 : 1);
+  if (fxNoise) { fxNoise.g.gain.value = v; return; }
+  const len = c.sampleRate * 2, buf = c.createBuffer(1, len, c.sampleRate), d = buf.getChannelData(0);
+  for (let i = 0; i < len; i++) d[i] = Math.random() * 2 - 1;
+  const src = c.createBufferSource(); src.buffer = buf; src.loop = true;
+  const bp = c.createBiquadFilter(); bp.type = 'bandpass'; bp.frequency.value = 2000; bp.Q.value = 0.6;
+  const g = c.createGain(); g.gain.value = v;
+  src.connect(bp); bp.connect(g); g.connect(c.destination); src.start();
+  fxNoise = { src, g };
+}
+function fxSync() { fxRoute(); fxNoiseSync(); const on = callFx().on; $('cvFxToggle').textContent = on ? '☎ 電話の音 ON' : '☎ 電話の音 OFF'; $('cvFxToggle').classList.toggle('on', on); }
 let toneTimer = null, toneNodes = [];
 function stopTones() { clearInterval(toneTimer); toneTimer = null; for (const n of toneNodes) { try { n.stop(); } catch (_) {} } toneNodes = []; }
 function beep(freq, dur, at = 0, vol = 0.12, mod = 0) {
@@ -3191,6 +3246,7 @@ document.addEventListener('visibilitychange', () => { if (document.visibilitySta
 function callScreen(c, mode) { // mode: dial / incoming / active / vm
   CALL.screenMode = mode;
   keepAwake(true);
+  if (actx) fxSync(); else { const on = callFx().on; $('cvFxToggle').textContent = on ? '☎ 電話の音 ON' : '☎ 電話の音 OFF'; $('cvFxToggle').classList.toggle('on', on); }
   $('cvName').textContent = c.name;
   $('cvAv').innerHTML = cvAvatar(c);
   $('callView').className = 'on ' + mode;
@@ -3217,6 +3273,7 @@ function subLine(who, text) {
 function closeCallScreen() {
   CALL.screenMode = 'closed';
   keepAwake(false);
+  fxNoiseSync(); // 雑音を止める
   if (CALL.cur) clearTimeout(CALL.cur.contTimer);
   stopTones(); stopVoice(); micStop(true);
   clearInterval(CALL.clock); clearInterval(CALL.hb); clearTimeout(CALL.ringTo);
@@ -3229,6 +3286,7 @@ function toggleMute() {
   CALL.cur.muted = !CALL.cur.muted; vGain();
   $('cvMute').textContent = CALL.cur.muted ? '🔇 消音中' : '🔊 スピーカー';
 }
+$('cvFxToggle').onclick = () => { ac(); store.set('call.fx', !callFx().on); fxSync(); if ($('stCallFx')) $('stCallFx').checked = callFx().on; };
 $('cvSubToggle').onclick = () => {
   const vm = CALL.screenMode === 'vm', k = vm ? 'vm.subs' : 'call.subs', v = !store.get(k, true);
   store.set(k, v); $('cvSub').hidden = !v; $('cvSubToggle').textContent = v ? '字幕 ON' : '字幕 OFF';
@@ -3442,6 +3500,9 @@ function renderPhoneSettings() {
   $('stPhoneQuiet').querySelectorAll('button').forEach((b) => b.classList.toggle('on', b.dataset.v === mode));
   $('stPhoneQBox').style.display = mode === 'custom' ? '' : 'none';
   $('stCallSubs').checked = callSubsOn(); $('stVmSubs').checked = vmSubsOn();
+  const fx = callFx(); $('stCallFx').checked = fx.on;
+  $('stCallFxLevel').querySelectorAll('button').forEach((b) => b.classList.toggle('on', b.dataset.v === fx.level));
+  $('stCallFxNoise').querySelectorAll('button').forEach((b) => b.classList.toggle('on', b.dataset.v === fx.noise));
   const cfg = ttsCfg();
   $('stPhoneVoice').textContent = cfg.url ? `声のサーバー：${cfg.url}（ノベル画面の「読み上げ」の設定を使います）` : '声のサーバーが未設定です。ノベル画面の 設定 →「読み上げ」で住所と合言葉を入れてください。';
   phoneIdb('get', 'ringtone').then((f) => { $('stRingName').textContent = f && f.name ? `着信音：${f.name}` : '着信音：アプリの電子音'; }).catch(() => {});
@@ -3458,6 +3519,12 @@ async function savePhoneSettings() {
 $('stPhoneOn').onchange = $('stPhoneAllOff').onchange = $('stPhoneQS').onchange = $('stPhoneQE').onchange = savePhoneSettings;
 $('stPhoneQuiet').addEventListener('click', (e) => { const b = e.target.closest('button'); if (!b) return; $('stPhoneQuiet').querySelectorAll('button').forEach((x) => x.classList.toggle('on', x === b)); savePhoneSettings(); });
 $('stCallSubs').onchange = () => store.set('call.subs', $('stCallSubs').checked);
+$('stCallFx').onchange = () => { store.set('call.fx', $('stCallFx').checked); fxSync(); };
+for (const [id, k] of [['stCallFxLevel', 'call.fxLevel'], ['stCallFxNoise', 'call.fxNoise']]) $(id).addEventListener('click', (e) => {
+  const b = e.target.closest('button'); if (!b) return;
+  $(id).querySelectorAll('button').forEach((x) => x.classList.toggle('on', x === b));
+  store.set(k, b.dataset.v); fxSync();
+});
 $('stVmSubs').onchange = () => store.set('vm.subs', $('stVmSubs').checked);
 $('stRingPick').onclick = () => $('stRingFile').click();
 $('stRingFile').onchange = async (e) => {

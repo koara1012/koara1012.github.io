@@ -306,6 +306,18 @@ body.ura #list.tlMode{background:#efe9f0}
 #cvInput,#cvSub{position:relative;z-index:2}#cvSubToggle{z-index:3}
 #cvFxToggle{position:absolute;top:calc(env(safe-area-inset-top) + 10px);left:12px;z-index:3;border:0;border-radius:14px;background:rgba(255,255,255,.22);color:#fff;font-size:12px;padding:5px 10px}
 #cvFxToggle.on{background:rgba(255,255,255,.9);color:#2a5596}
+/* キャラごとの音量（第64版）：通話画面でアイコンを押すと出る */
+.cvM,.cvAv{cursor:pointer}.cvM em{font-style:normal;font-size:10px;opacity:.9}
+#volPop{position:fixed;inset:0;z-index:46;display:none;align-items:flex-end;justify-content:center;background:rgba(0,0,0,.35)}
+#volPop.on{display:flex}
+#volPop .box{width:100%;max-width:480px;background:var(--bg);color:var(--text,#1c2430);border-radius:18px 18px 0 0;padding:16px 18px calc(env(safe-area-inset-bottom) + 14px)}
+#volPop .t{font-weight:700;text-align:center;margin-bottom:12px}
+#volPop .row2{display:flex;align-items:center;gap:10px}
+#volPop input[type=range],.volRow input[type=range]{flex:1;accent-color:#3672c7}
+#volPop b,.volRow b{min-width:48px;text-align:right;font-variant-numeric:tabular-nums}
+#volPop .btns2{display:flex;gap:8px;margin-top:14px}
+#volPop .btns2 button{flex:1;border:1px solid var(--line);background:var(--bg);border-radius:10px;padding:11px;font-size:15px}
+.volRow{display:flex;align-items:center;gap:8px;padding:6px 0}.volRow span{min-width:84px;max-width:110px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:14px}
 /* 横向き（第54版）：丸い写真の波紋がボタンの上に重なって押せなくなっていた。横では写真を小さく、全体をスクロールできるように */
 @media (orientation:landscape) and (max-height:520px){
   #callView{overflow-y:auto;padding-top:calc(env(safe-area-inset-top) + 10px);padding-left:calc(env(safe-area-inset-left) + 18px);padding-right:calc(env(safe-area-inset-right) + 18px)}
@@ -664,6 +676,15 @@ body.ura #list.tlMode{background:#efe9f0}
   </div>
 </div>
 
+<!-- キャラごとの音量（第64版） -->
+<div id="volPop" role="dialog" aria-modal="true">
+  <div class="box">
+    <div class="t" id="volPopT">音量</div>
+    <div class="row2"><span>🔈</span><input type="range" id="volPopR" min="0" max="200" step="5"><span>🔊</span><b id="volPopV">100%</b></div>
+    <div class="btns2"><button id="volPopReset">100% に戻す</button><button id="volPopX">閉じる</button></div>
+  </div>
+</div>
+
 <!-- グループ通話の会話（第57版） -->
 <section class="view" id="glogView">
   <header class="bar">
@@ -892,6 +913,9 @@ body.ura #list.tlMode{background:#efe9f0}
       <div class="btns"><button class="btn sub" id="stRingPick">着信音のファイルを選ぶ</button><button class="btn sub" id="stRingTest">鳴らしてみる</button><button class="btn sub" id="stRingClear">電子音に戻す</button></div>
       <input type="file" id="stRingFile" accept="audio/*" hidden>
       <div class="hint">アプリを開いているときに鳴る音です（iPhone の中にだけ保存）。アプリを閉じているときは、通知（Bark なら着信のように鳴り続けます）で知らせます。</div>
+      <div class="t" style="margin-top:10px">キャラごとの音量（電話）</div>
+      <div id="stVolList"></div>
+      <div class="hint">通話中に、キャラのアイコンを押しても変えられます（この iPhone にだけ保存）。</div>
       <div class="hint" id="stPhoneVoice"></div>
       <div class="hint" id="stPhoneChars"></div>
     </div>
@@ -1005,7 +1029,7 @@ body.ura #list.tlMode{background:#efe9f0}
 // 置き場所で切り替える：/lab/（試作）と /chat/（本番）で同じファイルを使う
 // 試作は本番と同じサイトなので、保存の名前に「lab.」を付けて本番の chat.* には書き込まない。通知も登録しない
 const IS_LAB = /\/lab\//.test(location.pathname);
-const APP_VERSION = '第63版（2026-11-12 16:30:00 更新・通話の声を電話っぽくする）' + (IS_LAB ? '【試作】' : '');
+const APP_VERSION = '第64版（2026-11-12 16:50:00 更新・キャラごとの音量）' + (IS_LAB ? '【試作】' : '');
 if (IS_LAB) { document.title = '【試作】トーク（統合）'; const mt = document.querySelector('meta[name=apple-mobile-web-app-title]'); if (mt) mt.content = 'トーク試作'; }
 const $ = (id) => document.getElementById(id);
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
@@ -3194,13 +3218,49 @@ async function ttsBuf(voice, text) {
 }
 let voiceSrc = null;
 function stopVoice() { if (voiceSrc) { try { voiceSrc.onended = null; voiceSrc.stop(); } catch (_) {} } voiceSrc = null; if (CALL.cur) CALL.cur.speakTok = (CALL.cur.speakTok || 0) + 1; }
-function playBuf(buf) {
+// キャラごとの音量（第64版）：0〜200%。端末ごと（store 'vol.char' = { キャラid: 0〜2 }）。声1本ごとに音量をはさみ、話している最中に変えてもすぐ効く
+const charVol = (id) => { const v = Number((store.get('vol.char', {}) || {})[id]); return Number.isFinite(v) ? Math.max(0, Math.min(2, v)) : 1; };
+let voiceVol = null; // いま流している声の { id, g }
+function setCharVol(id, v) {
+  const m = { ...(store.get('vol.char', {}) || {}) };
+  if (Math.abs(v - 1) < 0.001) delete m[id]; else m[id] = Math.round(v * 100) / 100;
+  store.set('vol.char', m);
+  if (voiceVol && voiceVol.id === id) voiceVol.g.gain.value = v;
+}
+function playBuf(buf, charId) {
   return new Promise((res) => {
     const c = ac(), g = vGain(); if (!c || !g) return res();
-    const s = c.createBufferSource(); s.buffer = buf; s.connect(g); s.onended = () => { if (voiceSrc === s) voiceSrc = null; res(); };
+    const s = c.createBufferSource(); s.buffer = buf;
+    const cg = c.createGain(); cg.gain.value = charId ? charVol(charId) : 1; s.connect(cg); cg.connect(g);
+    voiceVol = charId ? { id: charId, g: cg } : null;
+    s.onended = () => { if (voiceSrc === s) voiceSrc = null; try { cg.disconnect(); } catch (_) {} res(); };
     voiceSrc = s; s.start();
   });
 }
+// 通話画面：アイコンを押すと音量のつまみ
+function openVolPop(id) {
+  const c = charById(id); if (!c) return;
+  const ura = CALL.cur && CALL.cur.ura;
+  $('volPopT').textContent = `${gcCharName(c, ura)} の音量`;
+  const show = () => { const v = charVol(id); $('volPopR').value = Math.round(v * 100); $('volPopV').textContent = Math.round(v * 100) + '%'; };
+  show();
+  $('volPopR').oninput = () => { setCharVol(id, Number($('volPopR').value) / 100); $('volPopV').textContent = $('volPopR').value + '%'; volMark(); };
+  $('volPopReset').onclick = () => { setCharVol(id, 1); show(); volMark(); };
+  $('volPopX').onclick = () => $('volPop').classList.remove('on');
+  $('volPop').onclick = (e) => { if (e.target.id === 'volPop') $('volPop').classList.remove('on'); };
+  $('volPop').classList.add('on');
+}
+function volMark() { // グループ通話のアイコンの下に、100% でない子の音量を出す
+  $('cvMembers').querySelectorAll('.cvM').forEach((el) => { const v = Math.round(charVol(el.dataset.cvm) * 100); let e = el.querySelector('em'); if (v === 100) { if (e) e.remove(); return; } if (!e) { e = document.createElement('em'); el.appendChild(e); } e.textContent = `🔈${v}%`; });
+}
+$('cvMembers').addEventListener('click', (e) => { const m = e.target.closest('.cvM'); if (m) openVolPop(m.dataset.cvm); });
+$('cvAv').addEventListener('click', () => { const id = CALL.vm ? CALL.vm.charId : CALL.cur && !CALL.cur.group ? CALL.cur.charId : null; if (id) openVolPop(id); });
+// 設定：声の名前がある子の音量の一覧
+function renderVolList() {
+  const list = (S.chars || []).filter((c) => c.voice);
+  $('stVolList').innerHTML = list.length ? list.map((c) => { const v = Math.round(charVol(c.id) * 100); return `<div class="volRow"><span>${esc(dispName(c, c.uraOnly ? 'ura' : 'omote'))}</span><input type="range" min="0" max="200" step="5" value="${v}" data-vol="${esc(c.id)}"><b>${v}%</b></div>`; }).join('') : '<div class="hint">声の名前があるキャラがいません</div>';
+}
+$('stVolList').addEventListener('input', (e) => { const r = e.target.closest('[data-vol]'); if (!r) return; setCharVol(r.dataset.vol, Number(r.value) / 100); r.nextElementSibling.textContent = r.value + '%'; });
 // /health の住所。{ cache:'no-store' } は Safari だと余計な見出しが付いて、CORS の前の確認（OPTIONS）で弾かれることがあるので使わず、?t= で毎回ちがう住所にする（第53版）
 const healthUrl = (u) => u + '/health?t=' + Date.now();
 const wakeTTS = () => { const u = ttsCfg().url; if (u) fetch(healthUrl(u)).catch(() => {}); };
@@ -3272,6 +3332,7 @@ function subLine(who, text) {
 }
 function closeCallScreen() {
   CALL.screenMode = 'closed';
+  $('volPop').classList.remove('on');
   keepAwake(false);
   fxNoiseSync(); // 雑音を止める
   if (CALL.cur) clearTimeout(CALL.cur.contTimer);
@@ -3303,7 +3364,7 @@ async function speakLines(lines) {
     setStat('通話中');
     const buf = await jobs[i];
     if (!CALL.cur || CALL.cur.speakTok !== tok) return;
-    if (buf) await playBuf(buf); else await sleep(Math.min(6000, 600 + lines[i].length * 110)); // 声が作れなかったときは字幕を読む時間
+    if (buf) await playBuf(buf, cur.charId); else await sleep(Math.min(6000, 600 + lines[i].length * 110)); // 声が作れなかったときは字幕を読む時間
   }
 }
 // --- かける
@@ -3464,7 +3525,7 @@ async function vmPlay() {
     const buf = vmCache[vm.v.id] || (vmCache[vm.v.id] = await ttsBuf(c.voice, speakText(vm.v.text)));
     if (CALL.vm !== vm) return;
     const t0 = Date.now(); startClock(t0);
-    await playBuf(buf);
+    await playBuf(buf, vm.charId);
     if (!vm.v.heard) { vm.v.heard = true; api('POST', '/vm/heard', { charId: vm.charId, id: vm.v.id }).then((d) => { S.vms[vm.charId] = d.vms; renderAll(true); }).catch(() => {}); }
   } catch (e) { toast('留守電を再生できませんでした：' + e.message); delete vmCache[vm.v.id]; }
   if (CALL.vm === vm) { vm.playing = false; clearInterval(CALL.clock); $('cvVmPlay').textContent = '▶ もう一度'; setStat('留守番電話'); }
@@ -3500,7 +3561,7 @@ function renderPhoneSettings() {
   $('stPhoneQuiet').querySelectorAll('button').forEach((b) => b.classList.toggle('on', b.dataset.v === mode));
   $('stPhoneQBox').style.display = mode === 'custom' ? '' : 'none';
   $('stCallSubs').checked = callSubsOn(); $('stVmSubs').checked = vmSubsOn();
-  const fx = callFx(); $('stCallFx').checked = fx.on;
+  const fx = callFx(); $('stCallFx').checked = fx.on; renderVolList();
   $('stCallFxLevel').querySelectorAll('button').forEach((b) => b.classList.toggle('on', b.dataset.v === fx.level));
   $('stCallFxNoise').querySelectorAll('button').forEach((b) => b.classList.toggle('on', b.dataset.v === fx.noise));
   const cfg = ttsCfg();
@@ -3723,7 +3784,7 @@ function gcTalking(id) { $('cvMembers').querySelectorAll('.cvM').forEach((el) =>
 function gcScreen(g, mode) {
   callScreen({ id: g.id, name: g.name }, mode);
   $('callView').classList.add('grp');
-  $('cvMembers').innerHTML = gcMembersHTML(CALL.cur);
+  $('cvMembers').innerHTML = gcMembersHTML(CALL.cur); volMark();
   $('cvAuto').hidden = mode !== 'active'; syncAutoBtn();
 }
 function gcSub(id, text) {
@@ -3814,7 +3875,7 @@ async function gcPlay(lines, wait) {
     if (!CALL.cur || CALL.cur.speakTok !== tok) return;
     cur.started = i + 1;
     gcSub(lines[i].id, lines[i].text); gcTalking(lines[i].id); setStat('通話中');
-    if (buf) await playBuf(buf); else await sleep(Math.min(6000, 600 + lines[i].text.length * 110));
+    if (buf) await playBuf(buf, lines[i].id); else await sleep(Math.min(6000, 600 + lines[i].text.length * 110));
   }
   if (!CALL.cur || CALL.cur.speakTok !== tok) return;
   cur.batchDone = true; gcTalking('');

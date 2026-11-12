@@ -14,7 +14,7 @@
 //    ・Cron トリガー  * * * * *  （毎分。実際に動くのは13分おき）
 // =====================================================================
 
-const VERSION = '第58版（2026-11-12 02:55:00 更新・グループ通話：GPU を待つ間に呼び出しが消える・つながらない理由を出す）';
+const VERSION = '第59版（2026-11-12 12:30:00 更新・裏のグループ通話）';
 const DEFAULT_MODEL = 'gemini-flash-latest';
 const DEFAULT_GROK_MODEL = 'grok-4.7';                 // X（Twitter）の Grok と同じ最新世代
 const FALLBACK_GROK_MODEL = 'grok-4-fast-non-reasoning'; // 上が使えないときの予備
@@ -308,6 +308,13 @@ async function loadOGroups(env) {
   const { results } = await env.DB.prepare("SELECT id,data,created FROM groups WHERE id LIKE 'ogp-%' ORDER BY created").all();
   return results.map((r) => ({ ...JSON.parse(r.data), id: r.id, created: r.created }));
 }
+// グループ通話のグループ（第59版）：表の通話グループ ogp- と裏のグループ grp-。key＝通話の記録を置くトーク
+async function getCallGroup(env, id) {
+  if (isGroupId(id)) { const g = await getGroup(env, id); return { ...g, ura: true, key: g.id + URA }; }
+  const g = await getOGroup(env, id); return { ...g, ura: false, key: g.id };
+}
+const gcStopped = (st, g) => (g.ura ? !!st.uraPaused : !!(st.omotePaused || g.paused)); // 止めているか（裏は裏の一括停止だけ）
+const gcName = (c, g) => (g.ura ? c.uraName || c.name : c.name);
 async function getOGroup(env, id) {
   if (!isOGroupId(id)) throw new HttpError(404, '通話グループが見つかりません');
   const r = await env.DB.prepare('SELECT id,data,created FROM groups WHERE id=?').bind(String(id || '')).first();
@@ -618,40 +625,43 @@ async function route(key, url, body, env, ctx) {
       ]);
       return json({ ok: true });
     }
-    case 'GET /ogroup/memory': { // グループの中だけの記憶（1対1の記憶とは別）
-      const g = await getOGroup(env, url.searchParams.get('id'));
+    case 'GET /ogroup/memory': { // グループの中だけの記憶（1対1の記憶とは別）。裏のグループ grp- も（第59版）
+      const g = await getCallGroup(env, url.searchParams.get('id'));
       return json({ memory: await kvGet(env, 'gmem:' + g.id, []) });
     }
     case 'POST /ogroup/memory/delete': { // mid：消す記憶の id（'all' で全部）
-      const g = await getOGroup(env, body.id);
+      const g = await getCallGroup(env, body.id);
       const list = body.mid === 'all' ? [] : (await kvGet(env, 'gmem:' + g.id, [])).filter((m) => m.id !== String(body.mid));
       await kvSet(env, 'gmem:' + g.id, list);
       return json({ memory: list });
     }
     case 'GET /gcall/log': { // 通話ごとの会話の文字（第57版）
-      const g = await getOGroup(env, url.searchParams.get('group'));
+      const g = await getCallGroup(env, url.searchParams.get('group'));
       const lg = await kvGet(env, gclogKey(g.id, url.searchParams.get('id')), null);
       if (!lg) throw new HttpError(404, 'この通話の会話は残っていません');
       return json({ log: lg });
     }
     case 'POST /gcall/start': { // あなたからかける。だれが出るかを先に決める（test：全員出る）。from：続きから話す通話の記録の id（第57版）
-      const g = await getOGroup(env, body.groupId);
+      const g = await getCallGroup(env, body.groupId);
       const st = await getSettings(env);
       if (!phoneOn(st)) throw new HttpError(400, '電話はオフになっています（設定）');
-      if (st.omotePaused) throw new HttpError(409, OMOTE_PAUSED_MSG);
-      if (g.paused) throw new HttpError(409, 'このグループは止めています（グループの設定で再開できます）');
+      if (g.ura && st.uraPaused) throw new HttpError(409, '裏は止めています（設定で再開できます）');
+      if (!g.ura && st.omotePaused) throw new HttpError(409, OMOTE_PAUSED_MSG);
+      if (!g.ura && g.paused) throw new HttpError(409, 'このグループは止めています（グループの設定で再開できます）');
       const chars = await loadChars(env);
-      const ms = g.members.map((id) => chars.find((c) => c.id === id)).filter(phoneChar);
+      const all = g.members.map((id) => chars.find((c) => c.id === id)).filter(Boolean);
+      const ms = all.filter((c) => (g.ura ? !!c.voice : phoneChar(c))); // 裏は、裏だけの子も声の名前があれば入れる（第59版）
       if (!ms.length) throw new HttpError(400, '声の名前があるメンバーがいません');
+      if (ms.length > OGROUP_MAX) throw new HttpError(400, `グループ通話に入れるのは${OGROUP_MAX}人までです（声の名前がある子が${ms.length}人います）`);
       if (body.force) await clearStaleCalls(env);
       const calls = await listCalls(env);
       const busy = busyCall(calls);
       if (busy && busy.status === 'active') throw new HttpError(409, 'いまは別の電話中です');
       for (const x of calls) if (x.status === 'dialing') await delCall(env, x.id);
       const test = !!body.test;
-      const d = test || !g.lateJoin ? null : await decideGroupAnswer(env, g, ms, Date.now());
+      const d = test || g.ura || !g.lateJoin ? null : await decideGroupAnswer(env, g, ms, Date.now()); // 裏は全員すぐ出る
       const joined = d ? ms.filter((c) => d[c.id] && d[c.id].answer).map((c) => c.id) : ms.map((c) => c.id);
-      const cl = { id: newCallId(), group: g.id, charId: g.id, members: joined, invited: ms.map((c) => c.id), dir: 'out', status: 'dialing', created: Date.now(), transcript: [], batch: 0, test };
+      const cl = { id: newCallId(), group: g.id, ...(g.ura ? { ura: true } : {}), charId: g.id, members: joined, invited: ms.map((c) => c.id), dir: 'out', status: 'dialing', created: Date.now(), transcript: [], batch: 0, test };
       if (body.from) { // 前の通話の最後の流れを、そのまま覚えてかけ直す（言ったことにはしない＝old）
         const prev = await kvGet(env, gclogKey(g.id, body.from), null);
         if (!prev) throw new HttpError(404, 'この通話の会話は残っていません');
@@ -661,16 +671,18 @@ async function route(key, url, body, env, ctx) {
       await putCall(env, cl);
       const out = { call: callPublic(cl), ringMs: test ? 3000 : joined.length ? Math.round(4000 + Math.random() * 5000) : CALL_RING_MS };
       if (d) out.absent = ms.filter((c) => !joined.includes(c.id)).map((c) => ({ id: c.id, reason: String((d[c.id] || {}).reason || '').slice(0, 100) }));
+      const nv = all.filter((c) => !ms.includes(c)); // 声の名前がない子（裏）
+      if (nv.length) out.absent = [...(out.absent || []), ...nv.map((c) => ({ id: c.id, novoice: true }))];
       return json(out);
     }
     case 'POST /gcall/connect': { // 呼び出しが終わった：出た子がいれば最初の言葉、だれも出なければ記録だけ
       const cl = await kvGet(env, 'call:' + String(body.id || ''), null);
       if (!cl) { await log(env, 'グループ通話：つなぐ前に呼び出しが消えていました'); throw new HttpError(409, '呼び出しが途中で切れてしまいました（声のサーバーを待つのが長すぎたかもしれません）。もう一度かけてください'); }
       if (!cl.group || cl.dir !== 'out' || cl.status !== 'dialing') throw new HttpError(409, 'この通話はもう終わっています');
-      const g = await getOGroup(env, cl.group);
-      if (!cl.members.length || (await getSettings(env)).omotePaused || g.paused) {
+      const g = await getCallGroup(env, cl.group);
+      if (!cl.members.length || gcStopped(await getSettings(env), g)) {
         await delCall(env, cl.id);
-        return json({ answered: false, message: await callMsg(env, g.id, 'me', 'callout', '', { group: true }) });
+        return json({ answered: false, message: await callMsg(env, g.key, 'me', 'callout', '', { group: true }) });
       }
       cl.status = 'active'; cl.answeredAt = Date.now(); cl.lastAt = Date.now();
       await putCall(env, cl);
@@ -686,14 +698,14 @@ async function route(key, url, body, env, ctx) {
       const cl = await getCall(env, body.id);
       if (!cl.group) throw new HttpError(400, 'グループ通話ではありません');
       if (cl.status !== 'active') throw new HttpError(409, 'この通話はもう切れています');
-      const g = await getOGroup(env, cl.group);
+      const g = await getCallGroup(env, cl.group);
       gcallCut(cl, body.heard);
       const text = String(body.text || '').trim().slice(0, 2000);
       if (text) cl.transcript.push({ who: 'me', text, at: Date.now() });
       cl.lastAt = Date.now();
       if (cl.transcript.length > 400) cl.transcript = cl.transcript.slice(-300);
       await putCall(env, cl);
-      if ((await getSettings(env)).omotePaused || g.paused) return json({ lines: [], paused: true });
+      if (gcStopped(await getSettings(env), g)) return json({ lines: [], paused: true });
       let r;
       try { r = await keep(ctx, gcallReply(env, cl, g, !text ? (body.auto ? 'auto' : true) : false)); } // auto：［勝手に話す］がオン（第56版）
       catch (e) { await log(env, `グループ通話（${g.name}）の返事: ${e.message}`); throw e; }
@@ -749,6 +761,8 @@ async function route(key, url, body, env, ctx) {
         env.DB.prepare('DELETE FROM groups WHERE id=?').bind(id),
         env.DB.prepare('DELETE FROM messages WHERE char_id=?').bind(id + URA),
         env.DB.prepare('DELETE FROM reads WHERE char_id=?').bind(id + URA),
+        env.DB.prepare('DELETE FROM kv WHERE k=?').bind('gmem:' + id), // グループ通話の記憶・会話の文字（第59版）
+        env.DB.prepare('DELETE FROM kv WHERE k >= ? AND k < ?').bind('gclog:' + id + ':', 'gclog:' + id + ';'),
       ]);
       return json({ ok: true });
     }
@@ -1042,7 +1056,7 @@ async function route(key, url, body, env, ctx) {
       if (og) await getOGroup(env, base); else await getOwner(env, base, world);
       const ids = [...new Set((Array.isArray(body.ids) ? body.ids : []).map((x) => num(x, 0)).filter((x) => x > 0))].slice(0, 2000);
       if (!ids.length) throw new HttpError(400, '消すメッセージが選ばれていません');
-      if (og) for (const id of ids) await env.DB.prepare('DELETE FROM kv WHERE k=?').bind(gclogKey(base, id)).run();
+      if (og || (isGroupId(base) && world === 'ura')) for (const id of ids) await env.DB.prepare('DELETE FROM kv WHERE k=?').bind(gclogKey(base, id)).run(); // 裏のグループの通話の記録も（第59版）
       let deleted = 0;
       for (let i = 0; i < ids.length; i += 90) { // D1 のパラメータ数の上限に合わせて分ける
         const part = ids.slice(i, i + 90);
@@ -1079,7 +1093,7 @@ async function route(key, url, body, env, ctx) {
         const hist = await recent(env, key, 60);
         const last = hist[hist.length - 1];
         if (body.cont && hist.length) return json({ messages: await keep(ctx, groupReply(env, group, [...hist, contMsg()], key)) }); // ずっと話す（ノベル画面）：メッセージは増やさず「続けて」と伝える
-        if (!(body.start && !hist.length) && (!last || last.sender !== 'me')) return json({ messages: [] }); // start：あらすじから物語を始める
+        if (!(body.start && !hist.length) && (!last || last.sender !== 'me' || last.kind)) return json({ messages: [] }); // start：あらすじから物語を始める。通話の記録（kind）には返事しない（第59版）
         return json({ messages: await keep(ctx, groupReply(env, group, hist, key)) });
       }
       const c = (await getOwner(env, base, world)).char;
@@ -2178,7 +2192,8 @@ function buildGroupContents(hist, members, st, faces = {}) {
   const turns = [];
   for (const m of hist) {
     const role = m.sender === 'me' ? 'user' : 'model';
-    const line = m.sender === 'me' ? (m.image ? '（写真を見せた）' : '') + m.text : m.sender === 'narr' ? '＊' + m.text : `【${nameOf(m.speaker)}】${m.face && faces[m.speaker] ? `《${m.face}》` : ''}${m.text}`;
+    if (m.kind === 'callout') continue; // グループ通話（第59版）：だれも出なかった記録は渡さない
+    const line = m.kind === 'callog' ? `（ユーザーとみんなで、グループ通話（声だけ）で${callDurText((m.meta || {}).dur || 0)}話した${(m.meta || {}).sum ? '。話した内容：' + m.meta.sum : ''}）` : m.sender === 'me' ? (m.image ? '（写真を見せた）' : '') + m.text : m.sender === 'narr' ? '＊' + m.text : `【${nameOf(m.speaker)}】${m.face && faces[m.speaker] ? `《${m.face}》` : ''}${m.text}`;
     const t = turns[turns.length - 1];
     if (t && t.role === role) t.parts[0].text += '\n' + line;
     else turns.push({ role, parts: [{ text: line }] });
@@ -2671,7 +2686,8 @@ const GCALL_SCHEMA = { type: 'object', properties: { lines: { type: 'array', ite
 function findSpeaker(ms, name) {
   const n = String(name || '').replace(/[\s　]/g, '').replace(/(さん|ちゃん|くん|様)$/, '');
   if (!n) return null;
-  return ms.find((c) => c.name.replace(/[\s　]/g, '') === n) || ms.find((c) => { const m = c.name.replace(/[\s　]/g, ''); return m.includes(n) || n.includes(m); }) || null;
+  const names = (c) => [c.name, c.uraName].filter(Boolean).map((x) => x.replace(/[\s　]/g, '')); // 裏の名前でも（第59版）
+  return ms.find((c) => names(c).includes(n)) || ms.find((c) => names(c).some((m) => m.includes(n) || n.includes(m))) || null;
 }
 // 出るかどうか（遅れて入るがオンのとき）。1回の頼みで全員分
 async function decideGroupAnswer(env, g, ms, now) {
@@ -2741,13 +2757,62 @@ ${el >= 90 * MIN ? '- かなり長く話している。疲れや眠気を自然�
 ${cl.transcript.some((m) => !m.old) ? '' : cl.from ? `\n# 今回\n前回（${fmtTime(cl.fromAt || now)}）のグループ通話の続き。上の会話は、前回の最後のほう（もう話し終えたこと）。いま、またみんなが通話に入ったところ。前回の流れを覚えていて、「さっきの続きだけど」など自然に再開する。前回のセリフをそのままくり返さない。\n` : `\n# 今回\nいま、みんなが通話に入ったところ。「もしもし」など、通話に入ったときの言葉から。最初にだれが話すかは、性格と関係から自然に決める。\n`}${cont === 'auto' && cl.transcript.some((m) => !m.old) ? '\n# 今回\nユーザーは「みんなで話していて」と、聞き役にまわっている。キャラどうしで、どんどん会話を続ける（話題を広げる・掘り下げる・ときどき新しい話題に移る・掛け合う。同じことのくり返しにしない）。ユーザーの返事を待たない。ときどき（数回に1回くらい）ユーザーに話題を振ってもよい。振ったときだけ wait_user を true にする。\n' : cont && cl.transcript.some((m) => !m.old) ? '\n# 今回\nユーザーは黙って聞いている。キャラどうしで自然に会話を続ける（ユーザーに話を振ってもよい）。\n' : ''}
 出力は {"lines": [{"speaker": "名前", "text": "セリフ"}], "wait_user": false} の形のJSONのみ。`;
 }
+// 裏のグループ通話（第59版）：グループトーク（同じ場所にいる物語）の最近の流れ
+async function uraGroupTalk(env, g, chars) {
+  const nameOf = (id) => { const c = chars.find((x) => x.id === id); return c ? c.uraName || c.name : '（もういない人）'; };
+  return (await recent(env, g.key, 30)).filter((m) => m.kind !== 'callout').map((m) =>
+    m.kind === 'callog' ? `（グループ通話で${callDurText((m.meta || {}).dur || 0)}話した${(m.meta || {}).sum ? '：' + m.meta.sum : ''}）`
+      : m.sender === 'me' ? 'ユーザー: ' + trunc(m.text || (m.image ? '（写真）' : ''), 200)
+        : m.sender === 'narr' ? '（' + trunc(m.text, 200) + '）' : nameOf(m.speaker) + ': ' + trunc(m.text, 200)).join('\n');
+}
+function buildUraGroupCallSystem(g, ms, info, gmem, cl, now, cont, st, talk) {
+  const el = cl.answeredAt ? now - cl.answeredAt : 0;
+  const me = st.meNameUra || st.meName || '';
+  const fresh = cl.transcript.some((m) => !m.old);
+  return `あなたは、グループ「${g.name}」の登場人物たちを演じ分けて、ユーザーとの「グループ通話」（声だけ）の会話を書きます。登場人物たちとユーザーは、下の「グループの物語」と同じ世界・同じ関係にいて、いまは離れた場所からみんなで通話しています。
+
+# 登場人物（ユーザー以外）
+${info.join('\n\n')}
+${g.prompt ? `\n# このグループの設定（各キャラクター設定より優先。口調・一人称など食い違わない部分は各キャラクター設定のまま）\n${g.prompt}\n` : ''}
+# ユーザー
+${me ? `名前：${me}（呼ばれ方は、それぞれのキャラクター設定に従う）` : '（名前は登場人物たちのキャラクター設定での呼び方に従う）'}
+
+# グループの物語
+## あらすじ
+${g.synopsis || '（特になし）'}
+## 最近の流れ（古い順）
+${talk || '（まだない）'}
+
+# このグループの記憶（前のグループ通話のこと）
+${gmem.length ? gmem.slice(-20).map((m) => `- ${m.text}`).join('\n') : '（まだない）'}
+
+# この通話
+${fmtTime(now)}。ユーザーがみんなにかけたグループ通話。通話して${Math.floor(el / MIN)}分。
+
+# ルール
+- 電話で口にする言葉だけを書く。話し言葉。ナレーション・情景描写・（ ）書き・絵文字・顔文字・記号での演出は使わない（声で読み上げるため）。
+- 1回の返事は、ふつう2〜3セリフ（内容によっては長くてもよい）。lines の speaker には、上の登場人物の名前をそのまま書く。1つのセリフは1人分で、1〜3文。
+- 登場人物それぞれの口調・一人称・ユーザーの呼び方を守り、混ぜない。
+- キャラどうしで積極的に掛け合う。ユーザーが黙っていても、会話を自然に続けてよい（話題を少しずつ進める。同じことのくり返しにしない）。ユーザーに話を振ることもある。
+- wait_user：ユーザーに質問した・ユーザーの返事を待つのが自然なら true。そうでなければ false（このあともキャラどうしで話を続ける）。
+- 話す順番・だれが多く話すかは、性格と関係から自然に。全員が毎回話さなくてよい。
+- 「（ここで、ユーザーにさえぎられた）」とあるセリフは、ユーザーが話し始めたので途中で止まった。言いかけたことを続けるか、ユーザーの話を聞くかは、その子の性格で決める。
+- 電話を切るのはユーザー。キャラから通話を終わらせようとしない。
+${el >= 90 * MIN ? '- かなり長く話している。疲れや眠気を自然ににじませてもよい。\n' : ''}${DIR_RULE}- ユーザーの行動・発言・気持ちを勝手に決めない。
+- 自分たちがAIであることには触れない。
+- 登場人物が未成年の設定である場合、性的な内容は一切話さない。
+${fresh ? '' : cl.from ? `\n# 今回\n前回（${fmtTime(cl.fromAt || now)}）のグループ通話の続き。上の会話は、前回の最後のほう（もう話し終えたこと）。いま、またみんなが通話に入ったところ。前回の流れを覚えていて、自然に再開する。前回のセリフをそのままくり返さない。\n` : `\n# 今回\nいま、みんなが通話に入ったところ。通話に入ったときの言葉から。最初にだれが話すかは、性格と関係から自然に決める。\n`}${cont === 'auto' && fresh ? '\n# 今回\nユーザーは「みんなで話していて」と、聞き役にまわっている。キャラどうしで、どんどん会話を続ける（話題を広げる・掘り下げる・ときどき新しい話題に移る・掛け合う。同じことのくり返しにしない）。ユーザーの返事を待たない。ときどき（数回に1回くらい）ユーザーに話題を振ってもよい。振ったときだけ wait_user を true にする。\n' : cont && fresh ? '\n# 今回\nユーザーは黙って聞いている。キャラどうしで自然に会話を続ける（ユーザーに話を振ってもよい）。\n' : ''}
+出力は {"lines": [{"speaker": "名前", "text": "セリフ"}], "wait_user": false} の形のJSONのみ。`;
+}
 async function gcallReply(env, cl, g, cont = false) {
   const st = await getSettings(env), now = Date.now(), today = jstDay(now);
   const chars = await loadChars(env);
   const ms = cl.members.map((id) => chars.find((c) => c.id === id)).filter(Boolean);
   if (!ms.length) throw new HttpError(409, '通話に入っている子がいません');
   const info = [];
-  for (const c of ms) {
+  if (g.ura) { // 裏のグループ（第59版）：裏の設定・グループの立場だけ（1対1の表のトーク・記憶・今の様子は使わない＝別の世界線）
+    for (const c of ms) info.push(`## ${gcName(c, g)}\n${charPersona(c, 'ura', 2500)}${(g.roles || {})[c.id] ? `\n### このグループでの${gcName(c, g)}の立場（優先）\n${g.roles[c.id]}` : ''}`);
+  } else for (const c of ms) {
     const state = await getState(env, c.id);
     const talk = (await recent(env, c.id, 8)).filter((m) => !m.retracted).map((m) => `[${fmtTime(m.at)}] ${m.sender === 'me' ? 'ユーザー' : c.name}: ${trunc(msgLine(m), 120)}`).join('\n');
     const mem = st.lifeEnabled ? memoryText(await loadMemories(env, c.id, 30), today) : '';
@@ -2756,7 +2821,7 @@ ${charPersona(c, 'omote', 2500)}${g.roles[c.id] ? `\n### このグループで�
 ### 今の様子
 ${activityText(state, now, c.id)}${mem ? `\n### ${c.name}が覚えているユーザーとのこと（1対1）\n${trunc(mem, 1200)}` : ''}${talk ? `\n### ${c.name}とユーザーの最近の1対1のトーク（参考。古い順）\n${talk}` : ''}`);
   }
-  const nameOf = (id) => (chars.find((c) => c.id === id) || {}).name || '（いなくなった人）';
+  const nameOf = (id) => { const c = chars.find((x) => x.id === id); return c ? gcName(c, g) : '（いなくなった人）'; };
   const turns = [];
   for (const m of cl.transcript.slice(-80)) {
     const role = m.who === 'me' ? 'user' : 'model';
@@ -2768,8 +2833,9 @@ ${activityText(state, now, c.id)}${mem ? `\n### ${c.name}が覚えているユ�
   if (!turns.length || turns[turns.length - 1].role !== 'user') turns.push({ role: 'user', parts: [{ text: fresh ? '（ユーザーは黙って聞いている）' : cl.from ? '（前回の続きで、またグループ通話がつながった）' : '（グループ通話がつながった）' }] });
   else if (!fresh && cl.from) turns[turns.length - 1].parts[0].text += '\n（ここで前回の通話は終わった。いま、続きでまたグループ通話がつながった）';
   const gmem = await kvGet(env, 'gmem:' + g.id, []);
-  const wb = await worldBlock(env, g.prompt + '\n' + cl.transcript.slice(-20).map((m) => m.text).join('\n'));
-  const r = await callAIObj(env, 'omote', wb + buildGroupCallSystem(g, ms, info, gmem, cl, now, cont), turns, GCALL_SCHEMA, 'group_call_reply');
+  const wb = await worldBlock(env, (g.prompt || '') + '\n' + (g.ura ? (g.synopsis || '') + '\n' + ms.map((c) => c.prompt).join('\n') + '\n' : '') + cl.transcript.slice(-20).map((m) => m.text).join('\n'));
+  const sys = g.ura ? buildUraGroupCallSystem(g, ms, info, gmem, cl, now, cont, st, await uraGroupTalk(env, g, chars)) : buildGroupCallSystem(g, ms, info, gmem, cl, now, cont);
+  const r = await callAIObj(env, g.ura ? 'ura' : 'omote', wb + sys, turns, GCALL_SCHEMA, 'group_call_reply');
   const lines = [];
   for (const x of (r && Array.isArray(r.lines) ? r.lines : [])) {
     const c = findSpeaker(ms, x && x.speaker);
@@ -2784,15 +2850,16 @@ async function finishGroupCall(env, cl, { by = 'me', est = null } = {}) {
   await delCall(env, cl.id);
   if (cl.status !== 'active') return null;
   const now = Date.now(), dur = Math.max(0, now - (cl.answeredAt || now));
-  let g = null; try { g = await getOGroup(env, cl.group); } catch (_) { return null; } // グループが消えていたら記録しない
+  let g = null; try { g = await getCallGroup(env, cl.group); } catch (_) { return null; } // グループが消えていたら記録しない
   let sum = '';
   const said = cl.transcript.filter((m) => !m.old); // 続きから話したときの前回のセリフは入れない
-  if (said.filter((m) => m.who !== 'me').length >= 2 && !(await getSettings(env)).omotePaused) {
+  const stS = await getSettings(env);
+  if (said.filter((m) => m.who !== 'me').length >= 2 && !(g.ura ? stS.uraPaused : stS.omotePaused)) {
     const chars = await loadChars(env);
-    const nameOf = (id) => (chars.find((c) => c.id === id) || {}).name || '（いなくなった人）';
+    const nameOf = (id) => { const c = chars.find((x) => x.id === id); return c ? gcName(c, g) : '（いなくなった人）'; };
     const text = said.slice(-120).map((m) => (m.who === 'me' ? 'ユーザー: ' : nameOf(m.who) + ': ') + trunc(m.text, 200)).join('\n');
     try {
-      const r = await aiJson(env, 'omote', `あなたは、グループ「${g.name}」のグループ通話で話した内容を、メンバーがあとで思い出せるように短くまとめる係です。だれが何の話をして、どんな雰囲気だったか、決まったこと・約束があればそれも、2〜3文で具体的に書きます。`, text, CALL_SUM_SCHEMA, 'group_call_summary');
+      const r = await aiJson(env, g.ura ? 'ura' : 'omote', `あなたは、グループ「${g.name}」のグループ通話で話した内容を、メンバーがあとで思い出せるように短くまとめる係です。だれが何の話をして、どんな雰囲気だったか、決まったこと・約束があればそれも、2〜3文で具体的に書きます。`, text, CALL_SUM_SCHEMA, 'group_call_summary');
       sum = String((r && r.summary) || '').trim().slice(0, 300);
     } catch (e) { await log(env, `グループ通話のまとめ（${g.name}）: ${e.message}`); }
   }
@@ -2802,7 +2869,7 @@ async function finishGroupCall(env, cl, { by = 'me', est = null } = {}) {
     await kvSet(env, 'gmem:' + g.id, list.slice(-GMEM_MAX));
   }
   const meta = { dur, by, dir: cl.dir, group: true, members: cl.members, ...(said.length ? { log: true } : {}), ...(cl.from ? { from: cl.from } : {}), ...(sum ? { sum } : {}), ...(est && Number.isFinite(Number(est.usd)) ? { usd: Math.round(Number(est.usd) * 1e4) / 1e4, gpuMs: Math.round(num(est.gpuMs, 0)) } : {}) };
-  const msg = await callMsg(env, g.id, cl.dir === 'in' ? 'char' : 'me', 'callog', '', meta);
+  const msg = await callMsg(env, g.key, cl.dir === 'in' ? 'char' : 'me', 'callog', '', meta); // 裏は裏のグループトーク（grp-…#ura）に
   if (said.length) { // この通話で話したことを、全部文字で残す（第57版。続きから話したときは、前回の最後の流れも一緒に）
     const all = cl.transcript.map((m) => ({ who: m.who, text: m.text, at: m.at, ...(m.old ? { old: true } : {}) })).slice(-GCLOG_MAX);
     await kvSet(env, gclogKey(g.id, msg.id), { at: now, dur, members: cl.members, from: cl.from || 0, transcript: all });

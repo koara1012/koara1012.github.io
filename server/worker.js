@@ -14,7 +14,7 @@
 //    ・Cron トリガー  * * * * *  （毎分。実際に動くのは13分おき）
 // =====================================================================
 
-const VERSION = '第61版（2026-11-12 13:30:00 更新・続きから話すに「必ず全員出る」）';
+const VERSION = '第62版（2026-11-12 13:50:00 更新・裏のグループ通話も「ふつう／必ず全員出る」）';
 const DEFAULT_MODEL = 'gemini-flash-latest';
 const DEFAULT_GROK_MODEL = 'grok-4.7';                 // X（Twitter）の Grok と同じ最新世代
 const FALLBACK_GROK_MODEL = 'grok-4-fast-non-reasoning'; // 上が使えないときの予備
@@ -659,7 +659,7 @@ async function route(key, url, body, env, ctx) {
       if (busy && busy.status === 'active') throw new HttpError(409, 'いまは別の電話中です');
       for (const x of calls) if (x.status === 'dialing') await delCall(env, x.id);
       const test = !!body.test;
-      const d = test || g.ura || !g.lateJoin ? null : await decideGroupAnswer(env, g, ms, Date.now()); // 裏は全員すぐ出る
+      const d = test || (!g.ura && !g.lateJoin) ? null : g.ura ? await decideUraGroupAnswer(env, g, ms, Date.now(), chars) : await decideGroupAnswer(env, g, ms, Date.now()); // 裏も「ふつう」なら出る子を決める（第62版。test＝必ず全員出る）
       const joined = d ? ms.filter((c) => d[c.id] && d[c.id].answer).map((c) => c.id) : ms.map((c) => c.id);
       const cl = { id: newCallId(), group: g.id, ...(g.ura ? { ura: true } : {}), charId: g.id, members: joined, invited: ms.map((c) => c.id), dir: 'out', status: 'dialing', created: Date.now(), transcript: [], batch: 0, test };
       if (body.from) { // 前の通話の最後の流れを、そのまま覚えてかけ直す（言ったことにはしない＝old）
@@ -2690,6 +2690,30 @@ function findSpeaker(ms, name) {
   return ms.find((c) => names(c).includes(n)) || ms.find((c) => names(c).some((m) => m.includes(n) || n.includes(m))) || null;
 }
 // 出るかどうか（遅れて入るがオンのとき）。1回の頼みで全員分
+// 裏のグループ通話に出るか（第62版）：裏の設定・立場・あらすじ・グループトークの流れと時刻から（表のくらし・今の様子は使わない）
+async function decideUraGroupAnswer(env, g, ms, now, chars) {
+  const parts = ms.map((c) => `## ${gcName(c, g)}\n${charPersona(c, 'ura', 800)}${(g.roles || {})[c.id] ? `\nこのグループでの立場：${g.roles[c.id]}` : ''}`);
+  const sys = `ユーザーが、グループ「${g.name}」のみんなにグループ通話（声だけ）をかけました。登場人物それぞれが、今すぐ出るかどうかを決めます。
+${g.prompt ? `# このグループの設定（各キャラクター設定より優先）\n${g.prompt}\n` : ''}# あらすじ
+${g.synopsis || '（特になし）'}
+# グループトークの最近の流れ（古い順）
+${(await uraGroupTalk(env, g, chars)) || '（まだない）'}
+# 時刻
+${fmtTime(now)}
+# 登場人物
+${parts.join('\n\n')}
+# 決め方
+- 物語の流れ・時刻・性格から、いま手が離せない・寝ている・気づかない・出たくない事情があるなどで出られない子は出ない。そうでなければ、ふつうは出る。出ないのは、はっきり理由があるときだけ。
+- reason：出る・出ないの理由をひとことで（ユーザーには見せない。確認用）。
+- members には全員を、上の名前のとおりに入れる。`;
+  const out = {};
+  try {
+    const r = await aiJson(env, 'ura', sys, '（いまグループ通話の着信が鳴っている）', GANSWER_SCHEMA, 'answer_group_call');
+    for (const x of (r && Array.isArray(r.members) ? r.members : [])) { const c = findSpeaker(ms, x.name); if (c && !out[c.id]) out[c.id] = { answer: x.answer !== false, reason: String(x.reason || '') }; }
+  } catch (e) { await log(env, `裏のグループ通話に出るか（${g.name}）: ${e.message}`); }
+  for (const c of ms) if (!out[c.id]) out[c.id] = { answer: true, reason: '' }; // 決められなかった子は出る
+  return out;
+}
 async function decideGroupAnswer(env, g, ms, now) {
   const parts = [];
   for (const c of ms) parts.push(`## ${c.name}\n${charPersona(c, 'omote', 800)}${g.roles[c.id] ? `\nこのグループでの立場：${g.roles[c.id]}` : ''}\n今の様子：${activityText(await getState(env, c.id), now, c.id)}`);

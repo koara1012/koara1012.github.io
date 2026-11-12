@@ -338,6 +338,14 @@ body.ura #list.tlMode{background:#efe9f0}
 #glogBody .glsum{background:#f1f3f7;border-radius:10px;padding:10px 12px;margin-bottom:14px;font-size:14px}
 .glbar{flex:none;padding:10px 14px calc(env(safe-area-inset-bottom) + 10px);border-top:1px solid var(--line);background:var(--bg)}
 #cvSub .old{opacity:.55}
+/* グループ通話のかけ方を選ぶ（第62版・裏のグループの📞） */
+#gcPick{position:fixed;inset:0;z-index:44;display:none;align-items:flex-end;justify-content:center;background:rgba(0,0,0,.45)}
+#gcPick.on{display:flex}
+#gcPick .box{width:100%;max-width:480px;background:var(--bg);border-radius:18px 18px 0 0;padding:16px 16px calc(env(safe-area-inset-bottom) + 14px);display:flex;flex-direction:column;gap:10px}
+#gcPick .t{font-weight:700;text-align:center;font-size:15px;margin-bottom:2px}
+#gcPick button{border:0;border-radius:12px;padding:14px;font-size:16px;font-weight:700;color:#fff}
+#gcPick small{display:block;font-size:12px;font-weight:400;opacity:.9;margin-top:3px}
+#gcPick .x{background:transparent;color:var(--sub,#8a97a8)}
 .ogMem{display:flex;gap:8px;align-items:flex-start;padding:8px 0;border-bottom:1px solid var(--line);font-size:14px;line-height:1.5}
 .ogMem div{flex:1}.ogMem small{display:block;color:var(--sub,#8a97a8);font-size:12px}
 .ogMem button{flex:none;border:1px solid var(--line);background:var(--bg);border-radius:8px;padding:4px 10px;font-size:13px;color:#d0473c}
@@ -643,6 +651,16 @@ body.ura #list.tlMode{background:#efe9f0}
     </div>
   </div></div>
 </section>
+
+<!-- グループ通話のかけ方を選ぶ（第62版） -->
+<div id="gcPick" role="dialog" aria-modal="true">
+  <div class="box">
+    <div class="t" id="gcPickT">グループ通話</div>
+    <button id="gcPickNormal" style="background:#3672c7">📞 ふつうにかける<small>今の流れや時間によって、出られない子もいます</small></button>
+    <button id="gcPickAll" style="background:#2fb46c">📞 必ず全員出る<small>声の名前がある子が全員すぐに出ます</small></button>
+    <button class="x" id="gcPickX">やめる</button>
+  </div>
+</div>
 
 <!-- グループ通話の会話（第57版） -->
 <section class="view" id="glogView">
@@ -978,7 +996,7 @@ body.ura #list.tlMode{background:#efe9f0}
 // 置き場所で切り替える：/lab/（試作）と /chat/（本番）で同じファイルを使う
 // 試作は本番と同じサイトなので、保存の名前に「lab.」を付けて本番の chat.* には書き込まない。通知も登録しない
 const IS_LAB = /\/lab\//.test(location.pathname);
-const APP_VERSION = '第61版（2026-11-12 13:30:00 更新・続きから話すに「必ず全員出る」）' + (IS_LAB ? '【試作】' : '');
+const APP_VERSION = '第62版（2026-11-12 13:50:00 更新・裏のグループ通話も「ふつう／必ず全員出る」）' + (IS_LAB ? '【試作】' : '');
 if (IS_LAB) { document.title = '【試作】トーク（統合）'; const mt = document.querySelector('meta[name=apple-mobile-web-app-title]'); if (mt) mt.content = 'トーク試作'; }
 const $ = (id) => document.getElementById(id);
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
@@ -3397,9 +3415,9 @@ $('msgs').addEventListener('click', (e) => {
   if (sel.on) return;
   const v = e.target.closest('[data-vm]'); if (v) { openVM(baseId(curKey()), v.dataset.vm); return; }
   const gl = e.target.closest('[data-gclog]'); if (gl) { openGcLog(gl.dataset.gclog); return; }
-  const cl = e.target.closest('[data-callback]'); if (cl) { const og = callGroupNow(); if (og) { startGroupCall(og); return; } const c = charById(S.current); if (c && canPhone(c)) startOutgoing(c); }
+  const cl = e.target.closest('[data-callback]'); if (cl) { const og = callGroupNow(); if (og) { callGroupAsk(og); return; } const c = charById(S.current); if (c && canPhone(c)) startOutgoing(c); }
 });
-$('btnCall').onclick = () => { const og = callGroupNow(); if (og) { startGroupCall(og); return; } const c = charById(S.current); if (c && canPhone(c)) startOutgoing(c); };
+$('btnCall').onclick = () => { const og = callGroupNow(); if (og) { callGroupAsk(og); return; } const c = charById(S.current); if (c && canPhone(c)) startOutgoing(c); };
 // --- 同期のたび：かかってきた電話・留守電・GPU を起こす住所をサーバーに
 let ttsUrlSent = '';
 function phoneAfterSync(d) {
@@ -3507,7 +3525,7 @@ async function openGcLog(id) {
   const ura = isUraGroup(g);
   const m = (S.msgs[ura ? keyOf(g.id, 'ura') : g.id] || []).find((x) => String(x.id) === String(id)); if (!m) return;
   glog = { g, id: m.id, log: null, ura };
-  $('glogContAll').hidden = ura || g.lateJoin === false; // 裏と「遅れて入る」オフのグループは、もともと全員出るので1つだけ
+  $('glogContAll').hidden = !ura && g.lateJoin === false; // 「遅れて入る」オフの表のグループは、もともと全員出るので1つだけ（裏は第62版から2つ）
   const d = new Date(m.at);
   $('glogTitle').textContent = `${d.getMonth() + 1}/${d.getDate()} ${d.getHours()}:${String(d.getMinutes()).padStart(2, '0')}・${durText((m.meta || {}).dur)}`;
   $('glogBody').innerHTML = '<div class="hint">読み込み中…</div>';
@@ -3531,6 +3549,17 @@ async function openGcLog(id) {
 }
 const glogGroup = () => glog && (glog.ura ? groupById(glog.g.id) : ogroupById(glog.g.id));
 $('btnGlogBack').onclick = () => { if (glogGroup()) openChat(glog.g.id, glog.ura ? 'ura' : 'omote'); else { show('list'); renderAll(); } };
+// 裏のグループの📞：ふつう／必ず全員出る を選んでかける（第62版）。表は今までどおり（📞＝ふつう・テストは設定の中）
+function callGroupAsk(g) {
+  if (!isUraGroup(g)) { startGroupCall(g); return; }
+  $('gcPickT').textContent = `「${g.name}」にグループ通話`;
+  $('gcPick').classList.add('on');
+  const done = (all) => { $('gcPick').classList.remove('on'); if (all != null) startGroupCall(g, all, undefined, undefined, true); };
+  $('gcPickNormal').onclick = () => done(false);
+  $('gcPickAll').onclick = () => done(true);
+  $('gcPickX').onclick = () => done(null);
+  $('gcPick').onclick = (e) => { if (e.target.id === 'gcPick') done(null); };
+}
 function glogContinue(all) { // all：必ず全員出る（テスト通話と同じ。第61版）
   const g = glogGroup(); if (!g) return;
   const from = glog.id, old = glog.log ? (glog.log.transcript || []).slice(-8) : [];
@@ -3638,7 +3667,7 @@ function gcSub(id, text) {
   box.scrollTop = box.scrollHeight;
 }
 // --- かける
-async function startGroupCall(g, test, from, old) { // from：続きから話す通話の記録の id・old：前回の最後のセリフ（字幕に薄く出す）（第57版）
+async function startGroupCall(g, test, from, old, picked) { // picked：かけ方を選んだあと（もう聞かない） // from：続きから話す通話の記録の id・old：前回の最後のセリフ（字幕に薄く出す）（第57版）
   if (CALL.cur) return;
   if (S.settings.phoneEnabled === false) { toast('電話はオフになっています（設定）'); return; }
   const ura = isUraGroup(g);
@@ -3647,7 +3676,7 @@ async function startGroupCall(g, test, from, old) { // from：続きから話す
   const ms = g.members.map((id) => charById(id)).filter((c) => c && c.voice);
   if (!ms.length) { toast(ura ? '声の名前があるメンバーがいません（キャラ編集の「電話の声」に声の名前を入れると、グループ通話に入れます）' : '声の名前があるメンバーがいません'); return; }
   if (ms.length > 7) { toast(`グループ通話に入れるのは7人までです（声の名前がある子が${ms.length}人います）`); return; }
-  if (!confirm(test && from ? `「${g.name}」に、前回の続きからグループ通話をかけます（必ず全員出ます）。よろしいですか？` : test ? `テスト：「${g.name}」にグループ通話をかけます（全員出ます）。よろしいですか？` : from ? `「${g.name}」に、前回の続きからグループ通話をかけますか？` : `「${g.name}」にグループ通話をかけますか？`)) return;
+  if (!picked && !confirm(test && from ? `「${g.name}」に、前回の続きからグループ通話をかけます（必ず全員出ます）。よろしいですか？` : test ? `テスト：「${g.name}」にグループ通話をかけます（全員出ます）。よろしいですか？` : from ? `「${g.name}」に、前回の続きからグループ通話をかけますか？` : `「${g.name}」にグループ通話をかけますか？`)) return;
   ac();
   CALL.cur = { group: g.id, ura, dir: 'out', gpuStart: Date.now(), muted: false, invited: ms.map((c) => c.id), members: [], started: 0, batchDone: true, queued: [] };
   gcScreen(g, 'dial'); setStat('呼び出し中…'); $('cvTime').textContent = '';

@@ -191,9 +191,15 @@ const ug = (await call('POST', '/group', { group: { name: '放課後', members: 
 await call('POST', '/send', { charId: ug.id + '#ura', text: '（教室に入る）' });
 answer.grp = [{ who: 'ナレーション', text: '夕日が差しこむ。' }, { who: 'ウラ', text: 'おかえり。' }];
 await call('POST', '/reply', { charId: ug.id + '#ura' });
-answer.gans = { members: [{ name: '朱里', answer: false, reason: '' }, { name: '裏だけの子', answer: false, reason: '' }] };
+// 第62版：裏も「ふつう」なら出る子を決める（裏の AI・物語の流れから）／test＝必ず全員出る
+answer.gans = { members: [{ name: 'ウラ', answer: false, reason: '寝ている' }, { name: '朱里', answer: true, reason: '' }] };
 r = await call('POST', '/gcall/start', { groupId: ug.id });
-ok(r.call.members.length === 2 && r.call.members.includes(u1.id) && !r.call.members.includes(u2.id), 'ura: everyone with a voice joins at once (ura-only too)');
+q = ai.filter((x) => x.sch.includes('"members"')).pop();
+ok(r.call.members.length === 1 && r.call.members[0] === a.id && r.absent.some((x) => x.id === u1.id && !x.novoice), 'ura normal: AI decides who joins (ura name matched)');
+ok(q.grok && q.sys.includes('夕日が差しこむ') && q.sys.includes('ウラの設定'), 'ura normal: decided by ura AI with group talk');
+await call('POST', '/gcall/end', { id: r.call.id });
+r = await call('POST', '/gcall/start', { groupId: ug.id, test: true });
+ok(r.call.members.length === 2 && r.call.members.includes(u1.id) && !r.call.members.includes(u2.id), 'ura all: everyone with a voice joins (ura-only too)');
 ok(r.absent.some((x) => x.id === u2.id && x.novoice), 'ura: member without voice reported');
 answer.reply = { lines: [{ speaker: 'ウラ', text: 'もしもし、委員長です。' }, { speaker: '朱里', text: '……こんばんは。' }], wait_user: false };
 r = await call('POST', '/gcall/connect', { id: r.call.id });
@@ -214,7 +220,7 @@ await call('POST', '/send', { charId: ug.id + '#ura', text: 'さっきの通話�
 await call('POST', '/reply', { charId: ug.id + '#ura' });
 ok(ai.filter((x) => x.grok).pop().user.includes('グループ通話（声だけ）で'), 'ura: group talk reply sees the call');
 // 続きから
-r = await call('POST', '/gcall/start', { groupId: ug.id, from: um.id });
+r = await call('POST', '/gcall/start', { groupId: ug.id, from: um.id, test: true }); // 続きから・必ず全員出る
 await call('POST', '/gcall/connect', { id: r.call.id });
 ok(ai.pop().sys.includes('前回') && r.call.members.length === 2, 'ura: continue from previous call');
 await call('POST', '/gcall/end', { id: r.call.id }); await flush();

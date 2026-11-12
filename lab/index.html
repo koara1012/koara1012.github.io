@@ -651,7 +651,7 @@ body.ura #list.tlMode{background:#efe9f0}
     <h1 id="glogTitle">グループ通話</h1>
   </header>
   <div class="scroll" id="glogBody"></div>
-  <div class="glbar"><button class="btn" id="glogCont" style="background:#2fb46c">📞 続きから話す</button></div>
+  <div class="glbar" style="display:flex;gap:8px"><button class="btn" id="glogCont" style="background:#3672c7;flex:1">📞 続きから話す</button><button class="btn" id="glogContAll" style="background:#2fb46c;flex:1">📞 続きから（必ず全員出る）</button></div>
 </section>
 
 <!-- 表の通話グループ（第55版） -->
@@ -978,7 +978,7 @@ body.ura #list.tlMode{background:#efe9f0}
 // 置き場所で切り替える：/lab/（試作）と /chat/（本番）で同じファイルを使う
 // 試作は本番と同じサイトなので、保存の名前に「lab.」を付けて本番の chat.* には書き込まない。通知も登録しない
 const IS_LAB = /\/lab\//.test(location.pathname);
-const APP_VERSION = '第60版（2026-11-12 13:20:00 更新・通話中は画面を消さない）' + (IS_LAB ? '【試作】' : '');
+const APP_VERSION = '第61版（2026-11-12 13:30:00 更新・続きから話すに「必ず全員出る」）' + (IS_LAB ? '【試作】' : '');
 if (IS_LAB) { document.title = '【試作】トーク（統合）'; const mt = document.querySelector('meta[name=apple-mobile-web-app-title]'); if (mt) mt.content = 'トーク試作'; }
 const $ = (id) => document.getElementById(id);
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
@@ -3507,6 +3507,7 @@ async function openGcLog(id) {
   const ura = isUraGroup(g);
   const m = (S.msgs[ura ? keyOf(g.id, 'ura') : g.id] || []).find((x) => String(x.id) === String(id)); if (!m) return;
   glog = { g, id: m.id, log: null, ura };
+  $('glogContAll').hidden = ura || g.lateJoin === false; // 裏と「遅れて入る」オフのグループは、もともと全員出るので1つだけ
   const d = new Date(m.at);
   $('glogTitle').textContent = `${d.getMonth() + 1}/${d.getDate()} ${d.getHours()}:${String(d.getMinutes()).padStart(2, '0')}・${durText((m.meta || {}).dur)}`;
   $('glogBody').innerHTML = '<div class="hint">読み込み中…</div>';
@@ -3530,12 +3531,14 @@ async function openGcLog(id) {
 }
 const glogGroup = () => glog && (glog.ura ? groupById(glog.g.id) : ogroupById(glog.g.id));
 $('btnGlogBack').onclick = () => { if (glogGroup()) openChat(glog.g.id, glog.ura ? 'ura' : 'omote'); else { show('list'); renderAll(); } };
-$('glogCont').onclick = () => {
+function glogContinue(all) { // all：必ず全員出る（テスト通話と同じ。第61版）
   const g = glogGroup(); if (!g) return;
   const from = glog.id, old = glog.log ? (glog.log.transcript || []).slice(-8) : [];
   openChat(g.id, glog.ura ? 'ura' : 'omote');
-  startGroupCall(g, false, from, old);
-};
+  startGroupCall(g, !!all, from, old);
+}
+$('glogCont').onclick = () => glogContinue(false);
+$('glogContAll').onclick = () => glogContinue(true);
 // --- 作る・設定
 let ogrEdit = null, ogrFrom = 'list';
 function openOGroupEdit(id) {
@@ -3644,7 +3647,7 @@ async function startGroupCall(g, test, from, old) { // from：続きから話す
   const ms = g.members.map((id) => charById(id)).filter((c) => c && c.voice);
   if (!ms.length) { toast(ura ? '声の名前があるメンバーがいません（キャラ編集の「電話の声」に声の名前を入れると、グループ通話に入れます）' : '声の名前があるメンバーがいません'); return; }
   if (ms.length > 7) { toast(`グループ通話に入れるのは7人までです（声の名前がある子が${ms.length}人います）`); return; }
-  if (!confirm(test ? `テスト：「${g.name}」にグループ通話をかけます（全員出ます）。よろしいですか？` : from ? `「${g.name}」に、前回の続きからグループ通話をかけますか？` : `「${g.name}」にグループ通話をかけますか？`)) return;
+  if (!confirm(test && from ? `「${g.name}」に、前回の続きからグループ通話をかけます（必ず全員出ます）。よろしいですか？` : test ? `テスト：「${g.name}」にグループ通話をかけます（全員出ます）。よろしいですか？` : from ? `「${g.name}」に、前回の続きからグループ通話をかけますか？` : `「${g.name}」にグループ通話をかけますか？`)) return;
   ac();
   CALL.cur = { group: g.id, ura, dir: 'out', gpuStart: Date.now(), muted: false, invited: ms.map((c) => c.id), members: [], started: 0, batchDone: true, queued: [] };
   gcScreen(g, 'dial'); setStat('呼び出し中…'); $('cvTime').textContent = '';

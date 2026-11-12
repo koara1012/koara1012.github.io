@@ -194,6 +194,11 @@ pre.diag{white-space:pre-wrap;word-break:break-all;font-size:11px;background:#f3
 .tabs{flex:none;display:flex;background:var(--head);padding:0 12px 10px;gap:8px}
 .tabs button{flex:1;padding:7px 0;border-radius:10px;color:rgba(255,255,255,.75);font-weight:700;font-size:14px;background:rgba(255,255,255,.08)}
 .tabs button.on{background:#fff;color:var(--head)}
+/* 個人／グループ（第65版）：表・裏のタブの下の小さいタブ */
+#kindTabs{padding-top:0;gap:6px}
+#kindTabs button{padding:5px 0;font-size:13px;border-radius:16px;background:transparent;border:1px solid rgba(255,255,255,.25)}
+#kindTabs button.on{background:rgba(255,255,255,.92);border-color:transparent}
+#kindTabs .n{display:inline-block;min-width:16px;margin-left:4px;padding:0 5px;border-radius:9px;background:#e5566b;color:#fff;font-size:11px;line-height:16px}
 body.ura{--head:#3b2a3f;--chat-bg:#5a4a5e;--me:#f3d9e6;--me-fg:#2b1a24;--accent:#9a5c8a}
 .uraMode .msg .meta{display:none}
 .synopsis{margin:14px 10px 18px;padding:14px 16px;border-radius:14px;background:rgba(255,255,255,.12);color:#f3eef4;font-size:13.5px;line-height:1.85;white-space:pre-wrap;word-break:break-word;border:1px solid rgba(255,255,255,.18)}
@@ -383,6 +388,9 @@ body.ura #list.tlMode{background:#efe9f0}
   </header>
   <div class="tabs" id="worldTabs">
     <button data-w="omote">表（トーク）</button><button data-w="ura">裏（会う）</button>
+  </div>
+  <div class="tabs" id="kindTabs">
+    <button data-k="solo">👤 個人</button><button data-k="group">👥 グループ</button>
   </div>
   <div id="aiAlertBar" style="flex:none" hidden></div>
   <div class="costbar" id="costBar" role="button" tabindex="0" title="AIの利用料金（目安）"></div>
@@ -1029,7 +1037,7 @@ body.ura #list.tlMode{background:#efe9f0}
 // 置き場所で切り替える：/lab/（試作）と /chat/（本番）で同じファイルを使う
 // 試作は本番と同じサイトなので、保存の名前に「lab.」を付けて本番の chat.* には書き込まない。通知も登録しない
 const IS_LAB = /\/lab\//.test(location.pathname);
-const APP_VERSION = '第64版（2026-11-12 16:50:00 更新・キャラごとの音量）' + (IS_LAB ? '【試作】' : '');
+const APP_VERSION = '第65版（2026-11-12 17:10:00 更新・ホームを個人とグループに分ける）' + (IS_LAB ? '【試作】' : '');
 if (IS_LAB) { document.title = '【試作】トーク（統合）'; const mt = document.querySelector('meta[name=apple-mobile-web-app-title]'); if (mt) mt.content = 'トーク試作'; }
 const $ = (id) => document.getElementById(id);
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
@@ -1380,14 +1388,17 @@ function renderList() {
     el.innerHTML = `<div class="empty">表に登場するキャラはまだいません。<br>右上の ＋ から登録しましょう。</div><div class="foot">${esc(APP_VERSION)}</div>`;
     return;
   }
-  const rows = shown.map((c) => {
+  const kind = listKind(); // 個人／グループ（第65版）
+  const rows = (kind === 'group' ? [] : shown.map((c) => {
     const v = visibleMsgs(keyOf(c.id)); const last = v[v.length - 1];
     return { c, last, sortAt: last ? last.at : c.created || 0 };
-  }).concat((ura ? S.groups || [] : S.ogroups || []).map((g) => {
+  })).concat((kind === 'solo' ? [] : ura ? S.groups || [] : S.ogroups || []).map((g) => {
     const v = visibleMsgs(keyOf(g.id)); const last = v[v.length - 1];
     return ura ? { g, last, sortAt: last ? last.at : g.created || 0 } : { og: g, last, sortAt: last ? last.at : g.created || 0 };
   })).sort((a, b) => b.sortAt - a.sortAt);
-  el.innerHTML = (ura ? '<button class="newgrp" id="btnNewGroup">👥 グループを作る</button>' : '<button class="newgrp" id="btnNewOGroup">📞 グループ通話を作る</button>') + rows.map(({ c, g, og, last }) => {
+  const head = kind === 'solo' ? '' : ura ? '<button class="newgrp" id="btnNewGroup">👥 グループを作る</button>' : '<button class="newgrp" id="btnNewOGroup">📞 グループ通話を作る</button>';
+  const none = kind === 'group' && !rows.length ? `<div class="empty">${ura ? 'まだグループがありません。<br>上の「グループを作る」から、みんなで同じ場所にいる物語を始められます。' : 'まだグループ通話のグループがありません。<br>上の「グループ通話を作る」から作れます。'}</div>` : '';
+  el.innerHTML = head + none + rows.map(({ c, g, og, last }) => {
     if (g) return groupRowHTML(g, last);
     if (og) return ogroupRowHTML(og, last);
     const k = keyOf(c.id);
@@ -1629,8 +1640,19 @@ async function setPaused(world, p) {
   } catch (e) { toast(e.message); }
 }
 const setUraPaused = (p) => setPaused('ura', p);
+// 個人／グループ（第65版）：表と裏で別々に覚える（端末ごと）
+const listKind = () => (store.get('list.kind.' + S.world, 'solo') === 'group' ? 'group' : 'solo');
+function renderKindTabs() {
+  const k = listKind(), n = S.world === 'ura' ? 0 : S.chars.filter((c) => !c.uraOnly).reduce((a, c) => a + unreadCount(c.id), 0);
+  $('kindTabs').hidden = S.mode === 'tl';
+  $('kindTabs').querySelectorAll('button').forEach((b) => {
+    b.classList.toggle('on', b.dataset.k === k);
+    b.innerHTML = b.dataset.k === 'solo' ? `👤 個人${k !== 'solo' && n ? `<span class="n">${n > 99 ? '99+' : n}</span>` : ''}` : '👥 グループ';
+  });
+}
+$('kindTabs').addEventListener('click', (e) => { const b = e.target.closest('button'); if (!b) return; store.set('list.kind.' + S.world, b.dataset.k); renderKindTabs(); renderList(); $('list').scrollTop = 0; });
 function applyWorld() {
-  renderCost(); renderPause();
+  renderCost(); renderPause(); renderKindTabs();
   document.body.classList.toggle('ura', S.world === 'ura');
   const tl = S.mode === 'tl';
   $('worldTabs').querySelectorAll('button').forEach((b) => {
@@ -1659,7 +1681,7 @@ function setMode(m) {
   if (m === 'tl') loadTL(S.world);
 }
 function renderAll(keepPos, forceBottom) {
-  renderList();
+  renderList(); renderKindTabs();
   if (S.view === 'chat') renderChat(keepPos, forceBottom);
   if (S.view === 'post') renderPost();
 }

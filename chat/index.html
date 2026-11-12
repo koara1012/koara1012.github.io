@@ -978,7 +978,7 @@ body.ura #list.tlMode{background:#efe9f0}
 // 置き場所で切り替える：/lab/（試作）と /chat/（本番）で同じファイルを使う
 // 試作は本番と同じサイトなので、保存の名前に「lab.」を付けて本番の chat.* には書き込まない。通知も登録しない
 const IS_LAB = /\/lab\//.test(location.pathname);
-const APP_VERSION = '第59版（2026-11-12 12:30:00 更新・裏のグループ通話）' + (IS_LAB ? '【試作】' : '');
+const APP_VERSION = '第60版（2026-11-12 13:20:00 更新・通話中は画面を消さない）' + (IS_LAB ? '【試作】' : '');
 if (IS_LAB) { document.title = '【試作】トーク（統合）'; const mt = document.querySelector('meta[name=apple-mobile-web-app-title]'); if (mt) mt.content = 'トーク試作'; }
 const $ = (id) => document.getElementById(id);
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
@@ -3151,8 +3151,28 @@ async function warmGPU(maxMs = 120000) { // 声のサーバー（GPU）を起こ
 }
 // --- 画面
 function cvAvatar(c) { const ic = S.icons[c.id] && S.icons[c.id].data; return ic ? `<img src="${ic}" alt="">` : esc([...c.name][0] || '?'); }
+// 通話中は画面を消さない（第60版）：iPhone の「自動ロック」で画面が消えると、Webアプリは止められて通話が続かないため。
+// Screen Wake Lock（iOS 16.4〜。ホーム画面に置いたアプリでは iOS 18.4〜）。画面が隠れると外れるので、戻ったらかけ直す
+const AWAKE = { want: false, lock: null, warned: false };
+async function keepAwake(on) {
+  AWAKE.want = on;
+  if (!on) { const l = AWAKE.lock; AWAKE.lock = null; if (l) l.release().catch(() => {}); return; }
+  if (AWAKE.lock && !AWAKE.lock.released) return;
+  if (!('wakeLock' in navigator)) { awakeWarn('この端末では使えません'); return; }
+  try {
+    AWAKE.lock = await navigator.wakeLock.request('screen');
+    if (!AWAKE.want) { AWAKE.lock.release().catch(() => {}); AWAKE.lock = null; }
+  } catch (e) { awakeWarn(e.message); }
+}
+function awakeWarn(why) {
+  logDiag('通話中に画面をつけたままにできませんでした: ' + why);
+  if (AWAKE.warned) return; AWAKE.warned = true;
+  toast('この iPhone では、通話中に画面をつけたままにできませんでした。画面が消えると通話が止まるので、設定 → 画面表示と明るさ → 自動ロック を長めにしてください', 9000);
+}
+document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'visible' && AWAKE.want) keepAwake(true); });
 function callScreen(c, mode) { // mode: dial / incoming / active / vm
   CALL.screenMode = mode;
+  keepAwake(true);
   $('cvName').textContent = c.name;
   $('cvAv').innerHTML = cvAvatar(c);
   $('callView').className = 'on ' + mode;
@@ -3178,6 +3198,7 @@ function subLine(who, text) {
 }
 function closeCallScreen() {
   CALL.screenMode = 'closed';
+  keepAwake(false);
   if (CALL.cur) clearTimeout(CALL.cur.contTimer);
   stopTones(); stopVoice(); micStop(true);
   clearInterval(CALL.clock); clearInterval(CALL.hb); clearTimeout(CALL.ringTo);

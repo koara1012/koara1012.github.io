@@ -424,6 +424,7 @@ body.ura #list.tlMode{background:#efe9f0}
     <button class="ib" id="btnGrpReset" aria-label="会話をリセット" style="font-size:14px;font-weight:700;padding:0 8px;display:none">リセット</button>
     <button class="ib" id="btnSelect" aria-label="メッセージを選んで消す" style="font-size:14px;font-weight:700;padding:0 8px">選択</button>
     <button class="ib" id="btnCall" aria-label="電話をかける" style="font-size:18px;padding:0 6px;display:none">📞</button>
+    <button class="ib" id="btnSleep" aria-label="寝落ち通話" style="font-size:17px;padding:0 5px;display:none">🌙</button>
     <button class="ib" id="btnNovel" aria-label="ノベル画面で開く" style="font-size:14px;font-weight:700;padding:0 8px">立ち絵</button>
     <button class="ib" id="btnEditChar" aria-label="キャラを編集" style="font-size:14px;font-weight:700;padding:0 8px">編集</button>
   </header>
@@ -675,14 +676,7 @@ body.ura #list.tlMode{background:#efe9f0}
 </section>
 
 <!-- グループ通話のかけ方を選ぶ（第62版） -->
-<div id="gcPick" role="dialog" aria-modal="true">
-  <div class="box">
-    <div class="t" id="gcPickT">グループ通話</div>
-    <button id="gcPickNormal" style="background:#3672c7">📞 ふつうにかける<small>今の流れや時間によって、出られない子もいます</small></button>
-    <button id="gcPickAll" style="background:#2fb46c">📞 必ず全員出る<small>声の名前がある子が全員すぐに出ます</small></button>
-    <button class="x" id="gcPickX">やめる</button>
-  </div>
-</div>
+<div id="gcPick" role="dialog" aria-modal="true"><div class="box" id="gcPickBox"></div></div>
 
 <!-- キャラごとの音量（第64版） -->
 <div id="volPop" role="dialog" aria-modal="true">
@@ -921,6 +915,9 @@ body.ura #list.tlMode{background:#efe9f0}
       <div class="btns"><button class="btn sub" id="stRingPick">着信音のファイルを選ぶ</button><button class="btn sub" id="stRingTest">鳴らしてみる</button><button class="btn sub" id="stRingClear">電子音に戻す</button></div>
       <input type="file" id="stRingFile" accept="audio/*" hidden>
       <div class="hint">アプリを開いているときに鳴る音です（iPhone の中にだけ保存）。アプリを閉じているときは、通知（Bark なら着信のように鳴り続けます）で知らせます。</div>
+      <div class="t" style="margin-top:10px">🌙 寝落ち通話：返事がないとき、確かめるまで（分）</div>
+      <input type="number" id="stSleepMin" min="0" max="600" step="1" inputmode="numeric" style="width:120px">
+      <div class="hint">表のトーク画面の 🌙 でかける通話です。あなたが話さないまま、この分数がたつと、キャラが声で「まだ聞いてますか？」と確かめます。30秒返事がなければ、おやすみを言って切ります。0 か空なら切りません。通話中は、画面に触らずに声で返事できます（iPhone が許したとき）。</div>
       <div class="t" style="margin-top:10px">キャラごとの音量（電話）</div>
       <div id="stVolList"></div>
       <div class="hint">通話中に、キャラのアイコンを押しても変えられます（この iPhone にだけ保存）。</div>
@@ -1037,7 +1034,7 @@ body.ura #list.tlMode{background:#efe9f0}
 // 置き場所で切り替える：/lab/（試作）と /chat/（本番）で同じファイルを使う
 // 試作は本番と同じサイトなので、保存の名前に「lab.」を付けて本番の chat.* には書き込まない。通知も登録しない
 const IS_LAB = /\/lab\//.test(location.pathname);
-const APP_VERSION = '第65版（2026-11-12 17:10:00 更新・ホームを個人とグループに分ける）' + (IS_LAB ? '【試作】' : '');
+const APP_VERSION = '第66版（2026-11-14 04:00:00 更新・寝落ち通話（表））' + (IS_LAB ? '【試作】' : '');
 if (IS_LAB) { document.title = '【試作】トーク（統合）'; const mt = document.querySelector('meta[name=apple-mobile-web-app-title]'); if (mt) mt.content = 'トーク試作'; }
 const $ = (id) => document.getElementById(id);
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
@@ -1451,8 +1448,10 @@ function renderChat(keepPos, forceBottom) {
   const c = grp ? { id: grp.id, name: grp.name } : charById(S.current);
   if (!c) return;
   $('btnGrpReset').style.display = grp ? '' : 'none'; // .ib は display を指定しているので hidden 属性では消えない
-  $('chatView').querySelector('header.bar').classList.toggle('tight', !!grp);
+  const sleepOk = !grp && S.world !== 'ura' && canPhone(c); // 寝落ち通話は表だけ（第66版）
+  $('chatView').querySelector('header.bar').classList.toggle('tight', !!grp || sleepOk);
   $('btnCall').style.display = (grp ? S.settings.phoneEnabled !== false && grp.members.some((id) => (charById(id) || {}).voice) : S.world !== 'ura' && canPhone(c)) ? '' : 'none'; // 裏のグループにも📞（第59版）
+  $('btnSleep').style.display = sleepOk ? '' : 'none';
   renderMeetBar(); renderCharPauseBar();
   const k = curKey(), ura = isUraKey(k);
   const nm = grp ? grp.name : dispName(c, ura ? 'ura' : 'omote');
@@ -1996,8 +1995,8 @@ function bubHTML(m) {
   if (m.kind === 'call') return `<div class="bub call"><span class="ic">📞</span><span><b>${m.meta && m.meta.declined ? '着信（拒否）' : '不在着信'}</b><small>${m.meta && m.meta.declined ? 'あなたが拒否しました' : '応答なし'}</small></span></div>`;
   if (m.kind === 'vm') { const v = vmOf(baseId(m.charId), m.id); return `<div class="bub call vm" data-vm="${m.id}"><span class="ic">▶</span><span><b>留守番電話${v && !v.heard ? '<span class="new"></span>' : ''}</b><small>${v ? (v.heard ? 'タップで再生' : '新しい留守電・タップで再生') : '古い留守電（もう残っていません）'}</small></span></div>`; }
   if (m.kind === 'callout') return `<div class="bub call out" data-callback="1"><span class="ic">📞</span><span><b>${m.meta && m.meta.group ? 'グループ通話' : '発信'}</b><small>${m.meta && m.meta.group ? 'だれも出ませんでした' : '応答なし'}・タップでかけ直す</small></span></div>`;
-  if (m.kind === 'callog' && m.meta && m.meta.group && m.meta.log && !m.retracted) return `<div class="bub call log" data-gclog="${esc(m.id)}"><span class="ic">📞</span><span><b>${m.meta.from ? 'グループ通話（続き）' : 'グループ通話'} ${durText(m.meta.dur)}</b><small>タップで会話を読む・続きから話す</small></span></div>`; // 会話が残っている通話（第57版・第59版で裏も）
-  if (m.kind === 'callog') { const mt = m.meta || {}; return `<div class="bub call log" data-callback="1"><span class="ic">📞</span><span><b>${mt.group ? 'グループ通話' : '通話'} ${durText(mt.dur)}</b><small>${mt.usd != null ? `約$${Number(mt.usd).toFixed(3)}（約${yenOf(Number(mt.usd))}円）` : 'タップでかけ直す'}</small></span></div>`; }
+  if (m.kind === 'callog' && m.meta && m.meta.group && m.meta.log && !m.retracted) return `<div class="bub call log" data-gclog="${esc(m.id)}"><span class="ic">${m.meta.sleep ? '🌙' : '📞'}</span><span><b>${m.meta.sleep ? '寝落ち通話' : m.meta.from ? 'グループ通話（続き）' : 'グループ通話'} ${durText(m.meta.dur)}</b><small>タップで会話を読む・続きから話す</small></span></div>`; // 会話が残っている通話（第57版・第59版で裏も）
+  if (m.kind === 'callog') { const mt = m.meta || {}; return `<div class="bub call log" data-callback="1"><span class="ic">${mt.sleep ? '🌙' : '📞'}</span><span><b>${mt.sleep ? '寝落ち通話' : mt.group ? 'グループ通話' : '通話'} ${durText(mt.dur)}</b><small>${mt.nokeep ? '記憶に残さない通話・' : ''}${mt.usd != null ? `約$${Number(mt.usd).toFixed(3)}（約${yenOf(Number(mt.usd))}円）` : 'タップでかけ直す'}</small></span></div>`; }
   if (m.image || m.localImg) return `<div class="bub photo"><img ${src ? `src="${src}"` : `data-img="${esc(m.image)}"`} alt="${esc(m.alt || '写真')}"></div>${m.text ? `<div class="bub">${esc(m.text)}</div>` : ''}`;
   return `<div class="bub">${quoteHTML(m)}${esc(m.text)}</div>`;
 }
@@ -3255,7 +3254,8 @@ function playBuf(buf, charId) {
     const s = c.createBufferSource(); s.buffer = buf;
     const cg = c.createGain(); cg.gain.value = charId ? charVol(charId) : 1; s.connect(cg); cg.connect(g);
     voiceVol = charId ? { id: charId, g: cg } : null;
-    s.onended = () => { if (voiceSrc === s) voiceSrc = null; try { cg.disconnect(); } catch (_) {} res(); };
+    s.onended = () => { if (voiceSrc === s) voiceSrc = null; try { cg.disconnect(); } catch (_) {} hfSoon(700); res(); }; // 寝落ち通話：話し終えたらマイクを戻す
+    hfStop(); // キャラが話しているあいだはマイクを止める（自分の声を拾わないように）
     voiceSrc = s; s.start();
   });
 }
@@ -3354,6 +3354,7 @@ function subLine(who, text) {
 }
 function closeCallScreen() {
   CALL.screenMode = 'closed';
+  hfStop(); clearInterval(CALL.sleepT);
   $('volPop').classList.remove('on');
   keepAwake(false);
   fxNoiseSync(); // 雑音を止める
@@ -3390,17 +3391,18 @@ async function speakLines(lines) {
   }
 }
 // --- かける
-async function startOutgoing(c, test) { // test：必ず出るテスト発信（第49版）。ふだんなら出たか・理由・今の様子をトーストで出す
+async function startOutgoing(c, test, opt) { // test：必ず出るテスト発信（第49版）。ふだんなら出たか・理由・今の様子をトーストで出す。opt：{ sleep, keep } 寝落ち通話（第66版・選ぶ画面のあとなので聞かない）
   if (CALL.cur) return;
   if (S.settings.omotePaused || charPaused(c.id)) { toast(`${S.settings.omotePaused ? '表' : c.name}は止めています（電話もできません）`); return; }
-  if (!confirm(test ? `テスト：${c.name}さんに電話をかけます（必ず出ます）。よろしいですか？` : `${c.name}さんに電話をかけますか？`)) return;
+  const sl = opt && opt.sleep ? { sleep: true, keep: opt.keep !== false } : null;
+  if (!sl && !confirm(test ? `テスト：${c.name}さんに電話をかけます（必ず出ます）。よろしいですか？` : `${c.name}さんに電話をかけますか？`)) return;
   ac();
-  CALL.cur = { charId: c.id, dir: 'out', gpuStart: Date.now(), muted: false };
+  CALL.cur = { charId: c.id, dir: 'out', gpuStart: Date.now(), muted: false, ...(sl || {}) };
   callScreen(c, 'dial'); setStat('呼び出し中…'); $('cvTime').textContent = '';
   playRingback();
   const gpuT0 = Date.now(), warm = warmGPU(test ? 180000 : 90000); // テストは3分まで待って、起きるまでの秒数を出す（第50版）
   let r;
-  try { r = await api('POST', '/call/start', { charId: c.id, test: !!test, force: true }); } // force：残っている通話を片付けてからかける（第54版）
+  try { r = await api('POST', '/call/start', { charId: c.id, test: !!test, force: true, ...(sl || {}) }); } // force：残っている通話を片付けてからかける（第54版）
   catch (e) { toast(e.message); closeCallScreen(); return; }
   if (r.test) toast(`テスト：ふだんなら${r.test.wouldAnswer ? '出ていました' : '出ませんでした'}${r.test.reason ? '（' + r.test.reason + '）' : ''}${r.test.now ? '。今の様子：' + r.test.now : ''}`, 9000);
   if (!CALL.cur) { api('POST', '/call/decline', { id: r.call.id }).catch(() => {}); return; }
@@ -3459,12 +3461,14 @@ function beginActive(call, lines, hangup) {
   let n = 0;
   clearInterval(CALL.hb);
   CALL.hb = setInterval(() => { wakeTTS(); if (++n % 3 === 0 && CALL.cur) api('POST', '/call/ping', { id: CALL.cur.id }).catch(() => {}); }, 20000);
-  speakLines(lines || []).then(() => { if (hangup) endCall('char'); });
+  sleepBegin(CALL.cur);
+  speakLines(lines || []).then(() => { if (hangup && !(CALL.cur && CALL.cur.sleep)) endCall('char'); });
 }
 async function sayInCall(text) {
   if (CALL.cur && CALL.cur.group) return sayInGroupCall(text);
   const cur = CALL.cur; if (!cur || !cur.answeredAt || cur.busy) return;
   text = String(text || '').trim(); if (!text) return;
+  sleepUser(cur); hfStop();
   stopVoice(); // 話している途中なら止めて、あなたの言葉を優先
   subLine('me', text); cur.busy = true; setStat('…');
   try {
@@ -3472,16 +3476,17 @@ async function sayInCall(text) {
     cur.busy = false;
     if (d.ended) { endCall('char'); return; }
     await speakLines(d.lines || []);
-    if (d.hangup && CALL.cur === cur) endCall('char');
-  } catch (e) { cur.busy = false; setStat('通話中'); toast(e.message); }
+    if (d.hangup && CALL.cur === cur && !cur.sleep) endCall('char');
+    hfSoon(500);
+  } catch (e) { cur.busy = false; setStat('通話中'); toast(e.message); hfSoon(500); }
 }
 async function endCall(by) {
-  if (CALL.cur && CALL.cur.group) return endGroupCall();
+  if (CALL.cur && CALL.cur.group) return endGroupCall(by);
   const cur = CALL.cur; if (!cur || cur.ending) return;
   cur.ending = true;
   const now = Date.now();
   const gpuMs = (now - (cur.gpuStart || now)) + MODAL_IDLE_S * 1000, usd = gpuMs / 3600e3 * GPU_USD_PER_H;
-  if (by === 'char') { setStat('通話終了'); await sleep(900); }
+  if (by === 'char' || by === 'sleep') { setStat('通話終了'); await sleep(900); }
   closeCallScreen();
   if (!cur.id || !cur.answeredAt) return;
   try {
@@ -3491,8 +3496,8 @@ async function endCall(by) {
   } catch (e) { toast(e.message); }
 }
 // --- 文字／声
-function setInputMode(m) {
-  store.set('call.mode', m);
+function setInputMode(m, nostore) { // nostore：寝落ち通話で声にするとき、ふだんの選び方は変えない
+  if (!nostore) store.set('call.mode', m);
   $('cvModeText').classList.toggle('on', m === 'text'); $('cvModeMic').classList.toggle('on', m === 'mic');
   $('cvTextRow').hidden = m !== 'text'; $('cvMicRow').hidden = m !== 'mic';
   if (m !== 'mic') micStop(true);
@@ -3510,10 +3515,12 @@ function micStop(discard) {
   $('cvMic').classList.remove('on'); $('cvMic').textContent = '🎤 話す'; $('cvMicX').classList.add('off');
   if (!discard) { const t = (recFinal + recText).trim(); recFinal = recText = ''; $('cvHeard').textContent = ''; if (t) sayInCall(t); else groupResume(); }
   else { $('cvHeard').textContent = ''; groupResume(); }
+  hfSoon(800);
 }
 function micStart() {
   const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
   if (!SR) { toast('この端末では音声認識が使えません。⌨ 文字で話してください', 4000); return; }
+  hfStop(); // 寝落ち通話の開きっぱなしのマイクは、押して話すあいだ止める
   stopVoice();
   recFinal = recText = '';
   const r = new SR(); rec = r;
@@ -3584,6 +3591,7 @@ function renderPhoneSettings() {
   $('stPhoneQBox').style.display = mode === 'custom' ? '' : 'none';
   $('stCallSubs').checked = callSubsOn(); $('stVmSubs').checked = vmSubsOn();
   const fx = callFx(); $('stCallFx').checked = fx.on; renderVolList();
+  $('stSleepMin').value = sleepMin() || 0;
   $('stCallFxLevel').querySelectorAll('button').forEach((b) => b.classList.toggle('on', b.dataset.v === fx.level));
   $('stCallFxNoise').querySelectorAll('button').forEach((b) => b.classList.toggle('on', b.dataset.v === fx.noise));
   const cfg = ttsCfg();
@@ -3603,6 +3611,7 @@ $('stPhoneOn').onchange = $('stPhoneAllOff').onchange = $('stPhoneQS').onchange 
 $('stPhoneQuiet').addEventListener('click', (e) => { const b = e.target.closest('button'); if (!b) return; $('stPhoneQuiet').querySelectorAll('button').forEach((x) => x.classList.toggle('on', x === b)); savePhoneSettings(); });
 $('stCallSubs').onchange = () => store.set('call.subs', $('stCallSubs').checked);
 $('stCallFx').onchange = () => { store.set('call.fx', $('stCallFx').checked); fxSync(); };
+$('stSleepMin').onchange = () => { const v = Math.max(0, Math.min(600, Math.floor(Number($('stSleepMin').value) || 0))); $('stSleepMin').value = v; store.set('sleep.min', v); };
 for (const [id, k] of [['stCallFxLevel', 'call.fxLevel'], ['stCallFxNoise', 'call.fxNoise']]) $(id).addEventListener('click', (e) => {
   const b = e.target.closest('button'); if (!b) return;
   $(id).querySelectorAll('button').forEach((x) => x.classList.toggle('on', x === b));
@@ -3647,6 +3656,8 @@ $('edCallTest').onclick = async () => {
 function renderOGroupChat(g, keepPos, forceBottom) {
   $('btnGrpReset').style.display = 'none';
   $('btnCall').style.display = S.settings.phoneEnabled !== false ? '' : 'none';
+  $('btnSleep').style.display = S.settings.phoneEnabled !== false ? '' : 'none';
+  $('chatView').querySelector('header.bar').classList.remove('tight');
   renderMeetBar(); renderCharPauseBar();
   $('chatTitle').innerHTML = esc(g.name) + `<small>${esc(g.members.map((id) => (charById(id) || {}).name || '（いなくなった人）').join('・'))}${g.paused ? '・止めています' : ''}</small>`;
   const box = $('msgs'), k = g.id;
@@ -3700,15 +3711,94 @@ async function openGcLog(id) {
 const glogGroup = () => glog && (glog.ura ? groupById(glog.g.id) : ogroupById(glog.g.id));
 $('btnGlogBack').onclick = () => { if (glogGroup()) openChat(glog.g.id, glog.ura ? 'ura' : 'omote'); else { show('list'); renderAll(); } };
 // 裏のグループの📞：ふつう／必ず全員出る を選んでかける（第62版）。表は今までどおり（📞＝ふつう・テストは設定の中）
+// 下から出る選ぶ画面（第62版・第66版で汎用に）：opts = [{ v, label, sub, color }]。選んだ v を cb に渡す（やめたら何もしない）。cb はタップの中で呼ぶ（マイクの許可を取るため）
+function pickSheet(title, opts, cb) {
+  $('gcPickBox').innerHTML = `<div class="t">${esc(title)}</div>` + opts.map((o, i) => `<button data-pk="${i}" style="background:${o.color || '#3672c7'}">${esc(o.label)}${o.sub ? `<small>${esc(o.sub)}</small>` : ''}</button>`).join('') + '<button class="x" data-pk="x">やめる</button>';
+  $('gcPick').classList.add('on');
+  $('gcPick').onclick = (e) => {
+    const b = e.target.closest('[data-pk]');
+    if (!b && e.target.id !== 'gcPick') return;
+    $('gcPick').classList.remove('on');
+    if (b && b.dataset.pk !== 'x') cb(opts[Number(b.dataset.pk)].v);
+  };
+}
 function callGroupAsk(g) {
   if (!isUraGroup(g)) { startGroupCall(g); return; }
-  $('gcPickT').textContent = `「${g.name}」にグループ通話`;
-  $('gcPick').classList.add('on');
-  const done = (all) => { $('gcPick').classList.remove('on'); if (all != null) startGroupCall(g, all, undefined, undefined, true); };
-  $('gcPickNormal').onclick = () => done(false);
-  $('gcPickAll').onclick = () => done(true);
-  $('gcPickX').onclick = () => done(null);
-  $('gcPick').onclick = (e) => { if (e.target.id === 'gcPick') done(null); };
+  pickSheet(`「${g.name}」にグループ通話`, [
+    { v: false, label: '📞 ふつうにかける', sub: '今の流れや時間によって、出られない子もいます' },
+    { v: true, label: '📞 必ず全員出る', sub: '声の名前がある子が全員すぐに出ます', color: '#2fb46c' },
+  ], (all) => startGroupCall(g, all, undefined, undefined, true));
+}
+// ---- 寝落ち通話（第66版・表だけ）：🌙 → 記憶を引き継ぐ／引き継がない。返事がないまま設定の分数がたつと、キャラが声で「まだ聞いてますか？」→ 30秒返事がなければ、おやすみを言って切る
+// 通話中はマイクを開きっぱなしにして（キャラが話している間は止める）、画面に触らずに返事できる（iPhone が許せば）
+const sleepMin = () => { const v = Number(store.get('sleep.min', 5)); return Number.isFinite(v) && v > 0 ? v : 0; };
+$('btnSleep').onclick = () => {
+  const og = S.world !== 'ura' && ogroupById(S.current), c = !og && charById(S.current);
+  if (!og && !(c && canPhone(c))) return;
+  const name = og ? `「${og.name}」` : `${c.name}さん`;
+  pickSheet(`🌙 ${name}と寝落ち通話`, [
+    { v: true, label: '🌙 記憶を引き継ぐ', sub: 'ふつうの通話と同じく、話したことを覚えています' },
+    { v: false, label: '🌙 引き継がない', sub: 'これまでのことは覚えたまま。この通話のことは残しません', color: '#6b5bb5' },
+  ], (keep) => { hfPrime(); if (og) startGroupCall(og, false, undefined, undefined, true, { sleep: true, keep }); else startOutgoing(c, false, { sleep: true, keep }); });
+};
+let hf = null, hfTimer = 0, hfBusyText = false;
+function hfPrime() { // タップの中で一度マイクを始めて、すぐやめる（許可を先に取っておく。のちに触らずに始めるため）
+  const SR = window.SpeechRecognition || window.webkitSpeechRecognition; if (!SR) return;
+  try { const r = new SR(); r.lang = 'ja-JP'; r.onerror = () => {}; r.start(); setTimeout(() => { try { r.abort(); } catch (_) {} }, 400); } catch (_) {}
+}
+function hfWanted() { const cur = CALL.cur; return !!(cur && cur.sleep && cur.answeredAt && !cur.ending && !cur.hfFail && !rec && !voiceSrc && CALL.screenMode === 'active'); }
+function hfFailNote(why) {
+  const cur = CALL.cur; if (cur) cur.hfFail = true;
+  logDiag('寝落ち通話のマイク: ' + why);
+  toast('画面に触らずにマイクを始められませんでした。返事は🎤を押すか、文字でしてください', 8000);
+}
+function hfStart() {
+  if (hf || !hfWanted()) return;
+  const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
+  if (!SR) { hfFailNote('この端末では音声認識が使えません'); return; }
+  const r = new SR(); hf = r; let sendT = 0;
+  r.lang = 'ja-JP'; r.continuous = true; r.interimResults = true;
+  r.onresult = (e) => {
+    let t = ''; for (let i = 0; i < e.results.length; i++) t += e.results[i][0].transcript;
+    t = t.trim(); hfBusyText = !!t;
+    $('cvHeard').textContent = t || '🎙 聞いています…';
+    clearTimeout(sendT);
+    if (t) sendT = setTimeout(() => { if (hf !== r) return; hfStop(); hfBusyText = false; $('cvHeard').textContent = ''; sayInCall(t); }, 1500); // 1.5秒言葉が止まったら、返事として送る
+  };
+  r.onerror = (e) => { if (hf !== r) return; if (e.error === 'not-allowed' || e.error === 'service-not-allowed' || e.error === 'audio-capture') { hfStop(); hfFailNote(e.error); } };
+  r.onend = () => { if (hf === r) { hf = null; hfBusyText = false; hfSoon(400); } }; // 黙っていると止まるので、また始める
+  try { r.start(); } catch (e) { hf = null; hfFailNote(e.message); return; }
+  if (!$('cvHeard').textContent) $('cvHeard').textContent = '🎙 聞いています…（話しかけると返事になります）';
+}
+function hfStop() { clearTimeout(hfTimer); const r = hf; hf = null; hfBusyText = false; if (r) { r.onend = null; try { r.abort(); } catch (_) {} } }
+function hfSoon(ms = 700) { clearTimeout(hfTimer); if (CALL.cur && CALL.cur.sleep) hfTimer = setTimeout(hfStart, ms); }
+function sleepUser(cur) { if (cur && cur.sleep) { cur.lastUser = Date.now(); cur.sleepStage = null; cur.sleepDue = false; } } // あなたが返事をした
+function sleepBegin(cur) { // 通話がつながった
+  if (!cur || !cur.sleep) return;
+  cur.lastUser = Date.now(); cur.sleepStage = null;
+  setInputMode('mic', true);
+  clearInterval(CALL.sleepT); CALL.sleepT = setInterval(sleepTick, 2000);
+  hfSoon(1500);
+}
+function sleepTick() {
+  const cur = CALL.cur; if (!cur || !cur.sleep || !cur.answeredAt || cur.ending) return;
+  const min = sleepMin(); if (!min) return;
+  const now = Date.now(), quiet = !cur.busy && !voiceSrc && !rec && !hfBusyText;
+  if (!cur.sleepStage) { if (now - cur.lastUser >= min * 60000) { if (quiet) sleepCheckRun('ask'); else cur.sleepDue = true; } return; }
+  if (cur.sleepStage === 'asked' && now - cur.askedAt >= 30000 && quiet) sleepCheckRun('bye');
+}
+async function sleepCheckRun(kind) { // 'ask'：まだ聞いてますか？／'bye'：おやすみ → 切る
+  const cur = CALL.cur; if (!cur || !cur.sleep || cur.ending) return;
+  cur.sleepDue = false; cur.sleepStage = kind; clearTimeout(cur.contTimer);
+  try {
+    const d = await api('POST', cur.group ? '/gcall/say' : '/call/say', { id: cur.id, text: '', check: kind });
+    if (CALL.cur !== cur || cur.sleepStage !== kind) return; // そのあいだに返事をした
+    if (cur.group) await gcPlay(d.lines || [], false); else await speakLines(d.lines || []);
+  } catch (e) { logDiag('寝落ち通話の確認: ' + e.message); }
+  if (CALL.cur !== cur || cur.sleepStage !== kind) return;
+  if (kind === 'ask') { cur.sleepStage = 'asked'; cur.askedAt = Date.now(); hfSoon(300); return; }
+  await sleep(1500);
+  if (CALL.cur === cur && cur.sleepStage === 'bye') endCall('sleep');
 }
 function glogContinue(all) { // all：必ず全員出る（テスト通話と同じ。第61版）
   const g = glogGroup(); if (!g) return;
@@ -3817,7 +3907,7 @@ function gcSub(id, text) {
   box.scrollTop = box.scrollHeight;
 }
 // --- かける
-async function startGroupCall(g, test, from, old, picked) { // picked：かけ方を選んだあと（もう聞かない） // from：続きから話す通話の記録の id・old：前回の最後のセリフ（字幕に薄く出す）（第57版）
+async function startGroupCall(g, test, from, old, picked, opt) { // opt：{ sleep, keep } 寝落ち通話（第66版） // picked：かけ方を選んだあと（もう聞かない） // from：続きから話す通話の記録の id・old：前回の最後のセリフ（字幕に薄く出す）（第57版）
   if (CALL.cur) return;
   if (S.settings.phoneEnabled === false) { toast('電話はオフになっています（設定）'); return; }
   const ura = isUraGroup(g);
@@ -3828,12 +3918,13 @@ async function startGroupCall(g, test, from, old, picked) { // picked：かけ�
   if (ms.length > 7) { toast(`グループ通話に入れるのは7人までです（声の名前がある子が${ms.length}人います）`); return; }
   if (!picked && !confirm(test && from ? `「${g.name}」に、前回の続きからグループ通話をかけます（必ず全員出ます）。よろしいですか？` : test ? `テスト：「${g.name}」にグループ通話をかけます（全員出ます）。よろしいですか？` : from ? `「${g.name}」に、前回の続きからグループ通話をかけますか？` : `「${g.name}」にグループ通話をかけますか？`)) return;
   ac();
-  CALL.cur = { group: g.id, ura, dir: 'out', gpuStart: Date.now(), muted: false, invited: ms.map((c) => c.id), members: [], started: 0, batchDone: true, queued: [] };
+  const sl = opt && opt.sleep && !ura ? { sleep: true, keep: opt.keep !== false } : null;
+  CALL.cur = { group: g.id, ura, dir: 'out', gpuStart: Date.now(), muted: false, invited: ms.map((c) => c.id), members: [], started: 0, batchDone: true, queued: [], ...(sl || {}) };
   gcScreen(g, 'dial'); setStat('呼び出し中…'); $('cvTime').textContent = '';
   playRingback();
   const gpuT0 = Date.now(), warm = warmGPU(test ? 180000 : 90000);
   let r;
-  try { r = await api('POST', '/gcall/start', { groupId: g.id, test: !!test, force: true, ...(from ? { from } : {}) }); }
+  try { r = await api('POST', '/gcall/start', { groupId: g.id, test: !!test, force: true, ...(from ? { from } : {}), ...(sl || {}) }); }
   catch (e) { toast(e.message); closeCallScreen(); return; }
   const cancel = () => api('POST', '/gcall/end', { id: r.call.id }).catch(() => {});
   if (!CALL.cur) { cancel(); return; }
@@ -3873,12 +3964,13 @@ function beginGroupActive(g, d) {
   const cur = CALL.cur; if (!cur) return;
   Object.assign(cur, { id: d.call.id, answeredAt: Date.now(), members: d.call.members });
   gcScreen(g, 'active'); setStat('通話中'); startClock(cur.answeredAt);
+  sleepBegin(cur);
   if ((cur.old || []).length) { // 続きから：前回の最後のほうを薄く出しておく
     for (const x of cur.old) gcSub(x.who, x.text);
     $('cvSub').querySelectorAll('div').forEach((el) => el.classList.add('old'));
     $('cvSub').insertAdjacentHTML('beforeend', '<div class="old" style="font-size:12px">― ここから続き ―</div>');
   }
-  setInputMode(store.get('call.mode', 'text'));
+  setInputMode(cur.sleep ? 'mic' : store.get('call.mode', 'text'), !!cur.sleep); // 寝落ち通話は声で
   let n = 0;
   clearInterval(CALL.hb);
   CALL.hb = setInterval(() => { wakeTTS(); if (++n % 3 === 0 && CALL.cur) api('POST', '/call/ping', { id: CALL.cur.id }).catch(() => {}); }, 20000);
@@ -3901,7 +3993,8 @@ async function gcPlay(lines, wait) {
   }
   if (!CALL.cur || CALL.cur.speakTok !== tok) return;
   cur.batchDone = true; gcTalking('');
-  if (gcAuto()) gcNext(wait ? 7000 : 700); // ［勝手に話す］オン：話を振られたときだけ少し待って、あとは話し続ける
+  if (cur.sleepDue && !cur.sleepStage) { sleepCheckRun('ask'); return; } // 寝落ち通話：返事がないまま時間がたった
+  if (gcAuto() && !cur.sleepStage) gcNext(wait ? 7000 : 700); // ［勝手に話す］オン：話を振られたときだけ少し待って、あとは話し続ける
 }
 // ［勝手に話す］（第56版）：オンのあいだ、みんなで話し続ける（ときどきあなたに話題を振る）。オフなら、あなたが話したときだけ返事をする。端末ごとに覚える
 const gcAuto = () => store.get('gcall.auto', false);
@@ -3917,7 +4010,8 @@ function gcNext(ms) {
   const cur = CALL.cur; if (!cur || !cur.group || cur.ending) return;
   clearTimeout(cur.contTimer);
   cur.contTimer = setTimeout(() => {
-    if (CALL.cur !== cur || cur.busy || rec || !gcAuto()) return;
+    if (CALL.cur !== cur || cur.busy || rec || !gcAuto() || cur.sleepStage) return;
+    if (cur.sleepDue) { sleepCheckRun('ask'); return; }
     if (document.visibilityState !== 'visible' || $('cvText').value.trim()) { gcNext(5000); return; }
     gcAsk('');
   }, ms);
@@ -3946,12 +4040,13 @@ async function gcAsk(text) {
 function sayInGroupCall(text) {
   const cur = CALL.cur; if (!cur || !cur.answeredAt) return;
   text = String(text || '').trim(); if (!text) return;
+  sleepUser(cur); hfStop();
   stopVoice(); gcTalking(''); // 話している途中なら止めて、あなたの言葉を優先
   gcSub('me', text);
   if (cur.busy) { cur.queued.push(text); return; }
   gcAsk(text);
 }
-async function endGroupCall() {
+async function endGroupCall(by) {
   const cur = CALL.cur; if (!cur || cur.ending) return;
   cur.ending = true; clearTimeout(cur.contTimer);
   const now = Date.now();
@@ -3960,7 +4055,7 @@ async function endGroupCall() {
   closeCallScreen();
   if (!cur.id || !cur.answeredAt) { if (cur.id) api('POST', '/gcall/end', { id: cur.id }).catch(() => {}); return; }
   try {
-    const d = await api('POST', '/gcall/end', { id: cur.id, heard, est: { usd, gpuMs } });
+    const d = await api('POST', '/gcall/end', { id: cur.id, heard, ...(by === 'sleep' ? { by } : {}), est: { usd, gpuMs } });
     if (d.message) { addMsg(d.message); renderAll(true); }
     toast(`グループ通話 ${durText(now - cur.answeredAt)}・GPU 約${Math.round(gpuMs / 60000) || 1}分・約$${usd.toFixed(3)}（約${yenOf(usd)}円）`, 5000);
   } catch (e) { toast(e.message); }

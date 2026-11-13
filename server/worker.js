@@ -14,7 +14,7 @@
 //    ・Cron トリガー  * * * * *  （毎分。実際に動くのは13分おき）
 // =====================================================================
 
-const VERSION = '第65版（2026-11-12 17:10:00 更新・ホームを個人とグループに分ける）';
+const VERSION = '第66版（2026-11-14 04:00:00 更新・寝落ち通話（表））';
 const DEFAULT_MODEL = 'gemini-flash-latest';
 const DEFAULT_GROK_MODEL = 'grok-4.7';                 // X（Twitter）の Grok と同じ最新世代
 const FALLBACK_GROK_MODEL = 'grok-4-fast-non-reasoning'; // 上が使えないときの予備
@@ -503,7 +503,7 @@ async function route(key, url, body, env, ctx) {
       for (const x of calls) if (x.status === 'dialing') await delCall(env, x.id);
       const d = await decideAnswer(env, c, st, Date.now());
       const test = !!body.test; // テスト発信（第49版）：AI がどう決めても必ず出る。ふだんなら出たかどうかと、その理由を返す
-      const cl = { id: newCallId(), charId: c.id, members: [c.id], dir: 'out', status: 'dialing', created: Date.now(), answer: test || !!d.answer, after: d.after || 'none', line: String(d.line || '').slice(0, 200), transcript: [], test };
+      const cl = { id: newCallId(), charId: c.id, members: [c.id], dir: 'out', status: 'dialing', created: Date.now(), answer: test || !!d.answer, after: d.after || 'none', line: String(d.line || '').slice(0, 200), transcript: [], test, ...(body.sleep ? { sleep: true, ...(body.keep === false ? { nokeep: true } : {}) } : {}) }; // 寝落ち通話（第66版）
       await putCall(env, cl);
       const out = { call: callPublic(cl), ringMs: test ? 3000 : cl.answer ? Math.round(4000 + Math.random() * 9000) : CALL_RING_MS };
       if (test) out.test = { wouldAnswer: !!d.answer, reason: String(d.reason || '').slice(0, 200), now: activityText(await getState(env, c.id), Date.now(), c.id).slice(0, 200) };
@@ -555,7 +555,7 @@ async function route(key, url, body, env, ctx) {
       cl.lastAt = Date.now();
       await putCall(env, cl);
       if (omoteStop(await getSettings(env), c.id)) return json({ lines: [], paused: true });
-      const r = await keep(ctx, callReply(env, cl, c));
+      const r = await keep(ctx, callReply(env, cl, c, text ? '' : sleepCheck(cl, body.check)));
       const now2 = await kvGet(env, 'call:' + cl.id, null);
       if (!now2) return json({ lines: [], ended: true });
       now2.transcript.push(...r.lines.map((t) => ({ who: 'char', text: t, at: Date.now() })));
@@ -572,7 +572,7 @@ async function route(key, url, body, env, ctx) {
       const cl = await kvGet(env, 'call:' + String(body.id || ''), null);
       if (!cl) return json({ message: null });
       const c = await omoteChar(env, cl.charId);
-      const m = await keep(ctx, finishCall(env, cl, c, { by: body.by === 'char' ? 'char' : 'me', est: body.est || null }));
+      const m = await keep(ctx, finishCall(env, cl, c, { by: body.by === 'char' ? 'char' : body.by === 'sleep' && cl.sleep ? 'sleep' : 'me', est: body.est || null })); // sleep：寝落ちで切れた
       return json({ message: m });
     }
     case 'GET /call': {
@@ -645,6 +645,7 @@ async function route(key, url, body, env, ctx) {
       const g = await getCallGroup(env, body.groupId);
       const st = await getSettings(env);
       if (!phoneOn(st)) throw new HttpError(400, '電話はオフになっています（設定）');
+      if (body.sleep && g.ura) throw new HttpError(400, '寝落ち通話は表だけです');
       if (g.ura && st.uraPaused) throw new HttpError(409, '裏は止めています（設定で再開できます）');
       if (!g.ura && st.omotePaused) throw new HttpError(409, OMOTE_PAUSED_MSG);
       if (!g.ura && g.paused) throw new HttpError(409, 'このグループは止めています（グループの設定で再開できます）');
@@ -661,7 +662,7 @@ async function route(key, url, body, env, ctx) {
       const test = !!body.test;
       const d = test || (!g.ura && !g.lateJoin) ? null : g.ura ? await decideUraGroupAnswer(env, g, ms, Date.now(), chars) : await decideGroupAnswer(env, g, ms, Date.now()); // 裏も「ふつう」なら出る子を決める（第62版。test＝必ず全員出る）
       const joined = d ? ms.filter((c) => d[c.id] && d[c.id].answer).map((c) => c.id) : ms.map((c) => c.id);
-      const cl = { id: newCallId(), group: g.id, ...(g.ura ? { ura: true } : {}), charId: g.id, members: joined, invited: ms.map((c) => c.id), dir: 'out', status: 'dialing', created: Date.now(), transcript: [], batch: 0, test };
+      const cl = { id: newCallId(), group: g.id, ...(g.ura ? { ura: true } : {}), ...(body.sleep ? { sleep: true, ...(body.keep === false ? { nokeep: true } : {}) } : {}), charId: g.id, members: joined, invited: ms.map((c) => c.id), dir: 'out', status: 'dialing', created: Date.now(), transcript: [], batch: 0, test };
       if (body.from) { // 前の通話の最後の流れを、そのまま覚えてかけ直す（言ったことにはしない＝old）
         const prev = await kvGet(env, gclogKey(g.id, body.from), null);
         if (!prev) throw new HttpError(404, 'この通話の会話は残っていません');
@@ -707,7 +708,7 @@ async function route(key, url, body, env, ctx) {
       await putCall(env, cl);
       if (gcStopped(await getSettings(env), g)) return json({ lines: [], paused: true });
       let r;
-      try { r = await keep(ctx, gcallReply(env, cl, g, !text ? (body.auto ? 'auto' : true) : false)); } // auto：［勝手に話す］がオン（第56版）
+      try { r = await keep(ctx, gcallReply(env, cl, g, !text ? (body.auto ? 'auto' : true) : false, text ? '' : sleepCheck(cl, body.check))); } // auto：［勝手に話す］がオン（第56版）・check：寝落ち通話の確認（第66版）
       catch (e) { await log(env, `グループ通話（${g.name}）の返事: ${e.message}`); throw e; }
       const now2 = await kvGet(env, 'call:' + cl.id, null);
       if (!now2) return json({ lines: [], ended: true });
@@ -722,7 +723,7 @@ async function route(key, url, body, env, ctx) {
       if (!cl || !cl.group) return json({ message: null });
       if (cl.status === 'dialing') { await delCall(env, cl.id); return json({ message: null }); }
       gcallCut(cl, body.heard);
-      const m = await keep(ctx, finishGroupCall(env, cl, { by: 'me', est: body.est || null }));
+      const m = await keep(ctx, finishGroupCall(env, cl, { by: body.by === 'sleep' && cl.sleep ? 'sleep' : 'me', est: body.est || null }));
       return json({ message: m });
     }
     case 'POST /meet/end': { // 会うのを終える：会った内容をまとめて、表の記憶へ
@@ -2613,7 +2614,7 @@ ${await callTalk(env, c, 14) || '（なし）'}
 }
 // --- 通話中の返事
 const CALL_SCHEMA = { type: 'object', properties: { messages: { type: 'array', items: { type: 'string' } }, hangup: { type: 'boolean' } }, required: ['messages', 'hangup'], additionalProperties: false };
-function buildCallSystem(c, cl, lifeInfo, talk, state, now) {
+function buildCallSystem(c, cl, lifeInfo, talk, state, now, check = '') {
   const el = cl.answeredAt ? now - cl.answeredAt : 0;
   return `あなたは次のキャラクターになりきって、ユーザーと「電話で」話しています。声だけのやり取りです。ふだんスマホのメッセージアプリ（トーク）でやり取りしている相手で、これまでの記憶はそのまま覚えています。
 
@@ -2633,13 +2634,13 @@ ${talk || '（なし）'}
 - 返事は1〜2個に分けてよい（間をあけて話すとき）。
 - 電話を切るタイミングは、時間で決めない。キャラの性格・今の様子・このあとの予定から自然に決める。切るときは「そろそろ切るね」などと別れのあいさつをして、hangup を true にする。
 - ユーザーが切ろうとしても、性格や流れによっては「まだ切らないで」と少し引き止めてよい（ただし、しつこく引き止め続けない）。ユーザーがはっきり切ると言ったら受け入れる。
-${el >= CALL_MAX_MS ? '- もう1時間近く話している。この返事で自然に話をまとめて、別れのあいさつをして hangup を true にする。\n' : el >= CALL_WRAP_MS ? '- かなり長く話している。そろそろ自然に話をまとめる方向へ（今すぐ切らなくてよい）。\n' : ''}${DIR_RULE}- ユーザーの行動・発言・気持ちを勝手に決めない。
+${cl.sleep ? '' : el >= CALL_MAX_MS ? '- もう1時間近く話している。この返事で自然に話をまとめて、別れのあいさつをして hangup を true にする。\n' : el >= CALL_WRAP_MS ? '- かなり長く話している。そろそろ自然に話をまとめる方向へ（今すぐ切らなくてよい）。\n' : ''}${DIR_RULE}- ユーザーの行動・発言・気持ちを勝手に決めない。
 - 自分がAIであることには触れない。
 - キャラクターが未成年の設定である場合、性的な内容は一切話さない。
-${cl.transcript.length ? '' : cl.dir === 'in' ? '\n# 今回\nユーザーが電話に出たところ。かけた側として「もしもし」から話し始める。\n' : '\n# 今回\n電話に出たところ。「もしもし」など、出たときの第一声から。\n'}
+${cl.transcript.length ? '' : cl.dir === 'in' ? '\n# 今回\nユーザーが電話に出たところ。かけた側として「もしもし」から話し始める。\n' : '\n# 今回\n電話に出たところ。「もしもし」など、出たときの第一声から。\n'}${sleepRules(cl, check)}
 出力は {"messages": ["言葉1", "言葉2"], "hangup": false} の形のJSONのみ。`;
 }
-async function callReply(env, cl, c) {
+async function callReply(env, cl, c, check = '') {
   const st = await getSettings(env), now = Date.now();
   const state = await getState(env, c.id);
   const lifeInfo = await lifeContext(env, c, st, now).catch(() => '');
@@ -2650,22 +2651,32 @@ async function callReply(env, cl, c) {
     const t = turns[turns.length - 1];
     if (t && t.role === role) t.parts[0].text += '\n' + m.text; else turns.push({ role, parts: [{ text: m.text }] });
   }
-  if (!turns.length || turns[turns.length - 1].role !== 'user') turns.push({ role: 'user', parts: [{ text: cl.transcript.length ? '（少し黙っている）' : cl.dir === 'in' ? '（電話に出た）' : '（着信）' }] });
+  if (!turns.length || turns[turns.length - 1].role !== 'user') turns.push({ role: 'user', parts: [{ text: check ? '（ユーザーは何も言わない）' : cl.transcript.length ? '（少し黙っている）' : cl.dir === 'in' ? '（電話に出た）' : '（着信）' }] });
   const wb = await worldBlock(env, c.prompt + '\n' + cl.transcript.slice(-20).map((m) => m.text).join('\n'));
-  const r = await callAIObj(env, 'omote', wb + buildCallSystem(c, cl, lifeInfo, talk, state, now), turns, CALL_SCHEMA, 'call_reply');
+  const r = await callAIObj(env, 'omote', wb + buildCallSystem(c, cl, lifeInfo, talk, state, now, check), turns, CALL_SCHEMA, 'call_reply');
   const lines = (Array.isArray(r && r.messages) ? r.messages : []).map((t) => String(t || '').replace(/^「([\s\S]*)」$/, '$1').trim()).filter(Boolean).slice(0, 3);
   if (!lines.length) throw new Error('返答が空でした');
   if (looksRefused(lines)) throw new AiRefused();
-  const hangup = !!(r && r.hangup) || (cl.answeredAt && now - cl.answeredAt > CALL_MAX_MS + 3 * MIN);
-  return { lines, hangup };
+  const hangup = !cl.sleep && (!!(r && r.hangup) || (cl.answeredAt && now - cl.answeredAt > CALL_MAX_MS + 3 * MIN)); // 寝落ち通話はキャラから切らない（切るのはアプリ）
+  return { lines: check === 'ask' ? lines.slice(0, 1) : lines, hangup };
 }
 const CALL_SUM_SCHEMA = MEET_SUM_SCHEMA;
+// 寝落ち通話（第66版・表の1対1と表のグループ通話だけ）：cl.sleep。cl.nokeep＝記憶を引き継がない（この通話のことは、まとめ・記憶・会話の文字に残さない。これまでの記憶は使う）
+// check：'ask'＝しばらく返事がないので「まだ聞いてますか？」と確かめる／'bye'＝それでも返事がないので、おやすみを言う（このあとアプリが切る）
+function sleepRules(cl, check, group) {
+  if (!cl.sleep) return '';
+  let s = `\n# 寝落ち通話\nユーザーは寝る前に、そのまま寝落ちするつもりで通話をつないでいる。夜らしく、穏やかに、ゆっくり、少し小さめの声のつもりで話す（にぎやかにしすぎない・盛り上げすぎない・目が覚めるような話題は避ける）。${group ? '' : 'キャラから電話を切ろうとしない（hangup は false）。'}\n`;
+  if (check === 'ask') s += `\n# 今回（最優先）\nユーザーがしばらく黙っている。眠ってしまったかもしれない。起こさないくらいの小さな声で、「……まだ聞いてますか？」のように、${group ? 'だれか1人が、' : ''}その子らしい言い方で短く1言だけ確かめる（1セリフ）。\n`;
+  if (check === 'bye') s += `\n# 今回（最優先）\n確かめても返事がない。ユーザーは眠ってしまったようだ。「……寝ちゃったみたいですね。おやすみなさい」のように、${group ? '1〜3人が、' : ''}その子らしい言い方で、そっと短くおやすみを言う（${group ? '合わせて1〜3セリフ' : '1〜2セリフ'}。これが最後の言葉）。\n`;
+  return s;
+}
+const sleepCheck = (cl, v) => (cl.sleep && (v === 'ask' || v === 'bye') ? v : '');
 async function finishCall(env, cl, c, { by = 'me', est = null } = {}) {
   await delCall(env, cl.id);
   if (cl.status !== 'active') return null;
   const now = Date.now(), dur = Math.max(0, now - (cl.answeredAt || now));
   let sum = '';
-  if (cl.transcript.some((m) => m.who === 'me') && !omoteStop(await getSettings(env), c.id)) {
+  if (!cl.nokeep && cl.transcript.some((m) => m.who === 'me') && !omoteStop(await getSettings(env), c.id)) { // 寝落ち通話で「引き継がない」なら、まとめも記憶も残さない
     const text = cl.transcript.slice(-80).map((m) => (m.who === 'me' ? 'ユーザー: ' : c.name + ': ') + trunc(m.text, 200)).join('\n');
     try {
       const r = await aiJson(env, 'omote', `あなたは、${c.name}とユーザーが電話で話した内容を、${c.name}があとでトークで思い出せるように、短くまとめる係です。何の話をして、どんな雰囲気だったかを、1〜2文で具体的に書きます。`, text, CALL_SUM_SCHEMA, 'call_summary');
@@ -2673,7 +2684,7 @@ async function finishCall(env, cl, c, { by = 'me', est = null } = {}) {
     } catch (e) { await log(env, `通話のまとめ（${c.name}）: ${e.message}`); }
   }
   if (sum) await env.DB.prepare("INSERT INTO memories (char_id,kind,text,due,status,created,followed) VALUES (?, 'fact', ?, '', 'open', ?, 0)").bind(c.id, `${jstDay(now)}にユーザーと電話で話した：${sum}`.slice(0, 200), now).run();
-  const meta = { dur, by, dir: cl.dir, ...(sum ? { sum } : {}), ...(est && Number.isFinite(Number(est.usd)) ? { usd: Math.round(Number(est.usd) * 1e4) / 1e4, gpuMs: Math.round(num(est.gpuMs, 0)) } : {}) };
+  const meta = { dur, by, dir: cl.dir, ...(cl.sleep ? { sleep: true } : {}), ...(cl.nokeep ? { nokeep: true } : {}), ...(sum ? { sum } : {}), ...(est && Number.isFinite(Number(est.usd)) ? { usd: Math.round(Number(est.usd) * 1e4) / 1e4, gpuMs: Math.round(num(est.gpuMs, 0)) } : {}) };
   return callMsg(env, c.id, cl.dir === 'in' ? 'char' : 'me', 'callog', '', meta);
 }
 
@@ -2828,7 +2839,7 @@ ${el >= 90 * MIN ? '- かなり長く話している。疲れや眠気を自然�
 ${fresh ? '' : cl.from ? `\n# 今回\n前回（${fmtTime(cl.fromAt || now)}）のグループ通話の続き。上の会話は、前回の最後のほう（もう話し終えたこと）。いま、またみんなが通話に入ったところ。前回の流れを覚えていて、自然に再開する。前回のセリフをそのままくり返さない。\n` : `\n# 今回\nいま、みんなが通話に入ったところ。通話に入ったときの言葉から。最初にだれが話すかは、性格と関係から自然に決める。\n`}${cont === 'auto' && fresh ? '\n# 今回\nユーザーは「みんなで話していて」と、聞き役にまわっている。キャラどうしで、どんどん会話を続ける（話題を広げる・掘り下げる・ときどき新しい話題に移る・掛け合う。同じことのくり返しにしない）。ユーザーの返事を待たない。ときどき（数回に1回くらい）ユーザーに話題を振ってもよい。振ったときだけ wait_user を true にする。\n' : cont && fresh ? '\n# 今回\nユーザーは黙って聞いている。キャラどうしで自然に会話を続ける（ユーザーに話を振ってもよい）。\n' : ''}
 出力は {"lines": [{"speaker": "名前", "text": "セリフ"}], "wait_user": false} の形のJSONのみ。`;
 }
-async function gcallReply(env, cl, g, cont = false) {
+async function gcallReply(env, cl, g, cont = false, check = '') {
   const st = await getSettings(env), now = Date.now(), today = jstDay(now);
   const chars = await loadChars(env);
   const ms = cl.members.map((id) => chars.find((c) => c.id === id)).filter(Boolean);
@@ -2859,7 +2870,7 @@ ${activityText(state, now, c.id)}${mem ? `\n### ${c.name}が覚えているユ�
   const gmem = await kvGet(env, 'gmem:' + g.id, []);
   const wb = await worldBlock(env, (g.prompt || '') + '\n' + (g.ura ? (g.synopsis || '') + '\n' + ms.map((c) => c.prompt).join('\n') + '\n' : '') + cl.transcript.slice(-20).map((m) => m.text).join('\n'));
   const sys = g.ura ? buildUraGroupCallSystem(g, ms, info, gmem, cl, now, cont, st, await uraGroupTalk(env, g, chars)) : buildGroupCallSystem(g, ms, info, gmem, cl, now, cont);
-  const r = await callAIObj(env, g.ura ? 'ura' : 'omote', wb + sys, turns, GCALL_SCHEMA, 'group_call_reply');
+  const r = await callAIObj(env, g.ura ? 'ura' : 'omote', wb + sys + sleepRules(cl, check, true), turns, GCALL_SCHEMA, 'group_call_reply');
   const lines = [];
   for (const x of (r && Array.isArray(r.lines) ? r.lines : [])) {
     const c = findSpeaker(ms, x && x.speaker);
@@ -2868,7 +2879,7 @@ ${activityText(state, now, c.id)}${mem ? `\n### ${c.name}が覚えているユ�
   }
   if (!lines.length) throw new Error('返答が空でした');
   if (looksRefused(lines.map((x) => x.text))) throw new AiRefused();
-  return { lines: lines.slice(0, 8), wait: !!(r && r.wait_user) };
+  return { lines: check === 'ask' ? lines.slice(0, 1) : lines.slice(0, check === 'bye' ? 3 : 8), wait: !!(r && r.wait_user) };
 }
 async function finishGroupCall(env, cl, { by = 'me', est = null } = {}) {
   await delCall(env, cl.id);
@@ -2876,7 +2887,7 @@ async function finishGroupCall(env, cl, { by = 'me', est = null } = {}) {
   const now = Date.now(), dur = Math.max(0, now - (cl.answeredAt || now));
   let g = null; try { g = await getCallGroup(env, cl.group); } catch (_) { return null; } // グループが消えていたら記録しない
   let sum = '';
-  const said = cl.transcript.filter((m) => !m.old); // 続きから話したときの前回のセリフは入れない
+  const said = cl.nokeep ? [] : cl.transcript.filter((m) => !m.old); // 続きから話したときの前回のセリフは入れない。寝落ち通話で「引き継がない」なら何も残さない（第66版）
   const stS = await getSettings(env);
   if (said.filter((m) => m.who !== 'me').length >= 2 && !(g.ura ? stS.uraPaused : stS.omotePaused)) {
     const chars = await loadChars(env);
@@ -2892,7 +2903,7 @@ async function finishGroupCall(env, cl, { by = 'me', est = null } = {}) {
     list.push({ id: 'm' + now.toString(36) + randomAlnum(4), at: now, text: `${jstDay(now)}のグループ通話：${sum}` });
     await kvSet(env, 'gmem:' + g.id, list.slice(-GMEM_MAX));
   }
-  const meta = { dur, by, dir: cl.dir, group: true, members: cl.members, ...(said.length ? { log: true } : {}), ...(cl.from ? { from: cl.from } : {}), ...(sum ? { sum } : {}), ...(est && Number.isFinite(Number(est.usd)) ? { usd: Math.round(Number(est.usd) * 1e4) / 1e4, gpuMs: Math.round(num(est.gpuMs, 0)) } : {}) };
+  const meta = { dur, by, dir: cl.dir, group: true, members: cl.members, ...(cl.sleep ? { sleep: true } : {}), ...(cl.nokeep ? { nokeep: true } : {}), ...(said.length ? { log: true } : {}), ...(cl.from ? { from: cl.from } : {}), ...(sum ? { sum } : {}), ...(est && Number.isFinite(Number(est.usd)) ? { usd: Math.round(Number(est.usd) * 1e4) / 1e4, gpuMs: Math.round(num(est.gpuMs, 0)) } : {}) };
   const msg = await callMsg(env, g.key, cl.dir === 'in' ? 'char' : 'me', 'callog', '', meta); // 裏は裏のグループトーク（grp-…#ura）に
   if (said.length) { // この通話で話したことを、全部文字で残す（第57版。続きから話したときは、前回の最後の流れも一緒に）
     const all = cl.transcript.map((m) => ({ who: m.who, text: m.text, at: m.at, ...(m.old ? { old: true } : {}) })).slice(-GCLOG_MAX);

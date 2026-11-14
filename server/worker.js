@@ -76,7 +76,7 @@ export default {
     ctx.waitUntil(runDueProactive(env).catch((e) => log(env, '自動送信: ' + e.message))); // 時間をずらした話しかけ
     ctx.waitUntil(runDuePostscripts(env).catch((e) => log(env, '追伸: ' + e.message))); // 追伸・不在着信のあとの言葉
     ctx.waitUntil(runAppointments(env).catch((e) => log(env, '会う約束: ' + e.message))); // 会う約束の通知（試作・使うときだけ）
-    ctx.waitUntil(runCalls(env).catch((e) => log(env, '電話: ' + e.message))); // 電話：GPU を起こしてから鳴らす・不在・放置・折り返し
+    ctx.waitUntil(runMorning(env).catch((e) => log(env, 'モーニングコール: ' + e.message)).then(() => runCalls(env)).catch((e) => log(env, '電話: ' + e.message))); // モーニングコール（第70版）→ 電話：GPU を起こしてから鳴らす・不在・放置・折り返し
     ctx.waitUntil(runDisasters(env, minute).catch((e) => log(env, '災害の確認: ' + e.message))); // 地震・速報は毎分、ほかは間をあけて確認
     // 見回りは毎分。キャラごとに13分の中で担当の分をずらして判定する（何人も同じ瞬間に動かないように）
     ctx.waitUntil(tick(env, minute).catch((e) => log(env, 'tick全体: ' + e.message)));
@@ -136,6 +136,7 @@ async function kvGet(env, k, def) {
   const r = await env.DB.prepare('SELECT v FROM kv WHERE k=?').bind(k).first();
   return r ? JSON.parse(r.v) : def;
 }
+const kvDel = (env, k) => env.DB.prepare('DELETE FROM kv WHERE k=?').bind(k).run();
 async function kvSet(env, k, v) {
   await env.DB.prepare('INSERT INTO kv (k,v) VALUES (?,?) ON CONFLICT(k) DO UPDATE SET v=excluded.v').bind(k, JSON.stringify(v)).run();
 }
@@ -457,7 +458,8 @@ async function route(key, url, body, env, ctx, req) {
       const { results: vmr } = await env.DB.prepare("SELECT k,v FROM kv WHERE k >= 'vm:' AND k < 'vm;'").all();
       const vms = {};
       for (const r of vmr) { try { vms[r.k.slice(3)] = JSON.parse(r.v); } catch (_) {} }
-      return json({ calls, vms, appts, chars, groups: await loadGroups(env), ogroups: await loadOGroups(env), aiAlerts: await aiAlerts(env), messages, more, reads, charRead, reactions, status, cost: await costSummary(env).catch(() => null), outage: dis && dis.outage ? dis.outage : null, retracted: rt.map((r) => r.id), settings: await getSettings(env), now: Date.now(), version: VERSION });
+      const mc = await mcView(env).catch(() => null); // モーニングコール（第70版）
+      return json({ calls, vms, mc, appts, chars, groups: await loadGroups(env), ogroups: await loadOGroups(env), aiAlerts: await aiAlerts(env), messages, more, reads, charRead, reactions, status, cost: await costSummary(env).catch(() => null), outage: dis && dis.outage ? dis.outage : null, retracted: rt.map((r) => r.id), settings: await getSettings(env), now: Date.now(), version: VERSION });
     }
 
     // ---- 立ち絵の表情（ノベル画面から。裏の返事でAIが選ぶ候補。画像は受け取らない）
@@ -540,6 +542,7 @@ async function route(key, url, body, env, ctx, req) {
       if (cl.dir !== 'in' || cl.status !== 'ringing' || Date.now() > cl.ringAt + CALL_RING_MS + CALL_GRACE_MS) throw new HttpError(410, '電話はもう切れました（不在着信になりました）');
       cl.status = 'active'; cl.answeredAt = Date.now(); cl.lastAt = Date.now();
       await putCall(env, cl);
+      if (cl.morning) await kvDel(env, 'mc:run'); // モーニングコールに出た＝もうかけ直さない
       const r = await keep(ctx, callReply(env, cl, c));
       cl.transcript.push(...r.lines.map((t) => ({ who: 'char', text: t, at: Date.now() })));
       await putCall(env, cl);
@@ -560,14 +563,14 @@ async function route(key, url, body, env, ctx, req) {
       if (text) cl.transcript.push({ who: 'me', text, at: Date.now() });
       cl.lastAt = Date.now();
       await putCall(env, cl);
-      if (omoteStop(await getSettings(env), c.id)) return json({ lines: [], paused: true });
+      if (!cl.morning && omoteStop(await getSettings(env), c.id)) return json({ lines: [], paused: true }); // モーニングコールは止めている子でも話す
       const r = await keep(ctx, callReply(env, cl, c, text ? '' : sleepCheck(cl, body.check)));
       const now2 = await kvGet(env, 'call:' + cl.id, null);
       if (!now2) return json({ lines: [], ended: true });
       now2.transcript.push(...r.lines.map((t) => ({ who: 'char', text: t, at: Date.now() })));
       now2.lastAt = Date.now();
       await putCall(env, now2);
-      return json({ lines: r.lines, hangup: r.hangup });
+      return json({ lines: r.lines, hangup: r.hangup, ...(r.promise ? { promise: r.promise } : {}) });
     }
     case 'POST /call/ping': { // 通話中：まだつながっている（放置で切れないように）
       const cl = await getCall(env, body.id);
@@ -591,6 +594,34 @@ async function route(key, url, body, env, ctx, req) {
       for (const v of list) if (v.id === Number(body.id)) v.heard = true;
       await kvSet(env, 'vm:' + id, list);
       return json({ vms: list });
+    }
+    // ---- モーニングコール（第70版）
+    case 'GET /mc': return json({ mc: await mcView(env), chars: (await mcChars(env)).map((c) => c.id) });
+    case 'POST /mc/set': { // 手で入れる（1回だけ）：time "HH:MM"（これから来るその時刻）、who 'pick'|'random'、charId、keep
+      const at = mcNextAt(body.time, Date.now());
+      if (!at) throw new HttpError(400, '時刻は HH:MM で入れてください');
+      const who = body.who === 'random' ? 'random' : 'pick';
+      let charId = '';
+      if (who === 'pick') { const c = await omoteChar(env, body.charId); if (!phoneChar(c)) throw new HttpError(400, 'この子には声の名前がないので、モーニングコールはできません'); charId = c.id; }
+      else if (!(await mcChars(env)).length) throw new HttpError(400, 'ランダムで選べる子がいません（声の名前があって、表のトークで1回でも話した子）');
+      await kvSet(env, 'mc:set', { at, who, charId, keep: body.keep !== false, made: Date.now() });
+      return json({ mc: await mcView(env) });
+    }
+    case 'POST /mc/cancel': { // 取り消す：set（設定）・promise（約束）・run（起こしている途中＝これ以上かけ直さない）
+      const w = String(body.which || '');
+      if (!['set', 'promise', 'run'].includes(w)) throw new HttpError(400, '取り消すものが分かりません');
+      await kvDel(env, 'mc:' + w);
+      return json({ mc: await mcView(env) });
+    }
+    case 'POST /mc/test': { // テスト：今すぐモーニングコールをかけてもらう（1回だけ・かけ直しなし・キャラの記憶には残さない）
+      let charId = '';
+      if (body.who === 'random') { const cs = await mcChars(env); if (!cs.length) throw new HttpError(400, 'ランダムで選べる子がいません'); charId = cs[Math.floor(Math.random() * cs.length)].id; }
+      else { const c = await omoteChar(env, body.charId); if (!phoneChar(c)) throw new HttpError(400, 'この子には声の名前がありません'); charId = c.id; }
+      if (body.force) await clearStaleCalls(env);
+      if (busyCall(await listCalls(env))) throw new HttpError(409, 'いまは別の電話中です');
+      if (await kvGet(env, 'mc:run', null)) throw new HttpError(409, 'いまモーニングコールの途中です');
+      await keep(ctx, mcStartRun(env, { at: Date.now(), charId, keep: false, src: 'set', tries: 0, nextAt: 0, test: true }));
+      return json({ ok: true, charId });
     }
     case 'POST /call/test': { // テスト：今すぐ電話をかけてもらう（設定の時間帯・頻度は無視）
       const c = await omoteChar(env, body.charId);
@@ -2175,11 +2206,12 @@ async function generateAndStore(env, c, d, hist, lastRead, world = 'omote') {
       // 会う約束：ユーザーが話した直後の返事で、約束が決まった・変わった・取り消されたかも答えてもらう（使うとき・モードがオンのときだけ）
       meet: meetOn(st, c) && !special && d.mode !== 'call' && hist.length && hist[hist.length - 1].sender === 'me' ? { cur: await kvGet(env, 'appt:' + c.id, null) } : null,
       voice: vmsgOpt(c, d, hist), // ボイスメッセージ（第70版）
+      wake: phoneChar(c) && d.mode === 'reply' && hist.length && hist[hist.length - 1].sender === 'me' && WAKE_RE.test(hist[hist.length - 1].text || ''), // モーニングコールを頼まれたかも（第70版）
     };
     const wb = await worldBlock(env, c.prompt + '\n' + hist.slice(-20).map((m) => m.text).join('\n'));
     const system = wb + buildSystem(c, special ? { ...d } : d, hist, now, tlInfo, lifeInfo);
     const contents = buildContents(hist, 'omote', images);
-    if (opt.news || opt.photo || opt.edit || opt.typo || opt.retract || opt.react || opt.quote || opt.ps || opt.meet || opt.voice || special) {
+    if (opt.news || opt.photo || opt.edit || opt.typo || opt.retract || opt.react || opt.quote || opt.ps || opt.meet || opt.voice || opt.wake || special) {
       rich = await callOmoteRich(env, { ...c, maxSplit: special ? 2 : c.maxSplit }, d, system, contents, opt);
       texts = rich.texts;
       rich.srcImage = newPhotos.length ? images[newPhotos[newPhotos.length - 1].image] : null;
@@ -2233,6 +2265,8 @@ async function generateAndStore(env, c, d, hist, lastRead, world = 'omote') {
   const res = await env.DB.batch(items.map((x, i) =>
     env.DB.prepare('INSERT INTO messages (char_id,sender,text,at,image,alt,reply_to,face,kind,meta) VALUES (?,?,?,?,?,?,?,?,?,?)').bind(key, x.sender, x.text, t0 + i, x.image || null, x.alt || null, x.replyTo || null, x.face || null, x.kind || null, x.meta ? JSON.stringify(x.meta) : null)));
   const out = items.map((x, i) => ({ id: res[i].meta.last_row_id, charId: key, sender: x.sender, text: x.text, at: t0 + i, ...(x.image ? { image: x.image, alt: x.alt } : {}), ...(x.replyTo ? { replyTo: x.replyTo } : {}), ...(x.face ? { face: x.face } : {}), ...(x.kind ? { kind: x.kind, meta: x.meta } : {}) }));
+  // モーニングコールの約束（第70版）：トークで頼まれて引き受けた
+  if (rich && rich.wake) await mcFromAI(env, c, rich.wake, { keep: true, src: 'talk' }).catch((e) => log(env, 'モーニングコールの約束: ' + e.message));
   // 会う約束：決まった・変わった・取り消された
   if (rich && rich.meet) await applyMeet(env, c, rich.meet, now).catch((e) => log(env, '会う約束: ' + e.message));
   // 追伸：数分後に、思い出したように一言
@@ -2545,7 +2579,7 @@ async function getCall(env, id) {
 }
 const putCall = (env, cl) => kvSet(env, 'call:' + cl.id, cl);
 const delCall = (env, id) => env.DB.prepare('DELETE FROM kv WHERE k=?').bind('call:' + id).run();
-const callPublic = (cl) => ({ id: cl.id, charId: cl.charId, ...(cl.group ? { group: cl.group, invited: cl.invited || [] } : {}), members: cl.members, dir: cl.dir, status: cl.status, created: cl.created, ringAt: cl.ringAt || 0, answeredAt: cl.answeredAt || 0, ringUntil: cl.ringAt ? cl.ringAt + CALL_RING_MS + CALL_GRACE_MS : 0 });
+const callPublic = (cl) => ({ id: cl.id, charId: cl.charId, ...(cl.group ? { group: cl.group, invited: cl.invited || [] } : {}), ...(cl.morning ? { morning: true, ...(cl.nokeep ? { nokeep: true } : {}), ...(cl.test ? { test: true } : {}) } : {}), members: cl.members, dir: cl.dir, status: cl.status, created: cl.created, ringAt: cl.ringAt || 0, answeredAt: cl.answeredAt || 0, ringUntil: cl.ringAt ? cl.ringAt + CALL_RING_MS + CALL_GRACE_MS : 0 });
 // アプリが「今は通話していない」と言ったときに、残っている通話（画面が固まった・アプリを閉じたなどで切れなかったもの）を片付ける。
 // 話していた通話は、ふつうに切ったときと同じく記録とまとめを残す（第54版）
 async function clearStaleCalls(env) {
@@ -2567,10 +2601,10 @@ async function warmTTS(env, st, ms = 20e3) { // GPU を起こす（返事が来�
     return r.ok;
   } catch (_) { return false; }
 }
-async function callNotify(env, st, c, title, body, url, ring) {
+async function callNotify(env, st, c, title, body, url, ring, critical) {
   if (st.notifyVia !== 'bark') await pushPayload(env, { title, body, charId: c.id, tag: 'call-' + c.id, url }).catch((e) => log(env, '電話の通知: ' + e.message));
   // Bark はタップすると Safari で開く（ホーム画面のアプリではない）ので、住所は付けず「アプリを開いて出て」と知らせる。アプリを開くと同期で着信画面が出る
-  if (st.notifyVia !== 'web') await sendBark(env, st, { title, body: ring ? body + '（トークのアプリを開くと出られます）' : body, cid: c.id, group: c.name, ring }).catch((e) => log(env, '電話の通知（Bark）: ' + e.message));
+  if (st.notifyVia !== 'web') await sendBark(env, st, { title, body: ring ? body + '（トークのアプリを開くと出られます）' : body, cid: c.id, group: c.name, ring, critical }).catch((e) => log(env, '電話の通知（Bark）: ' + e.message));
 }
 async function callMsg(env, key, sender, kind, text, meta) {
   const at = Date.now();
@@ -2632,11 +2666,12 @@ async function startIncoming(env, c, st, now, why) {
 async function ringNow(env, cl, st, c) {
   cl.status = 'ringing'; cl.ringAt = Date.now();
   await putCall(env, cl);
-  await callNotify(env, st, c, c.name, '📞 着信', CALL_URL + '?call=' + encodeURIComponent(cl.id), true);
+  await callNotify(env, st, c, c.name, cl.morning ? '⏰ モーニングコール' : '📞 着信', CALL_URL + '?call=' + encodeURIComponent(cl.id), true, !!cl.morning);
 }
 async function advanceCall(env, cl, st, c) {
   if (cl.status !== 'warming') return;
   if (await warmTTS(env, st)) return ringNow(env, cl, st, c);
+  if (cl.morning && Date.now() - cl.created > 60e3) return ringNow(env, cl, st, c); // モーニングコールは、声が遅れても時間どおりに鳴らす
   if (Date.now() - cl.created > CALL_WARM_GIVEUP) { await delCall(env, cl.id); await log(env, `電話（${c.name}）：声のサーバーを起こせなかったので、かけるのをやめました`); }
 }
 // 毎分：起こしている途中の着信・鳴りっぱなし・放置された通話・折り返しの予定
@@ -2675,6 +2710,7 @@ async function runCalls(env) {
 const VM_SCHEMA = { type: 'object', properties: { leave_voicemail: { type: 'boolean' }, voicemail: { type: 'string' }, send_line: { type: 'boolean' }, line: { type: 'string' } }, required: ['leave_voicemail', 'voicemail', 'send_line', 'line'], additionalProperties: false };
 async function callMissed(env, cl, c, how) {
   if (!['ringing', 'warming'].includes(cl.status)) return;
+  if (cl.morning) return mcMissed(env, cl, c, how); // モーニングコール（第70版）：4分おきにかけ直す・最後は留守電かボイスメッセージ
   await delCall(env, cl.id);
   const now = Date.now(), st = await getSettings(env);
   const miss = await callMsg(env, c.id, 'char', 'call', '', how === 'declined' ? { declined: true } : null);
@@ -2734,7 +2770,7 @@ ${await callTalk(env, c, 14) || '（なし）'}
 }
 // --- 通話中の返事
 const CALL_SCHEMA = { type: 'object', properties: { messages: { type: 'array', items: { type: 'string' } }, hangup: { type: 'boolean' } }, required: ['messages', 'hangup'], additionalProperties: false };
-function buildCallSystem(c, cl, lifeInfo, talk, state, now, check = '') {
+function buildCallSystem(c, cl, lifeInfo, talk, state, now, check = '', wake = false) {
   const el = cl.answeredAt ? now - cl.answeredAt : 0;
   return `あなたは次のキャラクターになりきって、ユーザーと「電話で」話しています。声だけのやり取りです。ふだんスマホのメッセージアプリ（トーク）でやり取りしている相手で、これまでの記憶はそのまま覚えています。
 
@@ -2757,10 +2793,12 @@ ${talk || '（なし）'}
 ${cl.sleep ? '' : el >= CALL_MAX_MS ? '- もう1時間近く話している。この返事で自然に話をまとめて、別れのあいさつをして hangup を true にする。\n' : el >= CALL_WRAP_MS ? '- かなり長く話している。そろそろ自然に話をまとめる方向へ（今すぐ切らなくてよい）。\n' : ''}${DIR_RULE}- ユーザーの行動・発言・気持ちを勝手に決めない。
 - 自分がAIであることには触れない。
 - キャラクターが未成年の設定である場合、性的な内容は一切話さない。
-${cl.transcript.length ? '' : cl.dir === 'in' ? '\n# 今回\nユーザーが電話に出たところ。かけた側として「もしもし」から話し始める。\n' : '\n# 今回\n電話に出たところ。「もしもし」など、出たときの第一声から。\n'}${sleepRules(cl, check)}
-出力は {"messages": ["言葉1", "言葉2"], "hangup": false} の形のJSONのみ。`;
+${cl.transcript.length ? '' : cl.dir === 'in' ? '\n# 今回\nユーザーが電話に出たところ。かけた側として「もしもし」から話し始める。\n' : '\n# 今回\n電話に出たところ。「もしもし」など、出たときの第一声から。\n'}${sleepRules(cl, check)}${morningRules(cl, now)}${wake ? WAKE_RULE : ''}
+出力は {"messages": ["言葉1", "言葉2"], "hangup": false${wake ? ', "wake": ""' : ''}} の形のJSONのみ。`;
 }
 async function callReply(env, cl, c, check = '') {
+  const lastMe = [...cl.transcript].reverse().find((m) => m.who === 'me');
+  const wake = !check && !cl.morning && phoneChar(c) && lastMe && cl.transcript[cl.transcript.length - 1] === lastMe && WAKE_RE.test(lastMe.text); // モーニングコールを頼まれたかも（第70版）
   const st = await getSettings(env), now = Date.now();
   const state = await getState(env, c.id);
   const lifeInfo = await lifeContext(env, c, st, now).catch(() => '');
@@ -2773,12 +2811,14 @@ async function callReply(env, cl, c, check = '') {
   }
   if (!turns.length || turns[turns.length - 1].role !== 'user') turns.push({ role: 'user', parts: [{ text: check ? '（ユーザーは何も言わない）' : cl.transcript.length ? '（少し黙っている）' : cl.dir === 'in' ? '（電話に出た）' : '（着信）' }] });
   const wb = await worldBlock(env, c.prompt + '\n' + cl.transcript.slice(-20).map((m) => m.text).join('\n'));
-  const r = await callAIObj(env, 'omote', wb + buildCallSystem(c, cl, lifeInfo, talk, state, now, check), turns, CALL_SCHEMA, 'call_reply');
+  const r = await callAIObj(env, 'omote', wb + buildCallSystem(c, cl, lifeInfo, talk, state, now, check, wake), turns, wake ? CALL_WAKE_SCHEMA : CALL_SCHEMA, 'call_reply');
   const lines = (Array.isArray(r && r.messages) ? r.messages : []).map((t) => String(t || '').replace(/^「([\s\S]*)」$/, '$1').trim()).filter(Boolean).slice(0, 3);
   if (!lines.length) throw new Error('返答が空でした');
   if (looksRefused(lines)) throw new AiRefused();
   const hangup = !cl.sleep && (!!(r && r.hangup) || (cl.answeredAt && now - cl.answeredAt > CALL_MAX_MS + 3 * MIN)); // 寝落ち通話はキャラから切らない（切るのはアプリ）
-  return { lines: check === 'ask' ? lines.slice(0, 1) : lines, hangup };
+  let promise = null;
+  if (wake) promise = await mcFromAI(env, c, r && r.wake, { keep: !cl.nokeep, src: cl.sleep ? 'sleep' : 'call' }).catch((e) => { log(env, 'モーニングコールの約束: ' + e.message); return null; });
+  return { lines: check === 'ask' ? lines.slice(0, 1) : lines, hangup, ...(promise ? { promise } : {}) };
 }
 const CALL_SUM_SCHEMA = MEET_SUM_SCHEMA;
 // 寝落ち通話（第66版・表の1対1と表のグループ通話だけ）：cl.sleep。cl.nokeep＝記憶を引き継がない（この通話のことは、まとめ・記憶・会話の文字に残さない。これまでの記憶は使う）
@@ -2790,6 +2830,140 @@ function sleepRules(cl, check, group) {
   if (check === 'bye') s += `\n# 今回（最優先）\n確かめても返事がない。ユーザーは眠ってしまったようだ。「……寝ちゃったみたいですね。おやすみなさい」のように、${group ? '1〜3人が、' : ''}その子らしい言い方で、そっと短くおやすみを言う（${group ? '合わせて1〜3セリフ' : '1〜2セリフ'}。これが最後の言葉）。\n`;
   return s;
 }
+// ================================================================ モーニングコール（第70版・表だけ）
+// 約束（kv mc:promise）＝前の日にトーク・通話・寝落ち通話で「〇時に起こして」と頼んで、キャラが引き受けたもの。
+// 設定（kv mc:set）＝あなたが手で入れたもの（1回だけ・決めた1人かランダム）。同じ朝に両方あれば約束を優先（設定はその朝お休み）。
+// 起こしている途中（kv mc:run）＝最初の1回＋4分おきにかけ直し3回（計4回）。出たら終わり。最後まで出なければ留守電かボイスメッセージ（性格で）。
+// keep:false（寝落ち通話で［引き継がない］を選んだ夜の約束・設定で選んだとき）＝キャラは約束も朝の通話も不在・留守電も知らない（記録に nokeep。あなたの画面には残る）
+const MC_TRIES = 4, MC_GAP = 4 * 60e3, MC_WARM = 60e3, MC_LATE = 30 * 60e3;
+const WAKE_RE = /起こして|起こしに|起こせ|モーニングコール|モーコ|目覚まし|朝.{0,10}(電話|コール|鳴らして)|(電話|コール).{0,10}朝|起きられる?ように|起きれる?ように/;
+const WAKE_RULE = `\n# モーニングコールの約束\n- ユーザーが、決まった時刻にあなたから電話をかけて起こしてほしい（モーニングコール）と頼んできたら、wake にその時刻を "HH:MM"（24時間・日本時間）で書く。時刻があいまいなら言葉で確かめ、決まるまでは ""。前に引き受けた約束をやめてほしいと言われたら "cancel"。関係ないときは ""。\n- 引き受けるのが基本（キャラの性格に合わせた言い方で、引き受けたことと時刻を言葉でも伝える）。\n`;
+const CALL_WAKE_SCHEMA = { type: 'object', properties: { messages: { type: 'array', items: { type: 'string' } }, hangup: { type: 'boolean' }, wake: { type: 'string' } }, required: ['messages', 'hangup', 'wake'], additionalProperties: false };
+const mcDay = (t) => jstDay(t); // 同じ朝かどうか（日本時間の日付）
+function mcNextAt(hhmm, now) { // "HH:MM" → これから来るいちばん近いその時刻（5分以内なら次の日）
+  const m = /^(\d{1,2}):(\d{2})$/.exec(String(hhmm || '').trim()); if (!m || +m[1] > 23 || +m[2] > 59) return 0;
+  let t = jstDayStart(jstDay(now)) + (+m[1] * 60 + +m[2]) * MIN;
+  while (t < now + 5 * MIN) t += 864e5;
+  return t;
+}
+async function mcFromAI(env, c, v, { keep, src }) { // AI の wake を約束にする
+  v = String(v || '').trim();
+  if (!v) return null;
+  if (v === 'cancel') { const p = await kvGet(env, 'mc:promise', null); if (p && p.charId === c.id) { await kvDel(env, 'mc:promise'); return { cancel: true, charId: c.id }; } return null; }
+  const at = mcNextAt(v, Date.now()); if (!at) return null;
+  const p = { at, charId: c.id, keep: !!keep, src, made: Date.now() };
+  await kvSet(env, 'mc:promise', p);
+  return p;
+}
+function morningRules(cl, now) {
+  if (!cl.morning) return '';
+  const why = cl.mcSrc === 'set' ? 'ユーザーが、この時刻に起こしてほしいとモーニングコールを頼んでいた。' : '前にユーザーから「この時刻に電話で起こして」と頼まれて、引き受けていた。';
+  const el = cl.answeredAt ? now - cl.answeredAt : 0;
+  return `\n# モーニングコール（最優先）\n${why}朝、ユーザーを起こすためにあなたから電話をかけた。${cl.mcTry > 1 ? `（これが${cl.mcTry}回目の電話。前の電話には出てもらえなかった）` : ''}
+- 最近の会話の流れと、キャラクターの性格・関係に合わせた起こし方をする（やさしく・元気に・からかうように・しつこく、などは性格しだい）。
+- ユーザーが寝ぼけているようなら、ちゃんと起きるまで声をかける。起きたのを確かめたら、少しだけ話して、あなたのほうから「じゃあ、また」などと別れのあいさつをして hangup を true にする（長電話にしない。目安は数分）。
+${el > 8 * MIN ? '- もう十分話した。この返事で自然に話をまとめて、別れのあいさつをして hangup を true にする。\n' : ''}`;
+}
+async function mcChars(env) { // ランダムの候補：表の個人トークに1件でも会話があって、声が結びついている子（AI を止めている子も入る）
+  const out = [];
+  for (const c of await loadChars(env)) {
+    if (!phoneChar(c)) continue;
+    const r = await env.DB.prepare('SELECT 1 FROM messages WHERE char_id=? LIMIT 1').bind(c.id).first();
+    if (r) out.push(c);
+  }
+  return out;
+}
+async function mcView(env) {
+  const [set, promise, run] = await Promise.all([kvGet(env, 'mc:set', null), kvGet(env, 'mc:promise', null), kvGet(env, 'mc:run', null)]);
+  if (!set && !promise && !run) return null;
+  return { set, promise, run, skipSet: !!(set && promise && mcDay(set.at) === mcDay(promise.at)) };
+}
+async function mcStartRun(env, run) {
+  await kvSet(env, 'mc:run', run);
+  await mcRing(env, run);
+}
+async function mcRing(env, run) { // 1回分の電話をかける（GPU を起こしてから鳴らす。起きなくても1分で鳴らす）
+  const st = await getSettings(env), c = (await loadChars(env)).find((x) => x.id === run.charId);
+  if (!c) { await kvDel(env, 'mc:run'); return; }
+  const calls = await listCalls(env);
+  if (calls.some((x) => x.morning && ['warming', 'ringing', 'active'].includes(x.status))) return;
+  if (busyCall(calls)) { // ほかの電話中：あとで（遅れすぎたらやめる）
+    if (Date.now() - run.at > MC_LATE) { await kvDel(env, 'mc:run'); await log(env, `モーニングコール（${c.name}）：ほかの電話が続いていたので、かけるのをやめました`); }
+    return;
+  }
+  run.tries = (run.tries || 0) + 1; run.nextAt = 0;
+  await kvSet(env, 'mc:run', run);
+  const cl = { id: newCallId(), charId: c.id, members: [c.id], dir: 'in', status: 'warming', created: Date.now(), why: 'morning', morning: true, mcTry: run.tries, mcSrc: run.src, transcript: [], ...(run.keep ? {} : { nokeep: true }), ...(run.test ? { test: true } : {}) };
+  await putCall(env, cl);
+  await advanceCall(env, cl, st, c);
+}
+async function runMorning(env) {
+  const now = Date.now();
+  let run = await kvGet(env, 'mc:run', null);
+  if (!run) {
+    const [set, promise] = await Promise.all([kvGet(env, 'mc:set', null), kvGet(env, 'mc:promise', null)]);
+    const st = await getSettings(env);
+    if ((set || promise) && Math.min(set ? set.at : Infinity, promise ? promise.at : Infinity) - MC_WARM * 1.5 <= now) await warmTTS(env, st, 15e3).catch(() => {}); // 鳴らす1分前に GPU を起こしておく
+    let item = null;
+    if (promise && promise.at <= now) {
+      item = { ...promise, src: promise.src || 'promise' }; await kvDel(env, 'mc:promise');
+      if (set && mcDay(set.at) === mcDay(promise.at)) { await kvDel(env, 'mc:set'); await log(env, 'モーニングコール：同じ朝に約束があったので、設定の分はお休みにしました'); } // 約束を優先
+    }
+    else if (set && set.at <= now) {
+      await kvDel(env, 'mc:set');
+      if (promise && mcDay(promise.at) === mcDay(set.at)) { await log(env, 'モーニングコール：同じ朝に約束があるので、設定の分はお休みにしました'); return; } // 約束を優先
+      let charId = set.charId;
+      if (set.who === 'random') { const cs = await mcChars(env); charId = cs.length ? cs[Math.floor(Math.random() * cs.length)].id : ''; }
+      if (!charId) { await log(env, 'モーニングコール：かけられる子がいませんでした（声の名前と、表のトークの会話がある子）'); return; }
+      item = { at: set.at, charId, keep: set.keep !== false, src: 'set' };
+    }
+    if (!item) return;
+    if (now - item.at > MC_LATE) { await log(env, 'モーニングコール：時刻を30分以上すぎていたので、かけませんでした'); return; }
+    await mcStartRun(env, { at: item.at, charId: item.charId, keep: !!item.keep, src: item.src, tries: 0, nextAt: now });
+    return;
+  }
+  if (run.nextAt && run.nextAt <= now) await mcRing(env, run);
+  else if (!run.nextAt && !(await listCalls(env)).some((x) => x.morning) && now - (run.lastRing || run.at) > 10 * MIN) await kvDel(env, 'mc:run'); // 念のため：通話が見当たらないまま残ったもの
+}
+const MC_LEAVE_SCHEMA = { type: 'object', properties: { kind: { type: 'string', enum: ['voicemail', 'voice_message'] }, text: { type: 'string' } }, required: ['kind', 'text'], additionalProperties: false };
+async function mcMissed(env, cl, c, how) { // モーニングコールに出なかった・拒否された
+  await delCall(env, cl.id);
+  const run = await kvGet(env, 'mc:run', null), now = Date.now();
+  const nk = cl.nokeep ? { nokeep: true } : {};
+  const miss = await callMsg(env, c.id, 'char', 'call', '', { morning: true, ...(how === 'declined' ? { declined: true } : {}), ...nk, ...(cl.test ? { test: true } : {}) });
+  const last = !run || cl.test || how === 'declined' || (run.tries || 0) >= MC_TRIES; // 拒否されたら、起きているのでかけ直さない
+  if (!last) { run.nextAt = (cl.ringAt || now) + MC_GAP; run.lastRing = cl.ringAt || now; await kvSet(env, 'mc:run', run); await pushToAll(env, c, [miss]); return; }
+  await kvDel(env, 'mc:run');
+  const out = [miss];
+  if (!cl.test) {
+    try {
+      const state = await getState(env, c.id);
+      const sys = `あなたは${c.name}として、朝ユーザーを起こすためにモーニングコールを${cl.mcTry || MC_TRIES}回かけたが、${how === 'declined' ? '最後は切られてしまった（拒否された）' : '一度も出てもらえなかった'}。最後に、留守番電話かボイスメッセージ（トークに声で送る）のどちらかを1つ残す。
+# キャラクター: ${c.name}
+${charPersona(c, 'omote', 3000)}
+# 今の様子
+${fmtTime(now)}。${activityText(state, now, c.id)}
+# 最近のトーク（古い順）
+${await callTalk(env, c, 14) || '（なし）'}
+# 決めること
+- kind：留守番電話（voicemail）か、ボイスメッセージ（voice_message）か。キャラクターの性格で選ぶ（例：きちんとした子は留守電、甘えたがりや気軽な子はボイスメッセージ）。
+- text：残す言葉。声に出して話す言葉だけで1〜3文（15秒くらいまで）。起きているか心配する・起こしに来たことを伝える・からかう、など性格しだい。書き言葉・絵文字・描写・（ ）書きは使わない。
+- 自分がAIであることには触れない。キャラクターが未成年の設定である場合、性的な内容は一切書かない。`;
+      const r = await aiJson(env, 'omote', sys, '（モーニングコールに出てもらえなかった）', MC_LEAVE_SCHEMA, 'morning_leave');
+      const text = String((r && r.text) || '').trim().slice(0, 300);
+      if (text && r.kind === 'voice_message') out.push(await callMsg(env, c.id, 'char', 'voice', text, { est: vmsgEst(text), morning: true, ...nk }));
+      else if (text) {
+        const m = await callMsg(env, c.id, 'char', 'vm', text, { morning: true, ...nk });
+        const list = await kvGet(env, 'vm:' + c.id, []);
+        list.push({ id: m.id, at: m.at, text, heard: false });
+        await kvSet(env, 'vm:' + c.id, list.slice(-VM_MAX));
+        out.push(m);
+      }
+    } catch (e) { await log(env, `モーニングコールの留守電（${c.name}）: ${e.message}`); }
+  }
+  await pushToAll(env, c, out);
+}
+
 // 第68版：記憶を引き継がない寝落ち通話の記録（と、だれも出なかった記録）は、キャラ（AI）に見せない。あなたの画面には残す。
 // AI に渡す履歴は aiRecent で読む（/sync など、画面に返すものは recent のまま）
 const aiHidden = (m) => !!(m && m.kind && m.meta && m.meta.nokeep); // 記憶を引き継がない寝落ち通話・モーニングコール（第70版）の記録・不在・留守電・ボイスメッセージ
@@ -2800,7 +2974,7 @@ async function finishCall(env, cl, c, { by = 'me', est = null } = {}) {
   if (cl.status !== 'active') return null;
   const now = Date.now(), dur = Math.max(0, now - (cl.answeredAt || now));
   let sum = '';
-  if (!cl.nokeep && cl.transcript.some((m) => m.who === 'me') && !omoteStop(await getSettings(env), c.id)) { // 寝落ち通話で「引き継がない」なら、まとめも記憶も残さない
+  if (!cl.nokeep && cl.transcript.some((m) => m.who === 'me') && (cl.morning || !omoteStop(await getSettings(env), c.id))) { // 寝落ち通話で「引き継がない」なら、まとめも記憶も残さない
     const text = cl.transcript.slice(-80).map((m) => (m.who === 'me' ? 'ユーザー: ' : c.name + ': ') + trunc(m.text, 200)).join('\n');
     try {
       const r = await aiJson(env, 'omote', `あなたは、${c.name}とユーザーが電話で話した内容を、${c.name}があとでトークで思い出せるように、短くまとめる係です。何の話をして、どんな雰囲気だったかを、1〜2文で具体的に書きます。`, text, CALL_SUM_SCHEMA, 'call_summary');
@@ -2808,7 +2982,8 @@ async function finishCall(env, cl, c, { by = 'me', est = null } = {}) {
     } catch (e) { await log(env, `通話のまとめ（${c.name}）: ${e.message}`); }
   }
   if (sum) await env.DB.prepare("INSERT INTO memories (char_id,kind,text,due,status,created,followed) VALUES (?, 'fact', ?, '', 'open', ?, 0)").bind(c.id, `${jstDay(now)}にユーザーと電話で話した：${sum}`.slice(0, 200), now).run();
-  const meta = { dur, by, dir: cl.dir, ...(cl.sleep ? { sleep: true } : {}), ...(cl.nokeep ? { nokeep: true } : {}), ...(sum ? { sum } : {}), ...(est && Number.isFinite(Number(est.usd)) ? { usd: Math.round(Number(est.usd) * 1e4) / 1e4, gpuMs: Math.round(num(est.gpuMs, 0)) } : {}) };
+  if (cl.morning) await kvDel(env, 'mc:run'); // 出た＝起こし終わり
+  const meta = { dur, by, dir: cl.dir, ...(cl.sleep ? { sleep: true } : {}), ...(cl.morning ? { morning: true } : {}), ...(cl.test ? { test: true } : {}), ...(cl.nokeep ? { nokeep: true } : {}), ...(sum ? { sum } : {}), ...(est && Number.isFinite(Number(est.usd)) ? { usd: Math.round(Number(est.usd) * 1e4) / 1e4, gpuMs: Math.round(num(est.gpuMs, 0)) } : {}) };
   return callMsg(env, c.id, cl.dir === 'in' ? 'char' : 'me', 'callog', '', meta);
 }
 
@@ -5645,6 +5820,7 @@ ${opt.quote.map((m, i) => `  ${i}：「${trunc(m.text, 60)}」`).join('\n')}`;
   ボイスメッセージにする吹き出しは、声に出して話す言葉だけ（描写・絵文字・顔文字・記号は入れない）。長さはふだん1〜3文の短め。気持ちが高まった大事な場面だけ長めでもよい（最長で声で3分＝800字くらいまで）。
   キャラクターに合うなら、たまに「声が聞きたい」「ボイスメッセージ送って」とユーザーにねだってもよい（しつこくしない）。`;
   }
+  if (opt.wake) { props.wake = { type: 'string' }; extra += '\n- wake：ユーザーが、決まった時刻にあなたから電話をかけて起こしてほしい（モーニングコール）と頼んできて、引き受けたなら、その時刻 "HH:MM"（24時間・日本時間）。時刻があいまいなら messages で確かめ、決まるまでは ""。前に引き受けた約束をやめてほしいと言われたら "cancel"。関係ないときは ""。引き受けるのが基本（性格に合った言い方で、引き受けたことと時刻を messages でも伝える）。'; }
   if (opt.typo) extra += '\n- 今回は、吹き出しのどれか1か所で、スマホらしい自然な打ち間違い（変換ミスなど）をして、次の吹き出しで「＊正しい言葉」と短く訂正する。キャラクターに合わなければしなくてよい。';
   if (opt.react) {
     props.stamp = { type: 'string' };
@@ -5671,6 +5847,7 @@ ${Object.keys(STAMPS).filter((k) => k !== '🏃').map((k) => `  ${k}：${STAMPS[
     quoteId: opt.quote && Number.isInteger(Number(r && r.quote)) && opt.quote[Number(r.quote)] ? opt.quote[Number(r.quote)].id : 0,
     postscript: opt.ps ? String((r && r.postscript) || '').trim().slice(0, 200) : '',
     voiceIdx: opt.voice && Number.isInteger(Number(r && r.voice)) ? Number(r.voice) : -1,
+    wake: opt.wake ? String((r && r.wake) || '').trim() : '',
     meet: opt.meet && r ? { status: String(r.meet_status || '').trim(), date: String(r.meet_date || '').trim(), time: String(r.meet_time || '').trim(), place: String(r.meet_place || '').trim() } : null,
   };
 }

@@ -148,6 +148,14 @@ body.ura .costbar{background:#2e2333;color:#cbb9cf;border-color:#43354a}
 .selbar .del{margin-left:auto;background:#e0524f;color:#fff}
 .selbar .del:disabled{background:#e9b3b2}
 #chatView.selecting .inbar{display:none}
+/* モーニングコール（第70版） */
+.mcbar{flex:none;display:flex;align-items:center;gap:8px;padding:8px 14px;background:#fff8e6;border-bottom:1px solid var(--line);font-size:13.5px}
+.mcbar[hidden]{display:none}
+.mcbar span{flex:1}
+.mcbar button{border:0;border-radius:14px;padding:5px 12px;font-size:13px;background:#efe3c4}
+.mcline{display:flex;align-items:center;gap:8px;padding:6px 0;font-size:14px;border-bottom:1px solid var(--line)}
+.mcline span{flex:1;min-width:0}
+.mcline .btn{flex:none;width:auto;margin:0;padding:6px 12px;font-size:13px}
 /* ボイスメッセージ（第70版） */
 .bub.voice{display:flex;align-items:center;gap:8px;min-width:120px;padding:9px 14px;cursor:pointer;user-select:none;-webkit-user-select:none}
 .bub.voice .vic{width:22px;text-align:center;font-size:15px}
@@ -412,6 +420,7 @@ body.ura #list.tlMode{background:#efe9f0}
     <button data-k="solo">👤 個人</button><button data-k="group">👥 グループ</button>
   </div>
   <div id="aiAlertBar" style="flex:none" hidden></div>
+  <div class="mcbar" id="mcHome" role="button" tabindex="0" hidden></div>
   <div class="costbar" id="costBar" role="button" tabindex="0" title="AIの利用料金（目安）"></div>
   <div class="pausebar" id="uraPauseBar"><span id="uraPauseText"></span><button id="uraPauseBtn"></button></div>
   <div class="scroll" id="list"></div>
@@ -450,6 +459,7 @@ body.ura #list.tlMode{background:#efe9f0}
   <div class="aialert" id="aiAlertChat" hidden></div>
   <div class="pausebar paused" id="charPauseBar" style="display:none"><span id="charPauseText"></span><button id="charPauseBtn">再開する</button></div>
   <div class="meetbar" id="meetBar" hidden></div>
+  <div class="mcbar" id="mcChat" hidden></div>
   <div id="selHint">消したいメッセージをタップして選んでください</div>
   <div class="scroll" id="msgs"></div>
   <div class="inbar">
@@ -949,6 +959,23 @@ body.ura #list.tlMode{background:#efe9f0}
       <div class="hint">通話中に、キャラのアイコンを押しても変えられます（この iPhone にだけ保存）。</div>
       <div class="hint" id="stPhoneVoice"></div>
       <div class="hint" id="stPhoneChars"></div>
+    </div>
+
+    <div class="sec">⏰ モーニングコール（表のトーク）</div>
+    <div class="field">
+      <div id="mcNow"><div class="hint">読み込み中…</div></div>
+      <div class="t" style="margin-top:10px">次の朝の時刻を入れる（1回だけ。鳴ったら消えます）</div>
+      <div class="inline"><input type="time" id="mcTime" value="07:00" style="width:130px"></div>
+      <div class="t" style="margin-top:8px">だれがかけてくるか</div>
+      <div class="seg" id="mcWho"><button data-v="pick">決めた1人</button><button data-v="random">ランダム</button></div>
+      <div id="mcPickBox" style="margin-top:6px"><select id="mcChar"></select></div>
+      <div class="hint" id="mcRandHint">声の名前があって、表の個人トークで1回でも話した子から選びます（AI を止めている子も入ります）。</div>
+      <div class="t" style="margin-top:8px">記憶</div>
+      <div class="seg" id="mcKeep"><button data-v="1">記憶を引き継ぐ</button><button data-v="0">引き継がない</button></div>
+      <div class="btns" style="margin-top:8px"><button class="btn" id="mcSave">この時刻で頼む</button><button class="btn sub" id="mcTest">テストでかけてもらう</button></div>
+      <div class="hint">前の日にトーク・通話・寝落ち通話で「〇時に起こして」と頼むと、その子が約束してかけてきます（寝落ち通話で［引き継がない］を選んだ夜の約束は、キャラは覚えていません）。同じ朝に約束と設定の両方があるときは、約束を優先します。出なければ4分おきにかけ直し（全部で4回）、最後まで出なければ留守電かボイスメッセージを残します。静かな時間でも鳴ります。<br>
+      アプリを閉じているときは Bark の通知で鳴ります。マナーモードでも鳴らすには、iPhone の［設定］→［通知］→［Bark］で「重要な通知（重大な警告）」をオンにしてください。大事な朝は、iPhone の目覚ましも一緒に使ってください。<br>
+      テストは1回だけ鳴らします（かけ直しなし・キャラの記憶には残しません）。</div>
     </div>
 
     <div class="sec">会う約束（試作・表のトーク）</div>
@@ -1497,7 +1524,7 @@ function renderChat(keepPos, forceBottom) {
   $('btnCall').style.display = (grp ? S.settings.phoneEnabled !== false && grp.members.some((id) => (charById(id) || {}).voice) : S.world !== 'ura' && canPhone(c)) ? '' : 'none'; // 裏のグループにも📞（第59版）
   $('btnSleep').style.display = sleepOk ? '' : 'none';
   $('btnVoice').style.display = !grp && S.world !== 'ura' && (window.SpeechRecognition || window.webkitSpeechRecognition) ? '' : 'none'; // ボイスメッセージ（第70版・表の個人だけ）
-  renderMeetBar(); renderCharPauseBar();
+  renderMeetBar(); renderCharPauseBar(); renderMcBars();
   const k = curKey(), ura = isUraKey(k);
   const nm = grp ? grp.name : dispName(c, ura ? 'ura' : 'omote');
   const so = !ura && (S.status || {})[c.id];
@@ -1710,6 +1737,7 @@ function applyWorld() {
   const meta = document.querySelector('meta[name=theme-color]'); if (meta) meta.content = S.world === 'ura' ? '#3b2a3f' : '#24324a';
 }
 function setWorld(w) {
+  setTimeout(() => { try { renderMcBars(); } catch (_) {} }, 0);
   w = w === 'ura' ? 'ura' : 'omote';
   if (S.world === w) return;
   if (S.view === 'chat') { if (revealQ.length) { revealQ.forEach((m) => S.hidden.delete(m.id)); revealQ.length = 0; } S.typingFor = null; }
@@ -1732,6 +1760,7 @@ function renderAll(keepPos, forceBottom) {
 
 function show(view) {
   S.view = view;
+  if (typeof renderMcBars === 'function') try { renderMcBars(); } catch (_) {}
   for (const [v, id] of [['list', 'listView'], ['chat', 'chatView'], ['edit', 'editView'], ['set', 'setView'], ['post', 'postView'], ['grp', 'grpView'], ['ogr', 'ogrView'], ['glog', 'glogView']]) $(id).classList.toggle('on', v === view);
   if (view !== 'chat') {
     // 別画面に移ったら、待ち中の吹き出しはすぐ出す
@@ -2038,11 +2067,11 @@ function bubHTML(m) {
   if (m.retracted) return `<div class="bub gone">${m.sender === 'me' ? 'メッセージの送信を取り消しました' : '送信を取り消しました'}</div>`;
   const src = m.localImg || (m.image && imgCache[m.image]);
   if (m.kind === 'voice') return vmsgHTML(m);
-  if (m.kind === 'call') return `<div class="bub call"><span class="ic">📞</span><span><b>${m.meta && m.meta.declined ? '着信（拒否）' : '不在着信'}</b><small>${m.meta && m.meta.declined ? 'あなたが拒否しました' : '応答なし'}</small></span></div>`;
+  if (m.kind === 'call') { const mt = m.meta || {}; return `<div class="bub call"><span class="ic">${mt.morning ? '⏰' : '📞'}</span><span><b>${mt.morning ? 'モーニングコール' + (mt.test ? '（テスト）' : '') : ''}${mt.declined ? (mt.morning ? '（拒否）' : '着信（拒否）') : mt.morning ? '' : '不在着信'}</b><small>${mt.declined ? 'あなたが拒否しました' : '応答なし'}${mt.nokeep ? '・キャラは知りません' : ''}</small></span></div>`; }
   if (m.kind === 'vm') { const v = vmOf(baseId(m.charId), m.id); return `<div class="bub call vm" data-vm="${m.id}"><span class="ic">▶</span><span><b>留守番電話${v && !v.heard ? '<span class="new"></span>' : ''}</b><small>${v ? (v.heard ? 'タップで再生' : '新しい留守電・タップで再生') : '古い留守電（もう残っていません）'}</small></span></div>`; }
   if (m.kind === 'callout') return `<div class="bub call out" data-callback="1"><span class="ic">📞</span><span><b>${m.meta && m.meta.group ? 'グループ通話' : '発信'}</b><small>${m.meta && m.meta.group ? 'だれも出ませんでした' : '応答なし'}・タップでかけ直す</small></span></div>`;
   if (m.kind === 'callog' && m.meta && m.meta.group && m.meta.log && !m.retracted) return `<div class="bub call log" data-gclog="${esc(m.id)}"><span class="ic">${m.meta.sleep ? '🌙' : '📞'}</span><span><b>${m.meta.sleep ? '寝落ち通話' : m.meta.from ? 'グループ通話（続き）' : 'グループ通話'} ${durText(m.meta.dur)}</b><small>タップで会話を読む・続きから話す</small></span></div>`; // 会話が残っている通話（第57版・第59版で裏も）
-  if (m.kind === 'callog') { const mt = m.meta || {}; return `<div class="bub call log" data-callback="1"><span class="ic">${mt.sleep ? '🌙' : '📞'}</span><span><b>${mt.sleep ? '寝落ち通話' : mt.group ? 'グループ通話' : '通話'} ${durText(mt.dur)}</b><small>${mt.nokeep ? '記憶に残さない通話（キャラは知りません）・' : ''}${mt.usd != null ? `約$${Number(mt.usd).toFixed(3)}（約${yenOf(Number(mt.usd))}円）` : 'タップでかけ直す'}</small></span></div>`; }
+  if (m.kind === 'callog') { const mt = m.meta || {}; return `<div class="bub call log" data-callback="1"><span class="ic">${mt.sleep ? '🌙' : mt.morning ? '⏰' : '📞'}</span><span><b>${mt.sleep ? '寝落ち通話' : mt.morning ? 'モーニングコール' : mt.group ? 'グループ通話' : '通話'} ${durText(mt.dur)}</b><small>${mt.nokeep ? '記憶に残さない通話（キャラは知りません）・' : ''}${mt.usd != null ? `約$${Number(mt.usd).toFixed(3)}（約${yenOf(Number(mt.usd))}円）` : 'タップでかけ直す'}</small></span></div>`; }
   if (m.image || m.localImg) return `<div class="bub photo"><img ${src ? `src="${src}"` : `data-img="${esc(m.image)}"`} alt="${esc(m.alt || '写真')}"></div>${m.text ? `<div class="bub">${esc(m.text)}</div>` : ''}`;
   return `<div class="bub">${quoteHTML(m)}${esc(m.text)}</div>`;
 }
@@ -2386,7 +2415,7 @@ function openSettings() {
   drawMeIcons();
   document.body.classList.remove('ura');
   show('set');
-  refreshPushState(); renderDiag(); bkRefresh(); renderPrefInfo();
+  refreshPushState(); renderDiag(); bkRefresh(); renderPrefInfo(); renderMcNow();
 }
 async function saveSettings() {
   S.cfg = { url: $('stUrl').value.trim().replace(/\/+$/, ''), token: $('stToken').value };
@@ -3714,7 +3743,7 @@ function showIncoming(call) {
   if (call.ringUntil && Date.now() > call.ringUntil) return;
   CALL.seen.add(call.id);
   CALL.cur = { id: call.id, charId: c.id, dir: 'in', gpuStart: call.ringAt || Date.now(), muted: false };
-  callScreen(c, 'incoming'); setStat('着信'); $('cvTime').textContent = '';
+  callScreen(c, 'incoming'); setStat(call.morning ? '⏰ モーニングコール' : '着信'); $('cvTime').textContent = '';
   playRingtone();
   // 鳴っている間も GPU を起こし続ける（第51版）。サーバーは起こしてから鳴らすが、Modal は30秒で止まるので、遅れて出ると最初の声が遅くなっていた
   clearInterval(CALL.hb);
@@ -3757,6 +3786,7 @@ async function sayInCall(text) {
     const d = await api('POST', '/call/say', { id: cur.id, text });
     cur.busy = false;
     if (d.ended) { endCall('char'); return; }
+    if (d.promise) { mcPromiseToast(d.promise); sync(); } // モーニングコールの約束（第70版）
     await speakLines(d.lines || []);
     if (d.hangup && CALL.cur === cur && !cur.sleep) endCall('char');
     hfSoon(500);
@@ -3848,10 +3878,70 @@ $('msgs').addEventListener('click', (e) => {
   const cl = e.target.closest('[data-callback]'); if (cl) { const og = callGroupNow(); if (og) { callGroupAsk(og); return; } const c = charById(S.current); if (c && canPhone(c)) startOutgoing(c); }
 });
 $('btnCall').onclick = () => { const og = callGroupNow(); if (og) { callGroupAsk(og); return; } const c = charById(S.current); if (c && canPhone(c)) startOutgoing(c); };
+// ---- モーニングコール（第70版）：約束（mc.promise）・設定（mc.set）・起こしている途中（mc.run）
+const mcWhen = (t) => { const d = new Date(t), now = new Date(), day = (x) => new Date(x.getFullYear(), x.getMonth(), x.getDate()).getTime(); const n = Math.round((day(d) - day(now)) / 864e5); return `${n === 0 ? '今日' : n === 1 ? '明日' : `${d.getMonth() + 1}/${d.getDate()}`} ${d.getHours()}:${String(d.getMinutes()).padStart(2, '0')}`; };
+const mcName = (id) => { const c = charById(id); return c ? c.name : '（いない子）'; };
+function mcPromiseToast(p) { if (p.cancel) toast(`⏰ ${mcName(p.charId)}さんとのモーニングコールの約束を取りやめました`, 4000); else toast(`⏰ ${mcWhen(p.at)} に${mcName(p.charId)}さんがモーニングコールの約束をしました${p.keep ? '' : '（記憶に残さない）'}`, 5000); }
+function mcAfterSync(mc) {
+  const prev = JSON.stringify(S.mc || null); S.mc = mc;
+  if (prev !== JSON.stringify(mc)) { const p = mc && mc.promise, old = prev && JSON.parse(prev); if (p && (!old || !old.promise || old.promise.made !== p.made) && Date.now() - p.made < 5 * 60e3) mcPromiseToast(p); }
+  renderMcBars();
+  if (S.view === 'set') renderMcNow();
+}
+function mcMain() { const mc = S.mc; if (!mc) return null; if (mc.run) return { kind: 'run', ...mc.run }; const items = [mc.promise && { kind: 'promise', ...mc.promise }, mc.set && !mc.skipSet && { kind: 'set', ...mc.set }].filter(Boolean).sort((a, b) => a.at - b.at); return items[0] || null; }
+function renderMcBars() {
+  const x = mcMain();
+  const txt = !x ? '' : x.kind === 'run' ? `⏰ ${mcName(x.charId)}さんがモーニングコール中（${x.tries || 1}回目）` : `⏰ ${mcWhen(x.at)} ${x.who === 'random' ? 'だれか（ランダム）' : mcName(x.charId) + 'さん'}からモーニングコール${x.keep === false ? '（記憶に残さない）' : ''}`;
+  $('mcHome').hidden = !x || S.world === 'ura'; $('mcHome').innerHTML = x ? `<span>${esc(txt)}</span>` : '';
+  const inChat = x && S.view === 'chat' && S.world !== 'ura' && x.charId && x.charId === S.current;
+  $('mcChat').hidden = !inChat; $('mcChat').innerHTML = inChat ? `<span>${esc(txt)}</span><button data-mccancel="${x.kind}">取り消す</button>` : '';
+}
+$('mcHome').onclick = () => { openSettings(); setTimeout(() => { const el = $('mcNow'); if (el) el.scrollIntoView({ block: 'center' }); }, 300); };
+async function mcCancel(which) {
+  const label = { set: '入れた時刻のモーニングコール', promise: '約束したモーニングコール', run: '今のモーニングコール（このあとのかけ直し）' }[which];
+  if (!confirm(`${label}を取り消しますか？`)) return;
+  try { const d = await api('POST', '/mc/cancel', { which }); mcAfterSync(d.mc); toast('取り消しました'); } catch (e) { toast(e.message); }
+}
+$('mcChat').addEventListener('click', (e) => { const b = e.target.closest('[data-mccancel]'); if (b) mcCancel(b.dataset.mccancel); });
+let mcForm = { who: store.get('mc.who', 'pick'), keep: store.get('mc.keep', true) };
+function renderMcNow() {
+  const mc = S.mc, el = $('mcNow'); if (!el) return;
+  const rows = [];
+  if (mc && mc.run) rows.push(`<div class="mcline"><span>📞 いま ${esc(mcName(mc.run.charId))}さんが起こしています（${mc.run.tries || 1}回目）</span><button class="btn sub" data-mcx="run">これ以上かけない</button></div>`);
+  if (mc && mc.promise) rows.push(`<div class="mcline"><span>🤝 約束：${mcWhen(mc.promise.at)} ${esc(mcName(mc.promise.charId))}さん（${{ talk: 'トークで', call: '通話で', sleep: '寝落ち通話で' }[mc.promise.src] || ''}・${mc.promise.keep ? '記憶を引き継ぐ' : '引き継がない'}）</span><button class="btn sub" data-mcx="promise">取り消す</button></div>`);
+  if (mc && mc.set) rows.push(`<div class="mcline"><span>⏰ 設定：${mcWhen(mc.set.at)} ${mc.set.who === 'random' ? 'ランダム' : esc(mcName(mc.set.charId)) + 'さん'}（${mc.set.keep ? '記憶を引き継ぐ' : '引き継がない'}）${mc.skipSet ? '<br><small>同じ朝に約束があるので、この朝はお休みです</small>' : ''}</span><button class="btn sub" data-mcx="set">取り消す</button></div>`);
+  el.innerHTML = rows.join('') || '<div class="hint" style="margin-top:0">予定はありません。</div>';
+  const cs = (S.chars || []).filter((c) => !c.uraOnly && c.voice);
+  const sel = $('mcChar'), cur = sel.value || store.get('mc.char', '');
+  sel.innerHTML = cs.map((c) => `<option value="${esc(c.id)}">${esc(c.name)}</option>`).join('') || '<option value="">（声の名前がある子がいません）</option>';
+  if (cs.some((c) => c.id === cur)) sel.value = cur;
+  $('mcWho').querySelectorAll('button').forEach((b) => b.classList.toggle('on', b.dataset.v === mcForm.who));
+  $('mcKeep').querySelectorAll('button').forEach((b) => b.classList.toggle('on', b.dataset.v === (mcForm.keep ? '1' : '0')));
+  $('mcPickBox').style.display = mcForm.who === 'pick' ? '' : 'none'; $('mcRandHint').style.display = mcForm.who === 'random' ? '' : 'none';
+}
+$('mcNow').addEventListener('click', (e) => { const b = e.target.closest('[data-mcx]'); if (b) mcCancel(b.dataset.mcx); });
+$('mcWho').addEventListener('click', (e) => { const b = e.target.closest('button'); if (!b) return; mcForm.who = b.dataset.v; store.set('mc.who', mcForm.who); renderMcNow(); });
+$('mcKeep').addEventListener('click', (e) => { const b = e.target.closest('button'); if (!b) return; mcForm.keep = b.dataset.v === '1'; store.set('mc.keep', mcForm.keep); renderMcNow(); });
+$('mcChar').onchange = () => store.set('mc.char', $('mcChar').value);
+$('mcSave').onclick = async () => {
+  const time = $('mcTime').value; if (!/^\d{1,2}:\d{2}$/.test(time)) { toast('時刻を入れてください'); return; }
+  try {
+    const d = await api('POST', '/mc/set', { time, who: mcForm.who, charId: $('mcChar').value, keep: mcForm.keep });
+    mcAfterSync(d.mc);
+    toast(`⏰ ${mcWhen(d.mc.set.at)} にモーニングコールを頼みました${d.mc.skipSet ? '（同じ朝に約束があるので、約束のほうが優先されます）' : ''}`, 4500);
+  } catch (e) { toast(e.message); }
+};
+$('mcTest').onclick = async () => {
+  if (CALL.cur) { toast('通話中です'); return; }
+  ac(); // 着信音を鳴らせるように
+  try { const d = await api('POST', '/mc/test', { who: mcForm.who, charId: $('mcChar').value, force: true }); toast(`⏰ ${mcName(d.charId)}さんがテストでかけてきます（GPU が起きるまで少しかかることがあります）`, 5000); setTimeout(sync, 1500); setTimeout(sync, 6000); setTimeout(sync, 15000); }
+  catch (e) { toast(e.message); }
+};
 // --- 同期のたび：かかってきた電話・留守電・GPU を起こす住所をサーバーに
 let ttsUrlSent = '';
 function phoneAfterSync(d) {
   S.calls = d.calls || []; S.vms = d.vms || S.vms || {};
+  mcAfterSync(d.mc || null);
   const u = ttsCfg().url;
   if (u && u !== S.settings.ttsUrl && u !== ttsUrlSent) { ttsUrlSent = u; api('POST', '/settings', { settings: { ttsUrl: u } }).catch(() => {}); }
   const ring = S.calls.find((x) => x.dir === 'in' && x.status === 'ringing');
@@ -3940,7 +4030,7 @@ function renderOGroupChat(g, keepPos, forceBottom) {
   $('btnCall').style.display = S.settings.phoneEnabled !== false ? '' : 'none';
   $('btnSleep').style.display = S.settings.phoneEnabled !== false ? '' : 'none';
   $('chatView').querySelector('header.bar').classList.remove('tight');
-  renderMeetBar(); renderCharPauseBar();
+  renderMeetBar(); renderCharPauseBar(); renderMcBars();
   $('chatTitle').innerHTML = esc(g.name) + `<small>${esc(g.members.map((id) => (charById(id) || {}).name || '（いなくなった人）').join('・'))}${g.paused ? '・止めています' : ''}</small>`;
   const box = $('msgs'), k = g.id;
   box.classList.remove('uraMode');

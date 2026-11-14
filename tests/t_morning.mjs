@@ -103,7 +103,7 @@ ok(!kv('mc:set') && !msgs(m.id).some((x) => x.kind === 'call' && x.at > jst(2026
 
 // ---- 設定：ランダム・止めている子も・出たら起こしてキャラから切る・記憶に残る
 await call('POST', '/char', { char: { ...m, paused: true } });
-await call('POST', '/settings', { settings: { pausedChars: [m.id] } });
+await call('POST', '/settings', { settings: { omotePausedIds: [m.id] } }); // その子だけ止める（第48版のしくみ）
 await call('POST', '/messages/delete', { charId: a.id, ids: msgs(a.id).map((x) => x.id) }); // 朱里はトークが空 → 候補外
 v = await call('POST', '/mc/set', { time: '08:00', who: 'random', keep: true });
 ok(v.mc.set.who === 'random', 'set random');
@@ -146,4 +146,29 @@ ok(tm.length === 1 && tm[0].kind === 'call' && !calls().length && !kv('mc:run'),
 await call('POST', '/mc/set', { time: '10:00', who: 'pick', charId: m.id });
 await call('POST', '/mc/cancel', { which: 'set' });
 ok(!(await call('GET', '/mc')).mc, 'cancel set');
+// ---- 止めている子を「決めた1人」に：出なければ最後まで4回かけて、留守電かボイスメッセージを残す
+ok((await call('GET', '/sync?since=0')).settings.omotePausedIds.includes(m.id), 'マリ is stopped');
+await call('POST', '/mc/set', { time: '06:00', who: 'pick', charId: m.id, keep: true });
+A.leave = { kind: 'voice_message', text: 'おはようございます……起きてくださいね。' };
+const t0 = jst(2026, 12, 4, 5, 58); clock = t0; ai.length = 0;
+for (let i = 0; i < 22; i++) await cron(1);
+const sm = msgs(m.id).filter((x) => x.at >= t0);
+ok(sm.filter((x) => x.kind === 'call' && x.meta.morning).length === 4, 'stopped character: rang 4 times');
+ok(sm.some((x) => x.kind === 'voice' && x.meta.morning && x.text.includes('起きて')), 'stopped character: left a voice message');
+A.leave = { kind: 'voicemail', text: '留守電です。起きたら連絡を。' };
+await call('POST', '/mc/set', { time: '06:00', who: 'pick', charId: m.id, keep: true });
+clock = jst(2026, 12, 5, 5, 58); for (let i = 0; i < 22; i++) await cron(1);
+ok(msgs(m.id).some((x) => x.kind === 'vm' && x.text.includes('留守電です')) && (await call('GET', '/sync?since=0')).vms[m.id].some((v) => v.text.includes('留守電です')), 'stopped character: left a voicemail');
+// 出たときも話す
+await call('POST', '/mc/set', { time: '06:00', who: 'pick', charId: m.id, keep: true });
+clock = jst(2026, 12, 6, 5, 58); await cron(2);
+const scl = calls().find((x) => x.morning);
+const sa = await call('POST', '/call/answer', { id: scl.id });
+const ss = await call('POST', '/call/say', { id: scl.id, text: 'おはよう' });
+ok(sa.lines.length && ss.lines.length && !ss.paused, 'stopped character: talks in the morning call');
+await call('POST', '/call/end', { id: scl.id });
+// ふだんのトークは止まったまま
+await call('POST', '/send', { charId: m.id, text: 'ありがとう' });
+const rp = await call('POST', '/reply', { charId: m.id });
+ok(rp.paused && !rp.messages.length, 'stopped character: normal talk stays stopped');
 console.log(fails ? fails + ' FAILED' : 'ALL PASSED');

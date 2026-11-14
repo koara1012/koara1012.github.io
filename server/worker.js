@@ -14,7 +14,7 @@
 //    ・Cron トリガー  * * * * *  （毎分。実際に動くのは13分おき）
 // =====================================================================
 
-const VERSION = '第67版（2026-11-14 10:40:00 更新・寝落ち通話：おやすみのあと必ず切る）';
+const VERSION = '第68版（2026-11-14 12:00:00 更新・引き継がない寝落ち通話はキャラに見せない）';
 const DEFAULT_MODEL = 'gemini-flash-latest';
 const DEFAULT_GROK_MODEL = 'grok-4.7';                 // X（Twitter）の Grok と同じ最新世代
 const FALLBACK_GROK_MODEL = 'grok-4-fast-non-reasoning'; // 上が使えないときの予備
@@ -515,8 +515,9 @@ async function route(key, url, body, env, ctx) {
       if (cl.dir !== 'out' || cl.status !== 'dialing') throw new HttpError(409, 'この電話はもう終わっています');
       if (!cl.answer || omoteStop(await getSettings(env), c.id)) {
         await delCall(env, cl.id);
-        const m = await callMsg(env, c.id, 'me', 'callout', '', null);
-        if (cl.after === 'callback' && Math.random() < 0.7) await kvSet(env, 'callback:' + c.id, { due: Date.now() + (10 + Math.random() * 80) * MIN });
+        const m = await callMsg(env, c.id, 'me', 'callout', '', cl.sleep ? { sleep: true, ...(cl.nokeep ? { nokeep: true } : {}) } : null);
+        if (cl.nokeep) {} // 引き継がない寝落ち通話は、出なかったことも知らない（折り返し・LINE なし。第68版）
+        else if (cl.after === 'callback' && Math.random() < 0.7) await kvSet(env, 'callback:' + c.id, { due: Date.now() + (10 + Math.random() * 80) * MIN });
         else if (cl.after === 'line' && cl.line && Math.random() < 0.7) await kvSet(env, 'ps:' + c.id, { texts: [cl.line], due: Date.now() + (5 + Math.random() * 40) * MIN, after: m.id });
         return json({ answered: false, message: m });
       }
@@ -683,7 +684,7 @@ async function route(key, url, body, env, ctx) {
       const g = await getCallGroup(env, cl.group);
       if (!cl.members.length || gcStopped(await getSettings(env), g)) {
         await delCall(env, cl.id);
-        return json({ answered: false, message: await callMsg(env, g.key, 'me', 'callout', '', { group: true }) });
+        return json({ answered: false, message: await callMsg(env, g.key, 'me', 'callout', '', { group: true, ...(cl.sleep ? { sleep: true } : {}), ...(cl.nokeep ? { nokeep: true } : {}) }) });
       }
       cl.status = 'active'; cl.answeredAt = Date.now(); cl.lastAt = Date.now();
       await putCall(env, cl);
@@ -1091,14 +1092,14 @@ async function route(key, url, body, env, ctx) {
       if (isGroupId(base)) { // 裏のグループ
         const { group } = await getOwner(env, base, world);
         if ((await getSettings(env)).uraPaused) return json({ messages: [], paused: true });
-        const hist = await recent(env, key, 60);
+        const hist = await aiRecent(env, key, 60);
         const last = hist[hist.length - 1];
         if (body.cont && hist.length) return json({ messages: await keep(ctx, groupReply(env, group, [...hist, contMsg()], key)) }); // ずっと話す（ノベル画面）：メッセージは増やさず「続けて」と伝える
         if (!(body.start && !hist.length) && (!last || last.sender !== 'me' || last.kind)) return json({ messages: [] }); // start：あらすじから物語を始める。通話の記録（kind）には返事しない（第59版）
         return json({ messages: await keep(ctx, groupReply(env, group, hist, key)) });
       }
       const c = (await getOwner(env, base, world)).char;
-      const hist = await recent(env, key, 60);
+      const hist = await aiRecent(env, key, 60);
       const last = hist[hist.length - 1];
       const stamp = world === 'omote' ? lastUserStamp(hist, Date.now()) : null; // スタンプへの返事
       const cont = world === 'ura' && body.cont && last; // ずっと話す（ノベル画面の裏）：ユーザーが黙っていても続ける
@@ -1153,7 +1154,7 @@ async function route(key, url, body, env, ctx) {
       if (world === 'ura' && (await getSettings(env)).uraPaused) return json({ now: false, paused: true });
       if (world === 'omote' && omoteStop(await getSettings(env), base)) return json({ now: false, paused: true });
       if (world !== 'omote' || !delayOn(await getSettings(env))) return json({ now: true });
-      const hist = await recent(env, key, 60);
+      const hist = await aiRecent(env, key, 60);
       const last = hist[hist.length - 1];
       if (last && last.sender === 'char' && lastUserStamp(hist, Date.now())) return json({ now: true }); // スタンプへの返事は、その場で
       if (!last || last.sender !== 'me') return json({ now: false });
@@ -1170,7 +1171,7 @@ async function route(key, url, body, env, ctx) {
 
     case 'POST /poke': { // テスト用：今すぐ自分から話しかけさせる（表のみ）
       const c = (await getOwner(env, splitCid(body.charId).base, 'omote')).char;
-      const hist = await recent(env, c.id, 60);
+      const hist = await aiRecent(env, c.id, 60);
       const lastRead = await getRead(env, c.id);
       let d = decide(c, hist, lastRead, Date.now(), await getSettings(env), true) || { mode: 'topic' };
       if (body.news) d = { mode: 'topic', since: hist.length ? hist[hist.length - 1].at : Date.now(), forceNews: true };
@@ -1501,7 +1502,7 @@ async function tick(env, minute) {
   }
   for (const c of chars) {
     try {
-      const hist = await recent(env, c.id, 60);
+      const hist = await aiRecent(env, c.id, 60);
       const lastRead = await getRead(env, c.id);
       if (await maybeRing(env, c, settings, now).catch((e) => { log(env, `電話（${c.name}）: ${e.message}`); return false; })) { done.push(c.name + ':着信'); continue; }
       let d = await lifeDecide(env, c, hist, lastRead, now, settings, ctxAll).catch((e) => { log(env, `くらし（${c.name}）: ${e.message}`); return null; });
@@ -2365,7 +2366,7 @@ async function meetReply(env, c, start, cont = false) {
   const lg = await kvGet(env, 'meetlog:' + c.id, []);
   const faces = await facesOf(env, c.id, 'omote');
   const lifeInfo = await lifeContext(env, c, st, now).catch(() => '');
-  const talk = (await recent(env, c.id, 20)).filter((m) => !m.retracted && (m.text || m.image)).map((m) => `[${fmtTime(m.at)}] ${m.sender === 'me' ? 'ユーザー' : c.name}: ${m.text || '（写真）'}`).join('\n');
+  const talk = (await aiRecent(env, c.id, 20)).filter((m) => !m.retracted && (m.text || m.image)).map((m) => `[${fmtTime(m.at)}] ${m.sender === 'me' ? 'ユーザー' : c.name}: ${m.text || '（写真）'}`).join('\n');
   const turns = [];
   for (const m of lg.slice(-60)) {
     const role = m.who === 'me' ? 'user' : 'model';
@@ -2473,7 +2474,7 @@ async function callMsg(env, key, sender, kind, text, meta) {
   return { id: r.meta.last_row_id, charId: key, sender, text: text || '', at, kind, ...(meta ? { meta } : {}) };
 }
 async function callTalk(env, c, n = 16) {
-  return (await recent(env, c.id, n)).filter((m) => !m.retracted).map((m) => `[${fmtTime(m.at)}] ${m.sender === 'me' ? 'ユーザー' : c.name}: ${msgLine(m)}`).join('\n');
+  return (await aiRecent(env, c.id, n)).filter((m) => !m.retracted).map((m) => `[${fmtTime(m.at)}] ${m.sender === 'me' ? 'ユーザー' : c.name}: ${msgLine(m)}`).join('\n');
 }
 function msgLine(m) {
   const meta = m.meta || {};
@@ -2670,6 +2671,10 @@ function sleepRules(cl, check, group) {
   if (check === 'bye') s += `\n# 今回（最優先）\n確かめても返事がない。ユーザーは眠ってしまったようだ。「……寝ちゃったみたいですね。おやすみなさい」のように、${group ? '1〜3人が、' : ''}その子らしい言い方で、そっと短くおやすみを言う（${group ? '合わせて1〜3セリフ' : '1〜2セリフ'}。これが最後の言葉）。\n`;
   return s;
 }
+// 第68版：記憶を引き継がない寝落ち通話の記録（と、だれも出なかった記録）は、キャラ（AI）に見せない。あなたの画面には残す。
+// AI に渡す履歴は aiRecent で読む（/sync など、画面に返すものは recent のまま）
+const aiHidden = (m) => !!(m && (m.kind === 'callog' || m.kind === 'callout') && m.meta && m.meta.nokeep);
+async function aiRecent(env, key, n) { return (await recent(env, key, n + 4)).filter((m) => !aiHidden(m)).slice(-n); }
 const sleepCheck = (cl, v) => (cl.sleep && (v === 'ask' || v === 'bye') ? v : '');
 async function finishCall(env, cl, c, { by = 'me', est = null } = {}) {
   await delCall(env, cl.id);
@@ -2795,7 +2800,7 @@ ${cl.transcript.some((m) => !m.old) ? '' : cl.from ? `\n# 今回\n前回（${fmt
 // 裏のグループ通話（第59版）：グループトーク（同じ場所にいる物語）の最近の流れ
 async function uraGroupTalk(env, g, chars) {
   const nameOf = (id) => { const c = chars.find((x) => x.id === id); return c ? c.uraName || c.name : '（もういない人）'; };
-  return (await recent(env, g.key, 30)).filter((m) => m.kind !== 'callout').map((m) =>
+  return (await aiRecent(env, g.key, 30)).filter((m) => m.kind !== 'callout').map((m) =>
     m.kind === 'callog' ? `（グループ通話で${callDurText((m.meta || {}).dur || 0)}話した${(m.meta || {}).sum ? '：' + m.meta.sum : ''}）`
       : m.sender === 'me' ? 'ユーザー: ' + trunc(m.text || (m.image ? '（写真）' : ''), 200)
         : m.sender === 'narr' ? '（' + trunc(m.text, 200) + '）' : nameOf(m.speaker) + ': ' + trunc(m.text, 200)).join('\n');
@@ -2849,7 +2854,7 @@ async function gcallReply(env, cl, g, cont = false, check = '') {
     for (const c of ms) info.push(`## ${gcName(c, g)}\n${charPersona(c, 'ura', 2500)}${(g.roles || {})[c.id] ? `\n### このグループでの${gcName(c, g)}の立場（優先）\n${g.roles[c.id]}` : ''}`);
   } else for (const c of ms) {
     const state = await getState(env, c.id);
-    const talk = (await recent(env, c.id, 8)).filter((m) => !m.retracted).map((m) => `[${fmtTime(m.at)}] ${m.sender === 'me' ? 'ユーザー' : c.name}: ${trunc(msgLine(m), 120)}`).join('\n');
+    const talk = (await aiRecent(env, c.id, 8)).filter((m) => !m.retracted).map((m) => `[${fmtTime(m.at)}] ${m.sender === 'me' ? 'ユーザー' : c.name}: ${trunc(msgLine(m), 120)}`).join('\n');
     const mem = st.lifeEnabled ? memoryText(await loadMemories(env, c.id, 30), today) : '';
     info.push(`## ${c.name}
 ${charPersona(c, 'omote', 2500)}${g.roles[c.id] ? `\n### このグループでの${c.name}（優先）\n${g.roles[c.id]}` : ''}
@@ -3431,7 +3436,7 @@ function reactDelay(x, isComment) {
 // ---- トークの様子（TLとトークをつなげる）
 async function talkContext(env, c, world) {
   const key = world === 'ura' ? c.id + URA : c.id;
-  const hist = await recent(env, key, 8);
+  const hist = await aiRecent(env, key, 8);
   if (!hist.length) return '（まだやり取りはありません）';
   const nm = cName(c, world);
   const lines = hist.map((m) => (m.sender === 'me' ? 'ユーザー' : m.sender === 'narr' ? '（描写）' : nm) + ': ' + trunc(m.text, 120));
@@ -4443,7 +4448,7 @@ async function runDueProactive(env) {
     const c = chars.find((x) => 'proj:' + x.id === p.k);
     if (!c) continue;
     try {
-      const hist = await recent(env, c.id, 60);
+      const hist = await aiRecent(env, c.id, 60);
       // 予約したあとに、ユーザーやこの子が話していたら、この話しかけはやめる（状況が変わったため）
       if (hist.some((m) => m.at > p.at || (m.reactedAt || 0) > p.at)) continue; // スタンプが付いた・外れた場合も、状況が変わったのでやめる
       const msgs = await generateAndStore(env, c, p.d, hist, await getRead(env, c.id));
@@ -4477,7 +4482,7 @@ async function runDueReplies(env) {
     try {
       const c = (await loadChars(env)).find((x) => x.id === p.key);
       if (!c) continue;
-      const hist = await recent(env, c.id, 60);
+      const hist = await aiRecent(env, c.id, 60);
       const last = hist[hist.length - 1];
       if (!last || last.sender !== 'me') continue; // もう返事済み
       const msgs = await generateAndStore(env, c, { mode: 'reply', late: p }, hist, await getRead(env, c.id), 'omote');
@@ -4984,7 +4989,7 @@ async function runDisJobs(env, st, now, limit = 6) {
       if (j.kind === 'tl' || j.kind === 'tl2') {
         await charPostNow(env, c, 'omote', st, { eventHint: eventTL(ev, j, s, now), eventPhoto: ['snow', 'typhoon'].includes(ev.type) && ['hit', 'after'].includes(ev.phase) && Math.random() < 0.4 });
       } else {
-        const hist = await recent(env, c.id, 60);
+        const hist = await aiRecent(env, c.id, 60);
         if (j.kind === 'follow') { // 地震のあと、あなたから返事がなければ心配してもう一度
           if (hist.some((m) => m.sender === 'me' && m.at > ev.at)) continue;
         }

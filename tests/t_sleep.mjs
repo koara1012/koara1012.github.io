@@ -49,6 +49,9 @@ await flush();
 ok(msg.meta.sleep && !msg.meta.nokeep && msg.meta.by === 'sleep' && msg.meta.sum, '1:1 keep: record with summary, by sleep');
 ok(mems(a.id).some((t) => t.includes('電話で話した')), '1:1 keep: summary in memories');
 
+// 第68版：引き継ぐ寝落ち通話のあとは、今までどおりトークの返事が来る
+let rr = await call('POST', '/reply', { charId: a.id });
+ok(rr.messages.length > 0, '1:1 keep: text reply after the call (unchanged)');
 // ---- 1対1・引き継がない：これまでの記憶は使う・この通話のことは残さない
 r = await call('POST', '/call/start', { charId: a.id, sleep: true, keep: false });
 await call('POST', '/call/connect', { id: r.call.id });
@@ -58,6 +61,22 @@ msg = (await call('POST', '/call/end', { id: r.call.id })).message;
 await flush();
 ok(msg.meta.sleep && msg.meta.nokeep && !msg.meta.sum, '1:1 nokeep: record only, no summary');
 ok(mems(a.id).length === before, '1:1 nokeep: nothing added to memories');
+// 第68版：引き継がない寝落ち通話は、キャラ（AI）に見せない・トークの返事も来ない
+ai.length = 0;
+rr = await call('POST', '/reply', { charId: a.id });
+ok(rr.messages.length === 0 && !ai.length, '1:1 nokeep: no text reply after the call');
+await call('POST', '/send', { charId: a.id, text: 'おはよう' });
+await call('POST', '/reply', { charId: a.id });
+q = ai.filter((x) => x.sch.includes('"messages"') && !x.sch.includes('hangup')).pop();
+ok(q && q.user.includes('おはよう') && (q.user.match(/（電話で/g) || []).length === 1 && q.user.includes('話した内容'), 'text reply history: keep call visible, nokeep call hidden');
+answer.one = { messages: ['もしもし'], hangup: false };
+r = await call('POST', '/call/start', { charId: a.id });
+await call('POST', '/call/connect', { id: r.call.id });
+q = ai.pop();
+ok((q.sys.match(/（電話で/g) || []).length === 1, 'next call prompt: nokeep call hidden');
+await call('POST', '/call/end', { id: r.call.id }); await flush();
+const sy = await call('GET', '/sync?since=0');
+ok(sy.messages.some((x) => x.charId === a.id && x.kind === 'callog' && x.meta && x.meta.nokeep), 'nokeep record still returned to the app');
 // ふつうの通話には確認が効かない
 answer.one = { messages: ['うん'], hangup: false };
 r = await call('POST', '/call/start', { charId: a.id });

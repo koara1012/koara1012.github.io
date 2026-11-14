@@ -1034,7 +1034,7 @@ body.ura #list.tlMode{background:#efe9f0}
 // 置き場所で切り替える：/lab/（試作）と /chat/（本番）で同じファイルを使う
 // 試作は本番と同じサイトなので、保存の名前に「lab.」を付けて本番の chat.* には書き込まない。通知も登録しない
 const IS_LAB = /\/lab\//.test(location.pathname);
-const APP_VERSION = '第67版（2026-11-14 10:40:00 更新・寝落ち通話：おやすみのあと必ず切る）' + (IS_LAB ? '【試作】' : '');
+const APP_VERSION = '第68版（2026-11-14 12:00:00 更新・引き継がない寝落ち通話はキャラに見せない）' + (IS_LAB ? '【試作】' : '');
 if (IS_LAB) { document.title = '【試作】トーク（統合）'; const mt = document.querySelector('meta[name=apple-mobile-web-app-title]'); if (mt) mt.content = 'トーク試作'; }
 const $ = (id) => document.getElementById(id);
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
@@ -1267,6 +1267,9 @@ async function sendMsg(photo) {
 }
 
 const replyTimers = {};
+// 返事を待つメッセージがあるか（第68版）：最後があなたのものでも、記憶を引き継がない寝落ち通話の記録（キャラに見せない）なら待たない
+const aiHidden = (m) => !!(m && (m.kind === 'callog' || m.kind === 'callout') && m.meta && m.meta.nokeep);
+function needsReply(arr) { const last = (arr || [])[(arr || []).length - 1]; return !!(last && last.sender === 'me' && !aiHidden(last)); }
 function scheduleReply(charId) {
   clearTimeout(replyTimers[charId]);
   // 続けて送るかもしれないので少し待ってから返信をもらう
@@ -1307,7 +1310,7 @@ async function requestReply(charId, opt = {}) {
     if (S.replyAgain[charId]) {
       S.replyAgain[charId] = false;
       const arr = S.msgs[charId] || [];
-      if (arr.length && arr[arr.length - 1].sender === 'me') scheduleReply(charId);
+      if (needsReply(arr)) scheduleReply(charId);
     }
   }
 }
@@ -1624,7 +1627,7 @@ async function setCharPaused(id, on) {
     S.settings = r.settings; renderPause();
     if ($('edPause') && edit && edit.id === id) $('edPause').checked = charPaused(id);
     toast(on ? `${c.name}を止めました` : `${c.name}を再開しました`);
-    if (!on && !S.settings.omotePaused) { const arr = S.msgs[id] || []; if (arr.length && arr[arr.length - 1].sender === 'me') scheduleReply(id); } // 止めているあいだに送ったメッセージへ返事
+    if (!on && !S.settings.omotePaused) { const arr = S.msgs[id] || []; if (needsReply(arr)) scheduleReply(id); } // 止めているあいだに送ったメッセージへ返事
   } catch (e) { toast(e.message); renderPause(); }
 }
 async function setPaused(world, p) {
@@ -1634,7 +1637,7 @@ async function setPaused(world, p) {
     S.settings = r.settings; renderPause();
     toast(p ? `${nm}を止めました` : `${nm}を再開しました`);
     if (!p) { // 止めているあいだに送ったメッセージへ、返事をもらう
-      for (const c of S.chars) { const k = world === 'ura' ? c.id + URA : c.id; const arr = S.msgs[k] || []; if (arr.length && arr[arr.length - 1].sender === 'me') scheduleReply(k); }
+      for (const c of S.chars) { const k = world === 'ura' ? c.id + URA : c.id; const arr = S.msgs[k] || []; if (needsReply(arr)) scheduleReply(k); }
     }
   } catch (e) { toast(e.message); }
 }
@@ -1707,7 +1710,7 @@ function openChat(id, world) {
   markReadIfOpen();
   const k = curKey();
   const arr = S.msgs[k] || [];
-  if (arr.length && arr[arr.length - 1].sender === 'me' && !(groupById(id) && arr[arr.length - 1].kind) && !S.replyBusy[k] && !ogroupById(id)) scheduleReply(k); // グループ通話の記録には返事しない（第59版）
+  if (needsReply(arr) && !(groupById(id) && arr[arr.length - 1].kind) && !S.replyBusy[k] && !ogroupById(id)) scheduleReply(k); // グループ通話の記録には返事しない（第59版）
 }
 
 // ------------------------------------------------ タイムライン（表と裏は完全に別）
@@ -1996,7 +1999,7 @@ function bubHTML(m) {
   if (m.kind === 'vm') { const v = vmOf(baseId(m.charId), m.id); return `<div class="bub call vm" data-vm="${m.id}"><span class="ic">▶</span><span><b>留守番電話${v && !v.heard ? '<span class="new"></span>' : ''}</b><small>${v ? (v.heard ? 'タップで再生' : '新しい留守電・タップで再生') : '古い留守電（もう残っていません）'}</small></span></div>`; }
   if (m.kind === 'callout') return `<div class="bub call out" data-callback="1"><span class="ic">📞</span><span><b>${m.meta && m.meta.group ? 'グループ通話' : '発信'}</b><small>${m.meta && m.meta.group ? 'だれも出ませんでした' : '応答なし'}・タップでかけ直す</small></span></div>`;
   if (m.kind === 'callog' && m.meta && m.meta.group && m.meta.log && !m.retracted) return `<div class="bub call log" data-gclog="${esc(m.id)}"><span class="ic">${m.meta.sleep ? '🌙' : '📞'}</span><span><b>${m.meta.sleep ? '寝落ち通話' : m.meta.from ? 'グループ通話（続き）' : 'グループ通話'} ${durText(m.meta.dur)}</b><small>タップで会話を読む・続きから話す</small></span></div>`; // 会話が残っている通話（第57版・第59版で裏も）
-  if (m.kind === 'callog') { const mt = m.meta || {}; return `<div class="bub call log" data-callback="1"><span class="ic">${mt.sleep ? '🌙' : '📞'}</span><span><b>${mt.sleep ? '寝落ち通話' : mt.group ? 'グループ通話' : '通話'} ${durText(mt.dur)}</b><small>${mt.nokeep ? '記憶に残さない通話・' : ''}${mt.usd != null ? `約$${Number(mt.usd).toFixed(3)}（約${yenOf(Number(mt.usd))}円）` : 'タップでかけ直す'}</small></span></div>`; }
+  if (m.kind === 'callog') { const mt = m.meta || {}; return `<div class="bub call log" data-callback="1"><span class="ic">${mt.sleep ? '🌙' : '📞'}</span><span><b>${mt.sleep ? '寝落ち通話' : mt.group ? 'グループ通話' : '通話'} ${durText(mt.dur)}</b><small>${mt.nokeep ? '記憶に残さない通話（キャラは知りません）・' : ''}${mt.usd != null ? `約$${Number(mt.usd).toFixed(3)}（約${yenOf(Number(mt.usd))}円）` : 'タップでかけ直す'}</small></span></div>`; }
   if (m.image || m.localImg) return `<div class="bub photo"><img ${src ? `src="${src}"` : `data-img="${esc(m.image)}"`} alt="${esc(m.alt || '写真')}"></div>${m.text ? `<div class="bub">${esc(m.text)}</div>` : ''}`;
   return `<div class="bub">${quoteHTML(m)}${esc(m.text)}</div>`;
 }

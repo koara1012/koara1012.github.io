@@ -14,7 +14,7 @@
 //    ・Cron トリガー  * * * * *  （毎分。実際に動くのは13分おき）
 // =====================================================================
 
-const VERSION = '第68版（2026-11-14 12:00:00 更新・引き継がない寝落ち通話はキャラに見せない）';
+const VERSION = '第69版（2026-11-14 13:15:00 更新・R2：毎日のバックアップ・素材・iPhoneの設定・使用量）';
 const DEFAULT_MODEL = 'gemini-flash-latest';
 const DEFAULT_GROK_MODEL = 'grok-4.7';                 // X（Twitter）の Grok と同じ最新世代
 const FALLBACK_GROK_MODEL = 'grok-4-fast-non-reasoning'; // 上が使えないときの予備
@@ -931,6 +931,8 @@ async function route(key, url, body, env, ctx, req) {
       const idx = await asIndex(env);
       idx[it.id] = { h: it.h, name: it.name, type: it.type, size: buf.byteLength, at: Date.now() };
       await asPutIndex(env, idx);
+      const u = await kvGet(env, 'bk:r2use', null);
+      if (u && u.size) { u.size.bytes += buf.byteLength; u.size.objects++; await kvSet(env, 'bk:r2use', u); } // 保存している量に足しておく（1日1回、数え直す）
       return json({ ok: true });
     }
     case 'GET /assets/index': { // 預けた素材の一覧（素材の id → 指紋・名前・大きさ）
@@ -3253,6 +3255,7 @@ async function bkCheckAndCommit(env, job) {
   await env.BACKUP.put(BK_PREFIX + 'slots.json', JSON.stringify(slots));
   for (const old of olds) if (old && old.gen !== job.gen && old.gen !== job.keepGen && !Object.values(slots).some((s) => s && s.gen === old.gen)) await bkDeleteGen(env, old.gen);
   await bkFinishJob(env, job, true, { counts: job.counts, photos: integ.photos, bytes: job.bytes, warnings: info.warnings, forced: job.force });
+  await r2SizeScan(env, true).catch(() => {}); // 保存している量を数え直す
   return true;
 }
 
@@ -3510,7 +3513,9 @@ async function r2SizeScan(env, force = false) { // 保存している量を1日1
 async function r2Usage(env) { // 設定画面用
   if (!env.BACKUP) return null;
   if (env.__r2flush) await env.__r2flush();
-  const u = await kvGet(env, 'bk:r2use', null), m = r2Month(Date.now());
+  let u = await kvGet(env, 'bk:r2use', null);
+  if (!(u && u.size)) { await r2SizeScan(env).catch(() => {}); u = await kvGet(env, 'bk:r2use', null); } // まだ数えていなければ、ここで1回
+  const m = r2Month(Date.now());
   const cur = u && u.month === m ? u : { a: 0, b: 0, days: {} };
   const today = cur.days && cur.days[new Date().toISOString().slice(8, 10)] || { a: 0, b: 0 };
   return { month: m, a: cur.a, b: cur.b, today, size: (u && u.size) || null, free: R2_FREE };

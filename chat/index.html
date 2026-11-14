@@ -164,6 +164,8 @@ body.ura .costbar{background:#2e2333;color:#cbb9cf;border-color:#43354a}
 .field .hint{color:var(--sub);font-size:12px;margin-top:5px;line-height:1.5}
 .bkInfo{white-space:pre-line}
 .bkSlot{padding:8px 0;border-bottom:1px solid var(--line)}
+.r2Row{margin-top:8px;font-size:14px}.r2Row .hint{display:inline;margin:0}
+.r2Bar{height:6px;border-radius:3px;background:var(--line);overflow:hidden;margin-top:4px}.r2Bar i{display:block;height:100%}
 .bkSlot:last-child{border-bottom:0}
 .bkSlot .btn{margin-top:6px;padding:8px;font-size:14px}
 .bkWarn{color:#c0392b !important}
@@ -977,9 +979,9 @@ body.ura #list.tlMode{background:#efe9f0}
       <div class="hint" id="bkLast" style="margin-top:8px"></div>
     </div>
 
-    <div class="sec">自動バックアップ（毎月1日・15日）</div>
+    <div class="sec">自動バックアップ（毎日・毎月1日・15日）</div>
     <div class="field">
-      <div class="hint" style="margin-top:0">毎月1日と15日の朝4時ごろ、写真も含めて自動で保存します（「1日用」と「15日用」の2つを交互に上書き）。保存の前に中身を確かめ、急に減っているなど様子がおかしいときは上書きせず、通知でお知らせします。</div>
+      <div class="hint" style="margin-top:0">毎朝4時ごろ、写真も含めて自動で保存します。「毎日の分」は毎日入れ替わり（昨日までの状態）、「1日用」「15日用」は毎月1日・15日に入れ替わります。新しいものを保存して確かめ終えてから、古いものを消します。急に減っているなど様子がおかしいときは上書きせず、通知でお知らせします。</div>
       <div id="bkAutoBody"><div class="hint">読み込み中…</div></div>
     </div>
 
@@ -987,7 +989,7 @@ body.ura #list.tlMode{background:#efe9f0}
       <div class="field rsBox" hidden>
         <div class="hint" style="margin-top:0">選んだバックアップの状態に、全データを戻します。戻す前の今の状態は「戻す前の状態」として自動で保存されるので、間違えても元に戻せます。戻しているあいだ（数分）は、トークが使えません。</div>
         <label class="t" style="margin-top:8px" for="rsSrc">戻す元</label>
-        <select id="rsSrc"><option value="a">1日用</option><option value="b">15日用</option><option value="pre">戻す前の状態</option><option value="file">手動で保存したファイルを選ぶ…</option></select>
+        <select id="rsSrc"><option value="d">毎日の分</option><option value="a">1日用</option><option value="b">15日用</option><option value="pre">戻す前の状態</option><option value="file">手動で保存したファイルを選ぶ…</option></select>
         <input type="file" id="rsFile" accept=".json,application/json" hidden>
         <div class="hint bkInfo" id="rsFileInfo"></div>
         <label class="t" style="margin-top:8px" for="rsConfirm">確認のため「戻す」と入力</label>
@@ -995,6 +997,20 @@ body.ura #list.tlMode{background:#efe9f0}
         <button class="btn danger" id="rsGo" style="margin-top:8px">戻す</button>
         <div class="hint bkInfo" id="rsInfo"></div>
       </div>
+
+    <div class="sec">R2（バックアップの置き場所）の使用量</div>
+    <div class="field">
+      <div id="r2Use"><div class="hint">読み込み中…</div></div>
+      <div class="hint">無料枠の50%・80%を超えたときと、1日で急に増えたときに通知でお知らせします。回数はこのアプリが数えた目安です（正確な値は Cloudflare の R2 の画面）。</div>
+      <button class="btn sub" id="r2Scan" style="margin-top:6px">保存している量を数え直す</button>
+    </div>
+
+    <div class="sec">この iPhone だけの設定</div>
+    <div class="field">
+      <div class="hint" style="margin-top:0">電話の音・キャラごとの音量・寝落ちの分数・勝手に話す・ホームのタブなど、この iPhone にだけ保存している設定を、変えるたびにサーバーへ預けます（自動バックアップにも入ります）。合言葉とサーバーのURLは預けません。</div>
+      <div class="hint" id="prefInfo"></div>
+      <button class="btn sub" id="prefRestore" style="margin-top:6px">この iPhone の設定をサーバーから戻す</button>
+    </div>
 
     <div class="sec">困ったとき</div>
     <div class="hint" style="color:var(--sub);font-size:12px;line-height:1.6">うまく動かないときは「診断情報をコピー」してClaudeに貼り付けてください。合言葉は伏せてあります。</div>
@@ -1034,7 +1050,7 @@ body.ura #list.tlMode{background:#efe9f0}
 // 置き場所で切り替える：/lab/（試作）と /chat/（本番）で同じファイルを使う
 // 試作は本番と同じサイトなので、保存の名前に「lab.」を付けて本番の chat.* には書き込まない。通知も登録しない
 const IS_LAB = /\/lab\//.test(location.pathname);
-const APP_VERSION = '第68版（2026-11-14 12:00:00 更新・引き継がない寝落ち通話はキャラに見せない）' + (IS_LAB ? '【試作】' : '');
+const APP_VERSION = '第69版（2026-11-14 13:15:00 更新・R2：毎日のバックアップ・素材・iPhoneの設定・使用量）' + (IS_LAB ? '【試作】' : '');
 if (IS_LAB) { document.title = '【試作】トーク（統合）'; const mt = document.querySelector('meta[name=apple-mobile-web-app-title]'); if (mt) mt.content = 'トーク試作'; }
 const $ = (id) => document.getElementById(id);
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
@@ -2341,7 +2357,7 @@ function openSettings() {
   drawMeIcons();
   document.body.classList.remove('ura');
   show('set');
-  refreshPushState(); renderDiag(); bkRefresh();
+  refreshPushState(); renderDiag(); bkRefresh(); renderPrefInfo();
 }
 async function saveSettings() {
   S.cfg = { url: $('stUrl').value.trim().replace(/\/+$/, ''), token: $('stToken').value };
@@ -2920,19 +2936,20 @@ function renderBk() {
   const v = bkView; if (!v) return;
   renderBkLast();
   const el = $('bkAutoBody');
+  if (!v.r2) renderR2Use(null);
   if (!v.r2) { el.innerHTML = '<div class="hint bkWarn">⚠ 置き場所（Cloudflare R2）がまだつながっていません。つながると自動で動き始めます。</div>'; document.querySelectorAll('.rsBox').forEach((x) => { x.hidden = true; }); return; }
   document.querySelectorAll('.rsBox').forEach((x) => { x.hidden = false; });
   let h = '';
-  for (const k of ['a', 'b', 'pre']) {
+  for (const k of ['d', 'a', 'b', 'pre']) {
     const s = v.slots[k];
-    if (!s) { if (k !== 'pre') h += `<div class="bkSlot"><b>${k === 'a' ? '1日用' : '15日用'}</b>　<span class="hint">まだありません</span></div>`; continue; }
+    if (!s) { if (k !== 'pre') h += `<div class="bkSlot"><b>${{ d: '毎日の分', a: '1日用', b: '15日用' }[k]}</b>　<span class="hint">まだありません</span></div>`; continue; }
     const p = bkPend['slot' + k];
     h += `<div class="bkSlot"><div><b>${esc(s.name)}</b>　${fmtWhen(s.at)}</div><div class="hint">${bkSummary(s.counts, s.photos)}・${fmtMB(s.bytes)}${s.quick === 'ok' ? '・検査正常' : ''}</div>`
       + ((s.warnings || []).length ? `<div class="hint bkWarn">⚠ ${s.warnings.map(esc).join('<br>⚠ ')}</div>` : '')
       + `<button class="btn sub" data-bkdl="${k}">${p ? '保存する（ファイルに保存）' : 'iPhoneに保存'}</button><div class="hint bkInfo" data-bkdlinfo="${k}">${p ? esc(p.msg) : ''}</div></div>`;
   }
   const last = v.last, newest = Math.max(0, ...Object.values(v.slots).map((s) => s.at));
-  if (v.job) h += `<div class="hint">⏳ ${v.job.kind === 'pre' ? '戻す前の状態を保存しています' : 'バックアップを取っています'}…（${v.job.parts}個目・${fmtMB(v.job.bytes)}）</div>`;
+  if (v.job) h += `<div class="hint">⏳ ${v.job.kind === 'pre' ? '戻す前の状態を保存しています' : 'バックアップを取っています（' + (v.job.slots || [v.job.slot]).map((x) => ({ d: '毎日の分', a: '1日用', b: '15日用' }[x] || '')).filter(Boolean).join('・') + '）'}…（${v.job.parts}個目・${fmtMB(v.job.bytes)}）</div>`;
   else if (last && !last.ok && !last.cancelled && last.at > newest) {
     const why = last.blocked ? [...(last.problems || []), ...(last.drops || [])].join('、') : last.error || '';
     h += `<div class="hint bkWarn">⚠ ${fmtWhen(last.at)} ${last.blocked ? '様子がおかしいので保存しませんでした（前のバックアップはそのまま）' : '保存に失敗しました'}：${esc(why)}</div>`;
@@ -2942,6 +2959,7 @@ function renderBk() {
   if (!v.job && !v.restore) h += `<button class="btn sub" id="bkNow" style="margin-top:8px">今すぐ取る（${esc(v.cycle.name)}を上書き）</button>`;
   if (v.job && v.job.kind !== 'pre') h += `<button class="btn sub" id="bkCancel" style="margin-top:8px">止める</button>`;
   el.innerHTML = h;
+  renderR2Use(v.usage);
   // 戻す
   const rs = v.restore;
   $('rsGo').disabled = !!rs || !!v.job && v.job.kind === 'pre';
@@ -2951,6 +2969,52 @@ function renderBk() {
   const sel = $('rsSrc').selectedOptions[0];
   if (sel && sel.disabled) $('rsSrc').value = [...$('rsSrc').options].find((o) => !o.disabled).value; // まだ無いものは選べない
 }
+// R2 の使用量（今〇MB／10GB・今月の書き込み〇回／100万回・読み込み〇回／1000万回）
+function renderR2Use(u) {
+  const el = $('r2Use'); if (!el) return;
+  if (!u) { el.innerHTML = '<div class="hint">R2 がつながると表示されます。</div>'; return; }
+  const pct = (a, b) => Math.min(100, (a / b) * 100), bar = (p) => `<div class="r2Bar"><i style="width:${p.toFixed(1)}%;background:${p >= 80 ? '#e74c3c' : p >= 50 ? '#f39c12' : 'var(--green, #06c755)'}"></i></div>`;
+  const n = (x) => Number(x || 0).toLocaleString();
+  const sz = u.size, mb = sz ? sz.bytes / 1e6 : 0;
+  el.innerHTML = `<div class="r2Row"><b>保存</b>　今 ${sz ? (mb >= 1000 ? (mb / 1000).toFixed(2) + 'GB' : mb >= 1 ? mb.toFixed(1) + 'MB' : Math.max(0, Math.round(sz.bytes / 1e3)) + 'KB') : '（まだ数えていません）'}／10GB${sz ? `<span class="hint">（${n(sz.objects)}個・${fmtWhen(sz.at)}に数えた）</span>` : ''}</div>${bar(sz ? pct(sz.bytes, u.free.bytes) : 0)}`
+    + `<div class="r2Row"><b>書き込み</b>　今月 ${n(u.a)}回／100万回<span class="hint">（今日 ${n(u.today.a)}回）</span></div>${bar(pct(u.a, u.free.a))}`
+    + `<div class="r2Row"><b>読み込み</b>　今月 ${n(u.b)}回／1000万回<span class="hint">（今日 ${n(u.today.b)}回）</span></div>${bar(pct(u.b, u.free.b))}`;
+}
+$('r2Scan').onclick = async () => { const b = $('r2Scan'); b.disabled = true; try { renderR2Use(await api('GET', '/backup/usage?scan=1')); toast('数え直しました'); } catch (e) { toast(e.message); } finally { b.disabled = false; } };
+
+// この iPhone だけの設定（store に入れているもの）をサーバーへ預ける。合言葉・URL（chat.cfg）は入れない
+const PREF_KEYS = ['call.fx', 'call.fxLevel', 'call.fxNoise', 'vol.char', 'sleep.min', 'gcall.auto', 'list.kind.omote', 'list.kind.ura', 'call.mode', 'call.subs', 'vm.subs', 'chat.world', 'chat.mode'];
+const PREF_NAME = { 'call.fx': '電話の音', 'vol.char': 'キャラごとの音量', 'sleep.min': '寝落ちの分数', 'gcall.auto': '勝手に話す', 'list.kind.omote': 'ホームのタブ' };
+let prefT = 0, prefLast = '';
+function prefsNow() { const o = {}; for (const k of PREF_KEYS) { const v = store.get(k, undefined); if (v !== undefined) o[k] = v; } return o; }
+function prefsSoon() { clearTimeout(prefT); prefT = setTimeout(() => prefsPush().catch(() => {}), 4000); }
+async function prefsPush() {
+  clearTimeout(prefT);
+  if (!S.cfg || !S.cfg.url || !S.cfg.token) return;
+  const p = prefsNow(), sig = JSON.stringify(p);
+  if (sig === prefLast) return;
+  await api('POST', '/device/prefs', { prefs: p, lab: IS_LAB || undefined });
+  prefLast = sig; store.set('prefs.sent', Date.now());
+  if ($('prefInfo')) renderPrefInfo();
+}
+function renderPrefInfo() { const t = store.get('prefs.sent', 0); $('prefInfo').textContent = t ? `最後に預けた日時：${fmtWhen(t)}` : 'まだ預けていません（設定を変えると預けます）'; }
+{ const set0 = store.set; store.set = (k, v) => { set0(k, v); if (PREF_KEYS.includes(k)) prefsSoon(); }; } // 変えたら4秒後に預ける
+document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'hidden' && prefT) prefsPush().catch(() => {}); });
+setTimeout(() => prefsPush().catch(() => {}), 8000); // 開いたときも一度（前に預けた中身と違うときだけ送る）
+$('prefRestore').onclick = async () => {
+  try {
+    const d = await api('GET', '/device/prefs' + (IS_LAB ? '?lab=1' : ''));
+    const p = d.prefs || null;
+    if (!p || !Object.keys(p).length) { toast('サーバーに預けた設定はまだありません'); return; }
+    const names = Object.keys(p).map((k) => PREF_NAME[k]).filter(Boolean);
+    if (!confirm(`${fmtWhen(d.at)} に預けた設定（${names.join('・') || Object.keys(p).length + '件'}など）で、この iPhone の設定を置き換えますか？\n合言葉とサーバーのURLは今のままです。`)) return;
+    clearTimeout(prefT);
+    for (const k of PREF_KEYS) if (k in p) localStorage.setItem(LAB(k), JSON.stringify(p[k]));
+    prefLast = JSON.stringify(prefsNow());
+    toast('戻しました。読み込み直します'); setTimeout(() => location.reload(), 800);
+  } catch (e) { toast(e.message); }
+};
+
 async function bkPump() { // 開いているあいだはサーバーを続けて進める（閉じても、サーバーが毎分少しずつ進める）
   if (bkPumping) return; bkPumping = true;
   try {

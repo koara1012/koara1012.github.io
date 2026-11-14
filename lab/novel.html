@@ -278,9 +278,11 @@ body.rotmode #rotwrap{transform:var(--RT)}
       <div class="row"><button class="b p" id="bkExport">全部を書き出す</button><span class="note" id="bkSaved"></span></div>
       <p class="note" id="bkLast">最後に手動で保存：まだありません</p>
       <p class="note">iPhoneでは共有メニューが開くので「"ファイル"に保存」を選んでください。トーク1つだけの書き出しは「トーク」の各トークから。</p>
-      <h4>自動バックアップ（会話・設定だけ。素材とAIのキーは入りません）</h4>
+      <h4>自動バックアップ（会話・設定。素材は別に R2 へ。AIのキーは入りません）</h4>
       <div class="card" id="bkAuto">（LINE風アプリのサーバーにつなぐと使えます）</div>
       <div class="row"><button class="b" id="bkSyncNow">今すぐサーバーに預ける</button><button class="b" id="bkFromSrv">サーバーに預けた会話・設定から戻す</button><button class="b" id="bkFromPrev" hidden>減る前のものから戻す</button></div>
+      <div class="card" id="asInfo" style="margin-top:6px">素材：（LINE風アプリのサーバーにつなぐと使えます）</div>
+      <div class="row"><button class="b" id="asSyncNow">素材を今すぐ預ける</button><button class="b" id="asRestore">サーバーから素材を戻す</button></div>
       <h4>読み込む</h4>
       <div class="row"><button class="b" id="bkImport">バックアップから復元</button></div>
       <p class="note">全部のバックアップは、今のデータと置き換わります（ファイルにAPIキーが無ければ今のキーを残します）。トーク1つのファイルは、新しいトークとして追加されます。第1回・第2回のバックアップも読み込めます。</p>
@@ -317,13 +319,17 @@ body.rotmode #rotwrap{transform:var(--RT)}
 <script>
 'use strict';
 /* ====== 版 ====== */
-const VERSION = { no: 27, at: '2026-11-11 14:15:00' };
+const VERSION = { no: 28, at: '2026-11-14 13:15:00' };
 const VERSION_TEXT = `${/\/lab\//.test(location.pathname) ? '試作・' : ''}統合 第${VERSION.no}回（${VERSION.at} 更新・akari.html 第6回がもと）`;
 
 /* ====== 改善ログ（他のAIへの引き継ぎ用）======
    改善のたびに「## 第〜回」を先頭側へ追記し、概要も最新に保つ */
 const DEV_LOG = `# 朱里ノベル 統合の試作（lab/novel.html） 改善ログ
 ※ 本番 akari.html 第6回をもとにした試作。保存先は本番と分けている（localStorage lab.settings / lab.logs、IndexedDB akariLab）。
+## 統合 第28回（2026-11-14 13:15:00）
+- 素材（立ち絵・背景・表情パーツ・フォント・タップ音・BGM）を LINE風アプリのサーバー経由で R2 に自動で預ける（syncAssets）。会話・設定を預けたあとに続けて動く。中身の指紋（sha256）で比べ、同じものは二度送らない（送った id→指紋は localStorage K.assetSent に覚える）。サーバーは POST /assets/need → 無いものだけ POST /assets/put（中身そのもの・指紋が合わなければ受け取らない）。古い素材は R2 に残る（消さない）。
+- 「サーバーから素材を戻す」（restoreAssets）：今のキャラ・背景などが使う素材のうち、この端末に無いものだけ GET /assets/get で戻す（指紋を確かめてから保存）。新しい iPhone では「サーバーに預けた会話・設定から戻す」→「サーバーから素材を戻す」の順。
+- 自動バックアップの説明を「毎日の分・1日用・15日用」に（LINE風アプリ第69版）。
 ## 統合 第27回（2026-11-11 14:15:00）
 - GPU を起こし続ける /health の頼みから { cache:'no-store' } を外し、?t= で毎回ちがう住所に（Safari では余計な見出しが付いて CORS の前の確認で弾かれ、起こし続けられていなかったかもしれない。LINE風アプリ第53版と同じ直し）
 ## 統合 第26回（2026-11-11 12:45:00）
@@ -498,8 +504,8 @@ function lsSet(k,v){ try{ localStorage.setItem(k,v); return true; }catch(e){ ret
 /* 置き場所で保存の名前を切り替える：/lab/（試作）と /chat/（本番）で同じファイルを使う */
 const IS_LAB = /\/lab\//.test(location.pathname);
 const K = IS_LAB
-  ? { settings:'lab.settings', logs:'lab.logs', idb:'akariLab', cfg:'lab.chat.cfg', manual:'lab.novelManual', synced:'lab.novelSynced' }
-  : { settings:'novel.settings', logs:'novel.logs', idb:'charaNovel', cfg:'chat.cfg', manual:'novel.manual', synced:'novel.synced' };
+  ? { settings:'lab.settings', logs:'lab.logs', idb:'akariLab', cfg:'lab.chat.cfg', manual:'lab.novelManual', synced:'lab.novelSynced', assetSent:'lab.novelAssetSent' }
+  : { settings:'novel.settings', logs:'novel.logs', idb:'charaNovel', cfg:'chat.cfg', manual:'novel.manual', synced:'novel.synced', assetSent:'novel.assetSent' };
 const isStandalone = !!(window.navigator.standalone || (window.matchMedia && matchMedia('(display-mode: standalone)').matches));
 
 /* ====== 動作の記録 ====== */
@@ -2080,7 +2086,75 @@ async function syncNovel(manual){
     const v = { at:r.at || Date.now(), lines:r.lines || 0 }; lsSet(K.synced, JSON.stringify(v));
     if (manual) toast('サーバーに預けました'); if ($('#menu').classList.contains('show')) refreshBak();
   }catch(e){ log('warn', '会話・設定をサーバーに預けられませんでした：' + e.message); if (manual) toast('預けられませんでした：' + e.message, true, 6000); }
+  syncAssets().catch(() => {});
 }
+/* 素材を R2 に預ける：中身の指紋で比べて、まだサーバーに無いものだけ送る（同じものは二度送らない・古いものは R2 に残る） */
+const hexOfBuf = buf => [...new Uint8Array(buf)].map(b => b.toString(16).padStart(2,'0')).join('');
+let assetBusy = false;
+function assetSent(){ try{ return JSON.parse(lsGet(K.assetSent) || '{}') || {}; }catch(e){ return {}; } }
+async function syncAssets(manual){
+  if (assetBusy || !S.srvUrl || !(crypto && crypto.subtle)) return;
+  assetBusy = true;
+  try{
+    const sent = assetSent(), items = [];
+    for (const id of allRecIds()){
+      if (sent[id]) continue;
+      const r = await loadRec(id); if (!r || !r.buf) continue;
+      items.push({ id, h: hexOfBuf(await crypto.subtle.digest('SHA-256', r.buf)), name:r.name || '', type:r.type || '', size:r.buf.byteLength, rec:r });
+    }
+    if (!items.length){ if (manual) toast('素材はもう全部預けてあります'); return; }
+    const { need = [] } = await srv('POST', '/assets/need', { items: items.map(({ rec, ...x }) => x) });
+    const want = new Set(need); let sentN = 0, bytes = 0;
+    for (const it of items){
+      if (want.has(it.h)){
+        const q = new URLSearchParams({ id:it.id, h:it.h, name:it.name, type:it.type });
+        const res = await fetch(S.srvUrl.replace(/\/+$/,'') + '/assets/put?' + q, { method:'POST', headers:{ 'X-App-Token':S.srvToken || '' }, body:it.rec.buf });
+        if (!res.ok){ let m = ''; try{ m = (await res.json()).error; }catch(e){} throw new Error(`素材「${it.name}」を預けられませんでした（${res.status}${m ? '：' + m : ''}）`); }
+        want.delete(it.h); sentN++; bytes += it.size;
+      }
+      sent[it.id] = it.h; lsSet(K.assetSent, JSON.stringify(sent));
+    }
+    log('info', `素材を預けました（新しく送った${sentN}個・${fmtMB(Math.max(bytes, 1))}／確認した${items.length}個）`);
+    if (manual) toast(sentN ? `素材を${sentN}個預けました` : '素材はもう預けてありました（送り直していません）');
+  }catch(e){
+    if (/R2/.test(e.message)){ if (manual) toast('R2 がまだつながっていません', true, 5000); }
+    else { log('warn', '素材を預けられませんでした：' + e.message); if (manual) toast(e.message, true, 6000); }
+  }finally{ assetBusy = false; if ($('#menu').classList.contains('show')) refreshAssetInfo(); }
+}
+async function refreshAssetInfo(){
+  const el = $('#asInfo'); if (!el) return;
+  if (!S.srvUrl){ el.textContent = '素材：（LINE風アプリのサーバーにつなぐと使えます）'; return; }
+  const ids = allRecIds(), sent = assetSent(), done = ids.filter(id => sent[id]).length;
+  let srvLine = '';
+  try{ const ix = await srv('GET', '/assets/index'); srvLine = `・サーバー（R2）にある素材：${ix.files}個（${fmtMB(Math.max(ix.bytes, 1))}）`; }
+  catch(e){ srvLine = /R2/.test(e.message) ? '・R2 がまだつながっていません' : ''; }
+  el.textContent = `素材：この端末の${ids.length}個のうち${done}個を預けました${srvLine}（変えると自動で預けます。同じものは送り直しません）`;
+}
+async function restoreAssets(){
+  try{
+    const ix = await srv('GET', '/assets/index'), items = ix.items || {};
+    const ids = allRecIds(), miss = [];
+    for (const id of ids){ if (!(await loadRec(id)) && items[id]) miss.push(id); }
+    const none = ids.filter(id => !REC.has(id) && !items[id]).length;
+    if (!miss.length){ toast(none ? `戻せる素材がありません（サーバーにも無いものが${none}個）` : 'この端末に素材は全部そろっています', !!none, 5000); return; }
+    const total = miss.reduce((a, id) => a + (items[id].size || 0), 0);
+    if (!confirm(`この端末に無い素材${miss.length}個（${fmtMB(Math.max(total, 1))}）をサーバーから戻しますか？${none ? `\n（サーバーにも無いものが${none}個あります）` : ''}`)) return;
+    toast('素材を戻しています…', false, 20000);
+    const sent = assetSent(); let n = 0;
+    for (const id of miss){
+      const it = items[id];
+      const res = await fetch(S.srvUrl.replace(/\/+$/,'') + '/assets/get?h=' + it.h, { headers:{ 'X-App-Token':S.srvToken || '' } });
+      if (!res.ok) throw new Error(`素材「${it.name}」を戻せませんでした（${res.status}）`);
+      const buf = await res.arrayBuffer();
+      if (hexOfBuf(await crypto.subtle.digest('SHA-256', buf)) !== it.h) throw new Error(`素材「${it.name}」の中身が合いません`);
+      const r = { name:it.name, type:it.type || '', buf }; await idb.set('img:' + id, r); REC.set(id, r); sent[id] = it.h; n++;
+    }
+    lsSet(K.assetSent, JSON.stringify(sent));
+    log('info', `サーバーから素材を${n}個戻しました`); toast(`素材を${n}個戻しました。読み込み直します`); setTimeout(() => location.reload(), 900);
+  }catch(e){ log('error', '素材を戻せませんでした：' + e.message); toast(e.message, true, 6000); }
+}
+$('#asSyncNow').onclick = () => syncAssets(true);
+$('#asRestore').onclick = () => restoreAssets();
 document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'hidden' && novelSyncT) syncNovel().catch(() => {}); });
 async function refreshBak(){
   let m = null; try{ m = JSON.parse(lsGet(K.manual) || 'null'); }catch(e){}
@@ -2091,7 +2165,8 @@ async function refreshBak(){
   let st = null; try{ st = await srv('GET', '/backup/status'); }catch(e){ el.innerHTML = 'サーバーの状態を読めませんでした：' + esc(e.message); return; }
   if (st.novelManual && (!m || st.novelManual.at > m.at)) showManual(st.novelManual);
   const last = st.last && st.last.at ? `最後の自動バックアップ：${fmtDT(st.last.at)}` : '自動バックアップはまだありません';
-  el.innerHTML = (st.r2 ? `<div>毎月1日・15日の朝4時ごろ、LINE風アプリと一緒に自動で保存されます（「1日用」「15日用」を交互に上書き）。${esc(last)}</div>`
+  refreshAssetInfo();
+  el.innerHTML = (st.r2 ? `<div>毎朝4時ごろ、LINE風アプリと一緒に自動で保存されます（「毎日の分」は毎日、「1日用」「15日用」は毎月1日・15日に入れ替わり）。${esc(last)}</div>`
     : '<div style="color:#fff;background:#c0392b;border-radius:6px;padding:6px 8px">自動バックアップの保存先（R2）が、まだつながっていません。つながると、LINE風アプリと一緒に自動で動き始めます。それまでは手動のバックアップで守ってください。</div>')
     + `<div class="note" style="margin-top:4px">サーバーに預けた最新：${sy ? fmtDT(sy.at) + `（会話${sy.lines}件）` : 'まだありません'}（変えてから20秒ほどで自動で預けます）</div>`;
   try{ const d = await srv('GET', '/novel/data'); $('#bkFromPrev').hidden = !d.hasPrev; }catch(e){}
@@ -2101,7 +2176,7 @@ async function restoreFromServer(prev){
     const d = await srv('GET', '/novel/data' + (prev ? '?prev=1' : ''));
     if (!d.data) throw new Error('サーバーに預けたデータがありません');
     const n = Object.values(d.data.hists || {}).reduce((a, h) => a + h.length, 0);
-    if (!confirm(`${fmtDT(d.at)} に預けた会話・設定（キャラ${(d.data.chars || []).length}人・トーク${(d.data.rooms || []).length}件・会話${n}件）で、今のものを置き換えますか？\n素材とAIのキーは今のまま残ります。`)) return;
+    if (!confirm(`${fmtDT(d.at)} に預けた会話・設定（キャラ${(d.data.chars || []).length}人・トーク${(d.data.rooms || []).length}件・会話${n}件）で、今のものを置き換えますか？\n素材とAIのキーは今のまま残ります（足りない素材は、あとで「サーバーから素材を戻す」で戻せます）。`)) return;
     for (const r of ROOMS) try{ await idb.del('hist:' + r.id); }catch(e){}
     for (const [rid, h] of Object.entries(d.data.hists || {})) await idb.set('hist:' + rid, h);
     await idb.set('chars', d.data.chars || []); await idb.set('rooms', d.data.rooms || []); await idb.set('global', Object.assign({}, GLOBAL, d.data.global || {}));

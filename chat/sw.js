@@ -17,7 +17,8 @@ self.addEventListener('push', (e) => {
     self.registration.showNotification(d.title || '新着メッセージ', {
       body: d.body || '',
       tag: d.tag || 'chat-' + (d.charId || 'test'),
-      renotify: true,
+      renotify: !d.silent,
+      silent: !!d.silent, // 静かな時間のボイスメッセージ（第70版）
       icon: 'icon-192.png',
       badge: 'icon-192.png',
       data: { charId: d.charId || null, tl: d.tl || null, postId: d.postId || null, url: d.url || null },

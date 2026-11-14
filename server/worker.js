@@ -54,7 +54,7 @@ export default {
       await ensureSchema(env);
       // バックアップから戻しているあいだは、ほかの操作を止める（途中の状態に書き込まないように）
       if (!url.pathname.startsWith('/backup/') && await kvGet(env, 'bk:lock', 0)) throw new HttpError(503, 'バックアップから戻している最中です。終わるまでお待ちください');
-      const body = req.method === 'POST' && url.pathname !== '/assets/put' ? await req.json().catch(() => ({})) : {};
+      const body = req.method === 'POST' && url.pathname !== '/assets/put' && url.pathname !== '/vmsg/audio' ? await req.json().catch(() => ({})) : {};
       return await route(req.method + ' ' + url.pathname, url, body, env, ctx, req);
     } catch (e) {
       return json({ error: e.message || String(e) }, e.status || 500);
@@ -242,6 +242,7 @@ function normChar(c) {
     uraOnly: !!c.uraOnly, // 裏だけに登場する（表のトーク・表のTL・くらしには出てこない）
     voice: /^[\w.-]{1,40}$/.test(String(c.voice || '').trim()) ? String(c.voice).trim() : '', // 電話の声（Irodori-TTS の声の名前）。空なら電話を使わない
     callFreq: ['none', 'rare', 'normal', 'often'].includes(c.callFreq) ? c.callFreq : 'normal', // キャラからの着信の頻度
+    vmsgFreq: ['none', 'rare', 'normal', 'often'].includes(c.vmsgFreq) ? c.vmsgFreq : 'rare', // キャラから気まぐれに送るボイスメッセージの頻度（第70版）
   };
 }
 function validMD(v) { const m = /^(\d{2})-(\d{2})$/.exec(String(v || '')); return !!m && +m[1] >= 1 && +m[1] <= 12 && +m[2] >= 1 && +m[2] <= [31, 29, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31][+m[1] - 1]; }
@@ -952,6 +953,27 @@ async function route(key, url, body, env, ctx, req) {
       return new Response(buf, { headers: { ...CORS, 'Content-Type': 'application/octet-stream' } });
     }
 
+    // ---- ボイスメッセージの声（第70版）。キャラの声をアプリが作ったら預かる・聞くときに返す
+    case 'GET /vmsg/audio': {
+      const id = num(url.searchParams.get('id'), 0);
+      if (!env.BACKUP) return json({ error: 'no R2' }, 404);
+      const o = await env.BACKUP.get('voice/' + id);
+      if (!o) return json({ error: 'まだありません' }, 404);
+      return new Response(await o.arrayBuffer(), { headers: { ...CORS, 'Content-Type': 'application/octet-stream' } });
+    }
+    case 'POST /vmsg/audio': {
+      needR2(env);
+      const id = num(url.searchParams.get('id'), 0);
+      const m = await env.DB.prepare("SELECT id,meta FROM messages WHERE id=? AND kind='voice' AND sender='char'").bind(id).first();
+      if (!m) throw new HttpError(404, 'そのボイスメッセージが見つかりません');
+      const buf = await req.arrayBuffer();
+      if (!buf.byteLength || buf.byteLength > VMSG_AUDIO_MAX) throw new HttpError(413, '声のファイルが大きすぎるか空です');
+      await env.BACKUP.put('voice/' + id, buf, { httpMetadata: { contentType: 'application/octet-stream' } });
+      const meta = { ...parseMeta(m.meta || '{}'), au: 1, dur: clamp(Math.round(num(url.searchParams.get('dur'), 0)), 0, 400e3) || undefined };
+      await env.DB.prepare('UPDATE messages SET meta=? WHERE id=?').bind(JSON.stringify(meta), id).run();
+      return json({ ok: true, meta });
+    }
+
     // ---- この iPhone だけの設定を預かる（kv なので自動バックアップに入る）。戻すのはボタンを押したときだけ
     case 'POST /device/prefs': {
       const p = body.prefs;
@@ -1136,6 +1158,7 @@ async function route(key, url, body, env, ctx, req) {
         const qs = part.map(() => '?').join(',');
         const { results: imgs } = await env.DB.prepare(`SELECT image FROM messages WHERE char_id=? AND image IS NOT NULL AND id IN (${qs})`).bind(key, ...part).all();
         for (const im of imgs) await env.DB.prepare('DELETE FROM images WHERE id=?').bind(im.image).run(); // 写真も一緒に消す
+        if (env.BACKUP) { const { results: vs } = await env.DB.prepare(`SELECT id FROM messages WHERE char_id=? AND kind='voice' AND sender='char' AND id IN (${qs})`).bind(key, ...part).all(); if (vs.length) await env.BACKUP.delete(vs.map((v) => 'voice/' + v.id)).catch(() => {}); } // ボイスメッセージの声も
         const r = await env.DB.prepare(`DELETE FROM messages WHERE char_id=? AND id IN (${part.map(() => '?').join(',')})`).bind(key, ...part).run();
         deleted += (r.meta && r.meta.changes) || 0;
       }
@@ -1153,6 +1176,13 @@ async function route(key, url, body, env, ctx, req) {
       }
       if (!text && !image) throw new HttpError(400, 'メッセージが空です');
       const at = Date.now();
+      if (body.voice) { // ボイスメッセージ（第70版・表の1対1だけ）：音は残さず、聞き取った文字だけ
+        if (world !== 'omote' || isGroupId(base) || isOGroupId(base) || image) throw new HttpError(400, 'ボイスメッセージは表の個人トークだけで送れます');
+        const meta = { dur: clamp(Math.round(num(body.dur, 0)), 1000, VMSG_ME_MAX) };
+        const r = await env.DB.prepare("INSERT INTO messages (char_id,sender,text,at,kind,meta) VALUES (?,?,?,?,'voice',?)").bind(key, 'me', text.slice(0, 1500), at, JSON.stringify(meta)).run();
+        await setRead(env, key, at);
+        return json({ message: { id: r.meta.last_row_id, charId: key, sender: 'me', text: text.slice(0, 1500), at, kind: 'voice', meta } });
+      }
       const r = await env.DB.prepare('INSERT INTO messages (char_id,sender,text,at,image) VALUES (?,?,?,?,?)').bind(key, 'me', text, at, image).run();
       await setRead(env, key, at); // 返信する＝それまでの相手のメッセージは読んだ
       return json({ message: { id: r.meta.last_row_id, charId: key, sender: 'me', text, at, ...(image ? { image } : {}) } });
@@ -2144,11 +2174,12 @@ async function generateAndStore(env, c, d, hist, lastRead, world = 'omote') {
       ps: st.lifeEnabled && !special && d.mode !== 'call' && Math.random() < 0.12,
       // 会う約束：ユーザーが話した直後の返事で、約束が決まった・変わった・取り消されたかも答えてもらう（使うとき・モードがオンのときだけ）
       meet: meetOn(st, c) && !special && d.mode !== 'call' && hist.length && hist[hist.length - 1].sender === 'me' ? { cur: await kvGet(env, 'appt:' + c.id, null) } : null,
+      voice: vmsgOpt(c, d, hist), // ボイスメッセージ（第70版）
     };
     const wb = await worldBlock(env, c.prompt + '\n' + hist.slice(-20).map((m) => m.text).join('\n'));
     const system = wb + buildSystem(c, special ? { ...d } : d, hist, now, tlInfo, lifeInfo);
     const contents = buildContents(hist, 'omote', images);
-    if (opt.news || opt.photo || opt.edit || opt.typo || opt.retract || opt.react || opt.quote || opt.ps || opt.meet || special) {
+    if (opt.news || opt.photo || opt.edit || opt.typo || opt.retract || opt.react || opt.quote || opt.ps || opt.meet || opt.voice || special) {
       rich = await callOmoteRich(env, { ...c, maxSplit: special ? 2 : c.maxSplit }, d, system, contents, opt);
       texts = rich.texts;
       rich.srcImage = newPhotos.length ? images[newPhotos[newPhotos.length - 1].image] : null;
@@ -2179,6 +2210,7 @@ async function generateAndStore(env, c, d, hist, lastRead, world = 'omote') {
     if (!items.length) return [];
   }
   if (!items.length) throw new Error('返答が空でした');
+  if (rich && rich.voiceIdx >= 0) { const v = items.filter((x) => x.sender === 'char')[rich.voiceIdx]; if (v) { v.voice = true; v.text = v.text.slice(0, VMSG_CHAR_CHARS); } } // ボイスメッセージにする吹き出し
   if (ura && looksRefused(items.map((x) => x.text))) throw new AiRefused(); // 裏：断った（「……」だけ・断りの決まり文句。保存しない）。表のトークは、黙る返事もあり得るので API の断りだけを見る
   // 写真（表）：料理や景色の写真、送られた写真の加工。人物は写さない
   if (rich && (rich.photo || (rich.edit && rich.srcImage))) {
@@ -2197,9 +2229,10 @@ async function generateAndStore(env, c, d, hist, lastRead, world = 'omote') {
     return [d.callMsg];
   }
   const t0 = Date.now();
+  for (const x of items) if (x.voice) { x.kind = 'voice'; x.meta = { est: vmsgEst(x.text) }; delete x.replyTo; }
   const res = await env.DB.batch(items.map((x, i) =>
-    env.DB.prepare('INSERT INTO messages (char_id,sender,text,at,image,alt,reply_to,face) VALUES (?,?,?,?,?,?,?,?)').bind(key, x.sender, x.text, t0 + i, x.image || null, x.alt || null, x.replyTo || null, x.face || null)));
-  const out = items.map((x, i) => ({ id: res[i].meta.last_row_id, charId: key, sender: x.sender, text: x.text, at: t0 + i, ...(x.image ? { image: x.image, alt: x.alt } : {}), ...(x.replyTo ? { replyTo: x.replyTo } : {}), ...(x.face ? { face: x.face } : {}) }));
+    env.DB.prepare('INSERT INTO messages (char_id,sender,text,at,image,alt,reply_to,face,kind,meta) VALUES (?,?,?,?,?,?,?,?,?,?)').bind(key, x.sender, x.text, t0 + i, x.image || null, x.alt || null, x.replyTo || null, x.face || null, x.kind || null, x.meta ? JSON.stringify(x.meta) : null)));
+  const out = items.map((x, i) => ({ id: res[i].meta.last_row_id, charId: key, sender: x.sender, text: x.text, at: t0 + i, ...(x.image ? { image: x.image, alt: x.alt } : {}), ...(x.replyTo ? { replyTo: x.replyTo } : {}), ...(x.face ? { face: x.face } : {}), ...(x.kind ? { kind: x.kind, meta: x.meta } : {}) }));
   // 会う約束：決まった・変わった・取り消された
   if (rich && rich.meet) await applyMeet(env, c, rich.meet, now).catch((e) => log(env, '会う約束: ' + e.message));
   // 追伸：数分後に、思い出したように一言
@@ -2547,12 +2580,27 @@ async function callMsg(env, key, sender, kind, text, meta) {
 async function callTalk(env, c, n = 16) {
   return (await aiRecent(env, c.id, n)).filter((m) => !m.retracted).map((m) => `[${fmtTime(m.at)}] ${m.sender === 'me' ? 'ユーザー' : c.name}: ${msgLine(m)}`).join('\n');
 }
+// ---- ボイスメッセージ（第70版・表だけ）。声はアプリが Irodori-TTS で作って R2（voice/<メッセージid>）に置く。サーバーは文字と「声で送るか」を受け持つ
+const VMSG_ME_MAX = 60e3;         // あなたの声の長さの上限（1分）
+const VMSG_CHAR_CHARS = 900;      // キャラの声の文字数の上限（声で3分くらい）
+const VMSG_AUDIO_MAX = 12e6;      // 声のファイルの上限
+const VMSG_RATE = { none: { reply: 0, spont: 0 }, rare: { reply: 0.05, spont: 0.12 }, normal: { reply: 0.12, spont: 0.3 }, often: { reply: 0.25, spont: 0.5 } };
+const vmsgEst = (t) => Math.round(clamp(String(t || '').length / 7, 1, 200) * 1000); // 声の長さの見積もり（1秒に7文字くらい）
+function vmsgOpt(c, d, hist) { // この返事で「声で送る」を選べるようにするか
+  if (!c.voice || d.mode === 'call' || d.mode === 'special') return null;
+  const last = hist[hist.length - 1], userVoice = !!(last && last.sender === 'me' && last.kind === 'voice');
+  const asked = !!(last && last.sender === 'me' && /声|ボイス|ボイメ|音声/.test(last.text || ''));
+  const rate = VMSG_RATE[c.vmsgFreq || 'rare'] || VMSG_RATE.rare;
+  if (userVoice || asked || Math.random() < (d.mode === 'reply' ? rate.reply : rate.spont)) return { userVoice, asked };
+  return null;
+}
 function msgLine(m) {
   const meta = m.meta || {};
   if (m.kind === 'call') return meta.declined ? '（電話をかけたが、ユーザーに切られた）' : '（電話をかけたが、ユーザーは出なかった）';
   if (m.kind === 'vm') return `（留守番電話にメッセージを残した：「${m.text}」）`;
   if (m.kind === 'callout') return '（ユーザーから電話がかかってきたが、出られなかった）';
   if (m.kind === 'callog') return `（電話で${callDurText(meta.dur || 0)}話した${meta.sum ? '。話した内容：' + meta.sum : ''}）`;
+  if (m.kind === 'voice') return m.sender === 'me' ? `（ボイスメッセージ：「${m.text}」）` : `（ボイスメッセージで）${m.text}`;
   return m.text || (m.image ? '（写真）' : '');
 }
 // --- かけてくる：毎分の見回り（担当の分）で、頻度の設定と今していることから決める
@@ -2744,7 +2792,7 @@ function sleepRules(cl, check, group) {
 }
 // 第68版：記憶を引き継がない寝落ち通話の記録（と、だれも出なかった記録）は、キャラ（AI）に見せない。あなたの画面には残す。
 // AI に渡す履歴は aiRecent で読む（/sync など、画面に返すものは recent のまま）
-const aiHidden = (m) => !!(m && (m.kind === 'callog' || m.kind === 'callout') && m.meta && m.meta.nokeep);
+const aiHidden = (m) => !!(m && m.kind && m.meta && m.meta.nokeep); // 記憶を引き継がない寝落ち通話・モーニングコール（第70版）の記録・不在・留守電・ボイスメッセージ
 async function aiRecent(env, key, n) { return (await recent(env, key, n + 4)).filter((m) => !aiHidden(m)).slice(-n); }
 const sleepCheck = (cl, v) => (cl.sleep && (v === 'ask' || v === 'bye') ? v : '');
 async function finishCall(env, cl, c, { by = 'me', est = null } = {}) {
@@ -5591,6 +5639,12 @@ ${opt.quote.map((m, i) => `  ${i}：「${trunc(m.text, 60)}」`).join('\n')}`;
     extra += `\n- meet_status：ユーザーとキャラクターが「実際にどこかで会う」約束について。今回のやり取りで、会う日時と場所がはっきり決まった（または日時・場所が変わった）なら "set"、約束が取りやめになったなら "cancel"、それ以外は ""。「今度遊ぼう」のように日時が決まっていない話は "" のまま。${cur ? `いまの約束：${cur.at ? fmtTime(cur.at) : '日時未定'}「${cur.place || '場所未定'}」。` : 'いまの約束：なし。'}
 - meet_date／meet_time／meet_place："set" のときだけ、会う日（YYYY-MM-DD。今日は ${jstDay(Date.now())}（${jstParts(Date.now()).w}））・時刻（HH:MM、24時間）・場所（短く）。それ以外は ""。`;
   }
+  if (opt.voice) {
+    props.voice = { type: 'integer' };
+    extra += `\n- voice：書いた吹き出しのうち1つを、文字ではなく声のボイスメッセージ（LINEの音声メッセージ。あなたの声で届く）として送るなら、その番号（0から）。送らないなら -1。${opt.voice.userVoice ? 'ユーザーはボイスメッセージ（声）を送ってきた。文字で返すか声で返すかは、キャラクターの性格と今の流れで決める。' : opt.voice.asked ? 'ユーザーが声を聞きたがっているかもしれない。声で送るかは性格と流れで決める。' : '今回は、気分しだいで声のボイスメッセージを送ってもよい（ふだんは文字。無理に送らない）。'}
+  ボイスメッセージにする吹き出しは、声に出して話す言葉だけ（描写・絵文字・顔文字・記号は入れない）。長さはふだん1〜3文の短め。気持ちが高まった大事な場面だけ長めでもよい（最長で声で3分＝800字くらいまで）。
+  キャラクターに合うなら、たまに「声が聞きたい」「ボイスメッセージ送って」とユーザーにねだってもよい（しつこくしない）。`;
+  }
   if (opt.typo) extra += '\n- 今回は、吹き出しのどれか1か所で、スマホらしい自然な打ち間違い（変換ミスなど）をして、次の吹き出しで「＊正しい言葉」と短く訂正する。キャラクターに合わなければしなくてよい。';
   if (opt.react) {
     props.stamp = { type: 'string' };
@@ -5616,6 +5670,7 @@ ${Object.keys(STAMPS).filter((k) => k !== '🏃').map((k) => `  ${k}：${STAMPS[
     retract: opt.retract ? Number(r && r.retract) : -1,
     quoteId: opt.quote && Number.isInteger(Number(r && r.quote)) && opt.quote[Number(r.quote)] ? opt.quote[Number(r.quote)].id : 0,
     postscript: opt.ps ? String((r && r.postscript) || '').trim().slice(0, 200) : '',
+    voiceIdx: opt.voice && Number.isInteger(Number(r && r.voice)) ? Number(r.voice) : -1,
     meet: opt.meet && r ? { status: String(r.meet_status || '').trim(), date: String(r.meet_date || '').trim(), time: String(r.meet_time || '').trim(), place: String(r.meet_place || '').trim() } : null,
   };
 }
@@ -5860,12 +5915,14 @@ async function barkEncrypt(keyStr, ivStr, plain) {
   let bin = ''; for (const b of ct) bin += String.fromCharCode(b);
   return btoa(bin);
 }
-async function sendBark(env, st, { title, body, cid, group, url, ring }) {
+async function sendBark(env, st, { title, body, cid, group, url, ring, silent, critical }) {
   if (!env.BARK_DEVICE_KEY) throw new Error('シークレット BARK_DEVICE_KEY が設定されていません');
   const p = { title: String(title || ''), body: String(body || ''), group: group || 'トーク', level: 'active' };
   if (st.barkSound) p.sound = st.barkSound;
   if (url) p.url = url; // タップで開くページ（会う約束・電話の通知）
   if (ring) { p.call = '1'; p.level = 'timeSensitive'; } // 着信：Bark の着信音を鳴らし続ける
+  if (critical) { p.level = 'critical'; p.volume = '8'; } // モーニングコール（第70版）：マナーモードでも鳴る（Bark のアプリで「重要な通知」を許可したとき）
+  if (silent) { p.level = 'passive'; delete p.sound; } // 音なしで届く
   const icon = await barkIconUrl(env, cid).catch(() => '');
   if (icon) p.icon = icon;
   const server = (env.BARK_SERVER || BARK_SERVER).replace(/\/+$/, '');
@@ -5910,7 +5967,8 @@ async function pushPayload(env, obj) {
 async function pushToAll(env, c, msgs) {
   if (!msgs.length) return;
   const st = await getSettings(env);
-  const body = truncBytes(msgs.map((m) => (m.kind === 'call' ? '📞 不在着信' : m.kind === 'vm' ? '📞 留守番電話が1件' : m.image && !m.text ? '📷 写真' : m.text)).filter(Boolean).join('\n'), 1800);
-  if (st.notifyVia !== 'bark') await pushPayload(env, { title: c.name, body, charId: c.id, badge: await totalUnread(env) });
-  if (st.notifyVia !== 'web') await sendBark(env, st, { title: c.name, body, cid: c.id, group: c.name }).catch((e) => log(env, 'Bark通知: ' + e.message));
+  const body = truncBytes(msgs.map((m) => (m.kind === 'call' ? '📞 不在着信' : m.kind === 'vm' ? '📞 留守番電話が1件' : m.kind === 'voice' ? '🎤 ボイスメッセージ' : m.image && !m.text ? '📷 写真' : m.text)).filter(Boolean).join('\n'), 1800);
+  const silent = msgs.some((m) => m.kind === 'voice') && isQuiet(Date.now(), st); // 静かな時間のボイスメッセージは音なしで（第70版）
+  if (st.notifyVia !== 'bark') await pushPayload(env, { title: c.name, body, charId: c.id, badge: await totalUnread(env), ...(silent ? { silent: true } : {}) });
+  if (st.notifyVia !== 'web') await sendBark(env, st, { title: c.name, body, cid: c.id, group: c.name, silent }).catch((e) => log(env, 'Bark通知: ' + e.message));
 }

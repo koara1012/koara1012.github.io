@@ -107,8 +107,9 @@ await flush();
 ok(msg.meta.nokeep && !msg.meta.log && !msg.meta.sum && (await call('GET', '/ogroup/memory?id=' + g.id)).memory.length === 1, 'group nokeep: no log, no memory');
 ok(!DB.raw.prepare('SELECT 1 FROM kv WHERE k=?').get(`gclog:${g.id}:${msg.id}`), 'group nokeep: no call text saved');
 
-// ---- 裏は寝落ち通話なし
+// ---- 裏も寝落ち通話できる（第70版。前は表だけ）
 const ug = (await call('POST', '/group', { group: { name: '裏', members: [a.id] } })).group;
-try { await call('POST', '/gcall/start', { groupId: ug.id, sleep: true }); ok(false, 'ura sleep refused'); } catch (e) { ok(e.status === 400, 'ura sleep refused'); }
+r = await call('POST', '/gcall/start', { groupId: ug.id, sleep: true, keep: false });
+ok(r.call && r.call.status, 'ura group sleep allowed (第70版)');
 
 console.log(fails ? `${fails} FAILED` : 'ALL PASSED');

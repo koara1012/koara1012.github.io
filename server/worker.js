@@ -42,6 +42,7 @@ export default {
   async fetch(req, env, ctx) {
     if (req.method === 'OPTIONS') return new Response(null, { status: 204, headers: CORS });
     const url = new URL(req.url);
+    env = r2Counted(env); // R2 を使った回数を数える（終わったらまとめて記録）
     try {
       if (!env.DB) throw new HttpError(500, 'D1データベースが「DB」という名前で結び付けられていません');
       if (!env.APP_TOKEN) throw new HttpError(500, 'シークレット APP_TOKEN（合言葉）が設定されていません');
@@ -53,10 +54,12 @@ export default {
       await ensureSchema(env);
       // バックアップから戻しているあいだは、ほかの操作を止める（途中の状態に書き込まないように）
       if (!url.pathname.startsWith('/backup/') && await kvGet(env, 'bk:lock', 0)) throw new HttpError(503, 'バックアップから戻している最中です。終わるまでお待ちください');
-      const body = req.method === 'POST' ? await req.json().catch(() => ({})) : {};
-      return await route(req.method + ' ' + url.pathname, url, body, env, ctx);
+      const body = req.method === 'POST' && url.pathname !== '/assets/put' ? await req.json().catch(() => ({})) : {};
+      return await route(req.method + ' ' + url.pathname, url, body, env, ctx, req);
     } catch (e) {
       return json({ error: e.message || String(e) }, e.status || 500);
+    } finally {
+      if (env.__r2flush) { const f = env.__r2flush(); if (ctx && ctx.waitUntil) ctx.waitUntil(f); else await f; }
     }
   },
 
@@ -65,7 +68,8 @@ export default {
     const minute = Math.floor(Number(event && event.scheduledTime) / 60000);
     if (env.BACKUP) {
       const locked = await kvGet(env, 'bk:lock', 0).catch(() => 0);
-      ctx.waitUntil(backupStep(env, { cron: true }).catch((e) => log(env, 'バックアップ: ' + e.message))); // 月2回の自動バックアップ・戻す作業の続き
+      const be = r2Counted(env);
+      ctx.waitUntil(backupStep(be, { cron: true }).catch((e) => log(env, 'バックアップ: ' + e.message)).finally(() => be.__r2flush())); // 毎日・月2回の自動バックアップ・戻す作業の続き
       if (locked) return; // 戻しているあいだは、返事も話しかけも止める
     }
     ctx.waitUntil(runDueReplies(env).catch((e) => log(env, 'あとで返す返事: ' + e.message))); // 予約した返事は毎分確認（軽い）
@@ -393,7 +397,7 @@ async function totalUnread(env) {
 }
 
 // ---------------------------------------------------------------- ルート
-async function route(key, url, body, env, ctx) {
+async function route(key, url, body, env, ctx, req) {
   switch (key) {
     case 'GET /ping': {
       const subs = await env.DB.prepare('SELECT COUNT(*) AS n FROM subs').first();
@@ -808,9 +812,14 @@ async function route(key, url, body, env, ctx) {
       if ((await kvGet(env, 'bk:job', null)) || (await kvGet(env, 'bk:restore', null))) throw new HttpError(409, 'バックアップか復元の途中です');
       const c = bkCycle(Date.now());
       if (!(await bkLease(env))) throw new HttpError(409, 'バックアップの準備中です。少し待ってからもう一度');
-      try {
-        if (body.force) { const st = await bkStatus(env); if (st.cycles && st.cycles[c.cycle]) delete st.cycles[c.cycle].blocked; await kvSet(env, 'bk:status', st); }
-        await bkStartJob(env, { kind: 'auto', slot: c.slot, cycle: c.cycle, force: !!body.force });
+      try { // 毎日の分は必ず取り直す。1日用／15日用は、その期間の分がまだなら一緒に
+        const st = await bkStatus(env), cy = st.cycles = st.cycles || {};
+        if (body.force) for (const k of [c.dayCycle, c.cycle]) if (cy[k]) delete cy[k].blocked;
+        const half = !(cy[c.cycle] && cy[c.cycle].ok);
+        if (cy[c.dayCycle]) delete cy[c.dayCycle].ok;
+        await kvSet(env, 'bk:status', st);
+        const slots = half ? ['d', c.slot] : ['d'], cycles = half ? [c.dayCycle, c.cycle] : [c.dayCycle];
+        await bkStartJob(env, { kind: 'auto', slot: slots[slots.length - 1], slots, cycles, force: !!body.force });
       } finally { await bkRelease(env); }
       return json(await bkView(env));
     }
@@ -891,8 +900,68 @@ async function route(key, url, body, env, ctx) {
       const slot = url.searchParams.get('slot') || '';
       const sl = BK_SLOT_NAME[slot] && (await bkSlots(env))[slot];
       if (!sl) throw new HttpError(404, 'そのバックアップはまだありません');
-      return bkDownload(env, sl.gen, url.searchParams.get('images') === '1', { a: '1st', b: '15th', pre: 'before-restore' }[slot]);
+      return bkDownload(env, sl.gen, url.searchParams.get('images') === '1', { d: 'daily', a: '1st', b: '15th', pre: 'before-restore' }[slot]);
     }
+    case 'GET /backup/usage': { needR2(env); if (url.searchParams.get('scan') === '1') await r2SizeScan(env, true); return json(await r2Usage(env)); } // R2 の使用量
+
+    // ---- ノベル画面の素材を R2 に預ける・戻す
+    case 'POST /assets/need': { // 送ろうとしている素材のうち、まだ R2 に無いもの（指紋）を返す。あるものは記録だけ足す
+      needR2(env);
+      const items = (Array.isArray(body.items) ? body.items : []).slice(0, 500).map(asItem).filter((x) => x.id && isHash(x.h));
+      const idx = await asIndex(env), known = new Set(Object.values(idx).map((x) => x.h)), need = new Set();
+      let changed = false;
+      for (const it of items) {
+        if (idx[it.id] && idx[it.id].h === it.h) continue;
+        if (!known.has(it.h) && !need.has(it.h)) {
+          if (await env.BACKUP.head(AS_PREFIX + it.h)) known.add(it.h); else { need.add(it.h); continue; }
+        }
+        if (known.has(it.h)) { idx[it.id] = { h: it.h, name: it.name, type: it.type, size: it.size, at: Date.now() }; changed = true; }
+      }
+      if (changed) await asPutIndex(env, idx);
+      return json({ need: [...need] });
+    }
+    case 'POST /assets/put': { // 素材1つ（中身そのもの）。指紋が合わなければ受け取らない
+      needR2(env);
+      const it = asItem({ id: url.searchParams.get('id'), h: url.searchParams.get('h'), name: url.searchParams.get('name'), type: url.searchParams.get('type') });
+      if (!it.id || !isHash(it.h)) throw new HttpError(400, '素材の名前か指紋が正しくありません');
+      const buf = await req.arrayBuffer();
+      if (!buf.byteLength || buf.byteLength > AS_MAX) throw new HttpError(413, '素材が大きすぎるか空です');
+      if (await sha256Hex(buf) !== it.h) throw new HttpError(400, '送られた素材の中身が指紋と合いません（送り直してください）');
+      await env.BACKUP.put(AS_PREFIX + it.h, buf, { sha256: it.h, httpMetadata: { contentType: it.type || 'application/octet-stream' } });
+      const idx = await asIndex(env);
+      idx[it.id] = { h: it.h, name: it.name, type: it.type, size: buf.byteLength, at: Date.now() };
+      await asPutIndex(env, idx);
+      return json({ ok: true });
+    }
+    case 'GET /assets/index': { // 預けた素材の一覧（素材の id → 指紋・名前・大きさ）
+      needR2(env);
+      const idx = await asIndex(env), hs = new Map();
+      for (const x of Object.values(idx)) hs.set(x.h, x.size || 0);
+      return json({ items: idx, files: hs.size, bytes: [...hs.values()].reduce((a, b) => a + b, 0) });
+    }
+    case 'GET /assets/get': { // 素材1つを戻す
+      needR2(env);
+      const h = url.searchParams.get('h');
+      if (!isHash(h)) throw new HttpError(400, '指紋が正しくありません');
+      const o = await env.BACKUP.get(AS_PREFIX + h);
+      if (!o) throw new HttpError(404, 'その素材は R2 にありません');
+      const buf = await o.arrayBuffer();
+      if (await sha256Hex(buf) !== h) throw new HttpError(500, 'R2 の素材が壊れています');
+      return new Response(buf, { headers: { ...CORS, 'Content-Type': 'application/octet-stream' } });
+    }
+
+    // ---- この iPhone だけの設定を預かる（kv なので自動バックアップに入る）。戻すのはボタンを押したときだけ
+    case 'POST /device/prefs': {
+      const p = body.prefs;
+      if (!p || typeof p !== 'object' || Array.isArray(p)) throw new HttpError(400, '設定の形が違います');
+      const keep = {};
+      for (const [k, v] of Object.entries(p)) if (PREF_KEY_OK(k)) keep[k] = v;
+      const txt = JSON.stringify({ at: Date.now(), prefs: keep });
+      if (txt.length > 50000) throw new HttpError(413, '設定が大きすぎます');
+      await kvSet(env, body.lab ? 'dev:prefs:lab' : 'dev:prefs', JSON.parse(txt));
+      return json({ ok: true, at: Date.now(), n: Object.keys(keep).length });
+    }
+    case 'GET /device/prefs': return json(await kvGet(env, url.searchParams.get('lab') === '1' ? 'dev:prefs:lab' : 'dev:prefs', { at: 0, prefs: null }));
 
     case 'POST /img/replace': { // キャラの写真（PNG）を、アプリで作ったJPEGに差し替えて軽くする
       if (await kvGet(env, 'bk:job', null)) return json({ skip: 'busy' }); // バックアップ中は後回し
@@ -3011,13 +3080,23 @@ const fileResponse = (body, name) => new Response(body, { headers: { ...CORS, 'C
 // 置き方：talk/slots.json（1日用 a・15日用 b・戻す前 pre がそれぞれどれを指すか）と talk/gens/<世代>/p00000.json …（中身を小分けにしたもの）・manifest.json
 // 新しい世代を全部書いて確かめ終わってから slots.json を書き換え、古い世代を消す（途中で失敗しても、前のバックアップは残る）
 const BK_PREFIX = 'talk/';
-const BK_SLOT_NAME = { a: '1日用', b: '15日用', pre: '戻す前の状態' };
+const BK_SLOT_NAME = { d: '毎日の分', a: '1日用', b: '15日用', pre: '戻す前の状態' };
 const BK_ROWS = (t) => (t === 'images' ? 2 : 500); // 1回の処理を軽く（無料プランの計算時間の上限に余裕を持たせる）
 const hexOf = (buf) => [...new Uint8Array(buf)].map((b) => b.toString(16).padStart(2, '0')).join('');
 const sha256Hex = async (bytes) => hexOf(await crypto.subtle.digest('SHA-256', bytes));
-function bkCycle(now) { // 今が「1日用」「15日用」のどちらの期間か
-  const d = new Date(now + 9 * 3600e3), day = d.getUTCDate(), slot = day >= 15 ? 'b' : 'a';
-  return { cycle: d.toISOString().slice(0, 7) + '-' + slot, slot, day, hour: d.getUTCHours() };
+function bkCycle(now) { // 毎日の分（朝4時で日付が変わる）と、今が「1日用」「15日用」のどちらの期間か
+  const hour = new Date(now + 9 * 3600e3).getUTCHours();
+  const d = new Date(now + 5 * 3600e3), day = d.getUTCDate(), slot = day >= 15 ? 'b' : 'a'; // 4時より前は前の日の分
+  return { cycle: d.toISOString().slice(0, 7) + '-' + slot, slot, day, hour, dayCycle: d.toISOString().slice(0, 10) + '-d' };
+}
+// 次に取る自動バックアップ：毎日の分＋（その期間の分がまだなら）1日用／15日用も同じ中身で
+function bkDue(st, c, force = false) {
+  const cy = st.cycles || {}, open = (k) => { const x = cy[k] || {}; return !x.ok && (force || (!x.blocked && (x.attempts || 0) < 3)); };
+  const slots = [], cycles = [];
+  if (open(c.dayCycle)) { slots.push('d'); cycles.push(c.dayCycle); }
+  if (open(c.cycle)) { slots.push(c.slot); cycles.push(c.cycle); }
+  const tries = cycles.map((k) => cy[k] || {}), lastTry = Math.max(0, ...tries.map((x) => x.lastTry || 0)), attempts = Math.max(0, ...tries.map((x) => x.attempts || 0));
+  return { slots, cycles, attempts, lastTry };
 }
 async function bkSlots(env) {
   const o = await env.BACKUP.get(BK_PREFIX + 'slots.json');
@@ -3057,13 +3136,13 @@ async function bkLease(env, ms = 55e3) { // cronとアプリが同時に進め�
 }
 const bkRelease = (env) => env.DB.prepare("DELETE FROM kv WHERE k='bk:lease'").run();
 
-async function bkStartJob(env, { kind, slot, force = false, cycle = '', keepGen = '' }) {
+async function bkStartJob(env, { kind, slot, slots = [slot], force = false, cycle = '', cycles = cycle ? [cycle] : [], keepGen = '' }) {
   // 始めた時点の各表の最後の行までを書き出す（書き出し中に増えた分は次回）
   const mx = await env.DB.prepare(`SELECT ${BK_TABLES.map((t) => `(SELECT COALESCE(MAX(rowid),0) FROM ${t}) AS ${t}`).join(',')}`).first();
   const ct = await env.DB.prepare(`SELECT ${BK_TABLES.map((t) => `(SELECT COUNT(*) FROM ${t} WHERE rowid<=?${tblWhere(t)}) AS ${t}`).join(',')}`).bind(...BK_TABLES.map((t) => mx[t])).first();
   const job = {
     gen: new Date(Date.now() + 9 * 3600e3).toISOString().replace(/\D/g, '').slice(0, 14) + '-' + randomAlnum(6),
-    kind, slot, force: !!force, cycle, keepGen, started: Date.now(), phase: 'export', ti: 0, last: -1, seq: 0,
+    kind, slot, slots, force: !!force, cycle, cycles, keepGen, started: Date.now(), phase: 'export', ti: 0, last: -1, seq: 0,
     max: { ...mx }, expect: { ...ct }, counts: {}, parts: [], bytes: 0,
   };
   await kvSet(env, 'bk:job', job);
@@ -3124,12 +3203,15 @@ async function bkFinishJob(env, job, ok, info) {
   const st = await bkStatus(env);
   st.cycles = st.cycles || {};
   st.last = { at: Date.now(), ok, kind: job.kind, slot: job.slot, ...info };
-  if (job.kind === 'auto' && job.cycle) {
-    const c = st.cycles[job.cycle] || {};
-    if (ok) st.cycles[job.cycle] = { ok: true, at: Date.now() };
-    else st.cycles[job.cycle] = { ...c, attempts: (c.attempts || 0) + 1, lastTry: Date.now(), blocked: !!info.blocked };
-    const keys = Object.keys(st.cycles).sort();
-    for (const k of keys.slice(0, -6)) delete st.cycles[k];
+  const cycles = job.cycles || (job.cycle ? [job.cycle] : []);
+  if (job.kind === 'auto') for (const k of cycles) {
+    const c = st.cycles[k] || {};
+    if (ok) st.cycles[k] = { ok: true, at: Date.now() };
+    else st.cycles[k] = { ...c, attempts: (c.attempts || 0) + 1, lastTry: Date.now(), blocked: !!info.blocked };
+  }
+  for (const pre of ['-d', '']) { // 毎日の分は7日、1日用・15日用は6期間ぶん覚えておく
+    const keys = Object.keys(st.cycles).filter((k) => (pre ? k.endsWith(pre) : !k.endsWith('-d'))).sort();
+    for (const k of keys.slice(0, pre ? -7 : -6)) delete st.cycles[k];
   }
   await kvSet(env, 'bk:status', st);
   await env.DB.prepare("DELETE FROM kv WHERE k='bk:job'").run();
@@ -3152,7 +3234,7 @@ async function bkCheckAndCommit(env, job) {
   const slots = await bkSlots(env);
   let drops = [];
   if (job.kind === 'auto') {
-    const prev = ['a', 'b'].map((s) => slots[s]).filter(Boolean).sort((x, y) => y.at - x.at)[0];
+    const prev = ['d', 'a', 'b'].map((s) => slots[s]).filter(Boolean).sort((x, y) => y.at - x.at)[0];
     drops = bkDrops(prev, cur);
     if (drops.length && prev && (await kvGet(env, 'bk:userdel', 0)) > prev.at) { // ご自身で消した分なら、知らせるだけにする
       integ.warnings.push(...drops.map((d) => d + '（消した分）')); drops = [];
@@ -3166,10 +3248,10 @@ async function bkCheckAndCommit(env, job) {
   const at = Date.now();
   const info = { gen: job.gen, at, kind: job.kind, counts: job.counts, photos: integ.photos, bytes: job.bytes, parts: job.parts.length, warnings: [...integ.problems, ...drops, ...integ.warnings], quick: integ.quick, images: true };
   await bkPutVerified(env, `${BK_PREFIX}gens/${job.gen}/manifest.json`, JSON.stringify({ app: 'トーク', version: VERSION, ...info, parts: job.parts }));
-  const old = slots[job.slot];
-  slots[job.slot] = info;
+  // 新しいものを書いて確かめ終えてから、置き場所の表を差し替える → そのあとで、どこからも使われなくなった古いものだけ消す
+  const olds = (job.slots || [job.slot]).map((s) => { const o = slots[s]; slots[s] = info; return o; });
   await env.BACKUP.put(BK_PREFIX + 'slots.json', JSON.stringify(slots));
-  if (old && old.gen !== job.gen && old.gen !== job.keepGen && !Object.values(slots).some((s) => s && s.gen === old.gen)) await bkDeleteGen(env, old.gen);
+  for (const old of olds) if (old && old.gen !== job.gen && old.gen !== job.keepGen && !Object.values(slots).some((s) => s && s.gen === old.gen)) await bkDeleteGen(env, old.gen);
   await bkFinishJob(env, job, true, { counts: job.counts, photos: integ.photos, bytes: job.bytes, warnings: info.warnings, forced: job.force });
   return true;
 }
@@ -3182,11 +3264,11 @@ async function backupStep(env, { cron = false, budgetMs = 20e3, maxParts = cron 
   let rs = await kvGet(env, 'bk:restore', null);
   if (!job && !rs) {
     if (!cron) return { idle: true };
-    const c = bkCycle(Date.now()), st = await bkStatus(env), cy = (st.cycles || {})[c.cycle] || {};
-    const due = !cy.ok && !cy.blocked && (cy.attempts || 0) < 3 && (cy.attempts ? Date.now() - cy.lastTry >= 6 * 3600e3 : !(c.day === 1 || c.day === 15) || c.hour >= 4);
-    if (!due) return { idle: true };
+    const c = bkCycle(Date.now()), st = await bkStatus(env), due = bkDue(st, c);
+    const go = due.slots.length && (due.attempts ? Date.now() - due.lastTry >= 6 * 3600e3 : c.hour >= 4); // 初めは朝4時を過ぎてから・失敗したら6時間あけて（3回まで）
+    if (!go) { await r2SizeScan(env).catch(() => {}); return { idle: true }; }
     if (!(await bkLease(env))) return { busy: true };
-    try { job = await bkStartJob(env, { kind: 'auto', slot: c.slot, cycle: c.cycle }); } finally { await bkRelease(env); }
+    try { job = await bkStartJob(env, { kind: 'auto', slot: due.slots[due.slots.length - 1], slots: due.slots, cycles: due.cycles }); } finally { await bkRelease(env); }
     return { started: true };
   }
   if (!(await bkLease(env))) return { busy: true };
@@ -3338,6 +3420,7 @@ async function bkDownload(env, gen, withImages, label) {
       await put(`},"counts":${JSON.stringify(counts)}}`);
       await w.close();
     } catch (e) { await w.abort(e).catch(() => {}); }
+    if (env.__r2flush) await env.__r2flush();
   })();
   return fileResponse(readable, `talk-backup-${label}-${jstDate(m.at)}${withImages ? '-photos' : ''}.json`);
 }
@@ -3348,14 +3431,107 @@ async function bkView(env) { // 設定画面用
   const slots = await bkSlots(env);
   for (const k of Object.keys(BK_SLOT_NAME)) if (slots[k]) { const { gen, ...rest } = slots[k]; out.slots[k] = { ...rest, name: BK_SLOT_NAME[k] }; }
   const job = await kvGet(env, 'bk:job', null);
-  if (job) out.job = { kind: job.kind, slot: job.slot, phase: job.phase, table: job.ti, tables: BK_TABLES.length, parts: job.parts.length, bytes: job.bytes, started: job.started };
+  if (job) out.job = { kind: job.kind, slot: job.slot, slots: job.slots || [job.slot], phase: job.phase, table: job.ti, tables: BK_TABLES.length, parts: job.parts.length, bytes: job.bytes, started: job.started };
   const rs = await kvGet(env, 'bk:restore', null);
   if (rs) out.restore = { phase: rs.phase, label: rs.label, done: rs.phase === 'verify' ? rs.vi || 0 : rs.pi || 0, parts: rs.parts.length, started: rs.started };
-  const c = bkCycle(Date.now()), cy = (st.cycles || {})[c.cycle] || {};
-  out.cycle = { slot: c.slot, name: BK_SLOT_NAME[c.slot], ok: !!cy.ok, blocked: !!cy.blocked, attempts: cy.attempts || 0 };
+  const c = bkCycle(Date.now()), cyc = st.cycles || {}, due = bkDue(st, c, true);
+  const ks = [c.dayCycle, c.cycle].filter((k) => due.cycles.includes(k)), sl = due.slots.length ? due.slots : ['d'];
+  out.cycle = { slot: sl[sl.length - 1], slots: sl, name: sl.map((s) => BK_SLOT_NAME[s]).join('と'), ok: !due.slots.length, blocked: ks.some((k) => cyc[k] && cyc[k].blocked), attempts: Math.max(0, ...ks.map((k) => (cyc[k] && cyc[k].attempts) || 0)) };
+  out.usage = await r2Usage(env);
   return out;
 }
 function needR2(env) { if (!env.BACKUP) throw new HttpError(400, '自動バックアップの置き場所（R2）がまだつながっていません'); }
+
+// ---- R2 の使用量（このアプリが使った回数を数える。無料枠：保存10GB・書き込み（Class A）月100万回・読み込み（Class B）月1000万回）
+const R2_FREE = { bytes: 10e9, a: 1e6, b: 10e6 };
+const R2_DAY_SPIKE = { a: 30000, b: 300000 }; // 1日でこれを超えたら「急に増えた」（このペースが続くと月の枠の9割ほど）
+function r2Counted(env) { // env.BACKUP の呼び出しを数える（put/list＝書き込み、get/head＝読み込み、delete は無料）
+  if (!env.BACKUP || env.BACKUP.__counted) return env;
+  const raw = env.BACKUP, c = { a: 0, b: 0, fa: 0, fb: 0 };
+  const B = {
+    __counted: true,
+    put: (...x) => { c.a++; return raw.put(...x); },
+    list: (...x) => { c.a++; return raw.list(...x); },
+    get: (...x) => { c.b++; return raw.get(...x); },
+    head: (...x) => { c.b++; return raw.head ? raw.head(...x) : raw.get(...x); },
+    delete: (...x) => raw.delete(...x),
+  };
+  const e = Object.assign(Object.create(null), env, { BACKUP: B });
+  e.__r2flush = async () => { // 前に書いた分からの差だけ足す（何度呼んでもよい）
+    const a = c.a - c.fa, b = c.b - c.fb;
+    if (!a && !b) return;
+    c.fa = c.a; c.fb = c.b;
+    await r2Add(env, a, b).catch(() => {});
+  };
+  return e;
+}
+const r2Month = (t) => new Date(t).toISOString().slice(0, 7); // 無料枠は月ごと（UTC）
+async function r2Add(env, a, b) {
+  const now = Date.now(), month = r2Month(now), day = new Date(now).toISOString().slice(8, 10);
+  let u = await kvGet(env, 'bk:r2use', null);
+  if (!u || u.month !== month) u = { month, a: 0, b: 0, days: {}, warned: {}, size: u && u.size };
+  u.a += a; u.b += b;
+  const d = u.days[day] = u.days[day] || { a: 0, b: 0 };
+  d.a += a; d.b += b;
+  const msgs = [];
+  for (const [k, label] of [['a', '書き込み'], ['b', '読み込み']]) {
+    for (const pct of [80, 50]) if (u[k] >= R2_FREE[k] * pct / 100) {
+      if (!u.warned[k + pct]) { u.warned[k + pct] = 1; if (pct === 80) u.warned[k + 50] = 1; msgs.push(`R2の${label}が今月の無料枠の${pct}%を超えました（${u[k].toLocaleString()}回／${R2_FREE[k].toLocaleString()}回）`); }
+      break;
+    }
+    if (d[k] >= R2_DAY_SPIKE[k] && !u.warned[k + 'day' + day]) { u.warned[k + 'day' + day] = 1; msgs.push(`R2の${label}が今日だけで急に増えています（${d[k].toLocaleString()}回）`); }
+  }
+  await kvSet(env, 'bk:r2use', u);
+  for (const m of msgs) await bkNotify(env, m + '。設定のバックアップ欄で使用量を確かめてください。', 'トーク（R2の使用量）').catch(() => {});
+}
+async function r2SizeScan(env, force = false) { // 保存している量を1日1回数える（一覧を取るのも書き込み1回に数えられる）
+  if (!env.BACKUP) return null;
+  let u = await kvGet(env, 'bk:r2use', null);
+  if (!force && u && u.size && Date.now() - u.size.at < 864e5) return u.size;
+  let bytes = 0, objects = 0, cursor;
+  do {
+    const l = await env.BACKUP.list({ cursor, limit: 1000 });
+    for (const o of l.objects) { bytes += o.size || 0; objects++; }
+    cursor = l.truncated ? l.cursor : null;
+  } while (cursor);
+  if (env.__r2flush) await env.__r2flush();
+  u = await kvGet(env, 'bk:r2use', null) || { month: r2Month(Date.now()), a: 0, b: 0, days: {}, warned: {} };
+  if (u.month !== r2Month(Date.now())) u = { month: r2Month(Date.now()), a: 0, b: 0, days: {}, warned: {} };
+  u.size = { at: Date.now(), bytes, objects };
+  let msg = '';
+  for (const pct of [80, 50]) if (bytes >= R2_FREE.bytes * pct / 100) {
+    if (!u.warned['s' + pct]) { u.warned['s' + pct] = 1; if (pct === 80) u.warned.s50 = 1; msg = `R2に保存している量が無料枠の${pct}%を超えました（${(bytes / 1e9).toFixed(2)}GB／10GB）`; }
+    break;
+  }
+  await kvSet(env, 'bk:r2use', u);
+  if (msg) await bkNotify(env, msg + '。古い素材やバックアップを見直してください。', 'トーク（R2の使用量）').catch(() => {});
+  return u.size;
+}
+async function r2Usage(env) { // 設定画面用
+  if (!env.BACKUP) return null;
+  if (env.__r2flush) await env.__r2flush();
+  const u = await kvGet(env, 'bk:r2use', null), m = r2Month(Date.now());
+  const cur = u && u.month === m ? u : { a: 0, b: 0, days: {} };
+  const today = cur.days && cur.days[new Date().toISOString().slice(8, 10)] || { a: 0, b: 0 };
+  return { month: m, a: cur.a, b: cur.b, today, size: (u && u.size) || null, free: R2_FREE };
+}
+
+// ---- ノベル画面の素材（立ち絵・背景・表情パーツ・フォント・タップ音など）を R2 に預ける
+// 中身の指紋（sha256）を名前にして1回だけ置く（同じものは二度送らない・消さない）。どの素材がどの指紋かは assets/index.json に。
+const AS_PREFIX = 'assets/';
+const AS_MAX = 60e6;
+const isHash = (h) => /^[0-9a-f]{64}$/.test(String(h || ''));
+async function asIndex(env) {
+  const o = await env.BACKUP.get(AS_PREFIX + 'index.json');
+  if (!o) return {};
+  try { return JSON.parse(await o.text()) || {}; } catch (_) { return {}; }
+}
+const asPutIndex = (env, idx) => env.BACKUP.put(AS_PREFIX + 'index.json', JSON.stringify(idx), { httpMetadata: { contentType: 'application/json' } });
+const asItem = (x) => ({ id: String(x.id || '').slice(0, 64), h: String(x.h || ''), name: String(x.name || '').slice(0, 200), type: String(x.type || '').slice(0, 100), size: Math.max(0, num(x.size, 0)) });
+
+// ---- この iPhone だけの設定（電話の音・キャラごとの音量など）。合言葉・サーバーURLは受け取らない
+const PREF_KEY_OK = (k) => /^[a-z][\w.]{0,60}$/i.test(k) && !/cfg|token|key|pass|secret/i.test(k);
+
 const noteUserDelete = (env) => kvSet(env, 'bk:userdel', Date.now()).catch(() => {}); // ご自身で消した（急に減っても異常としない）
 
 // ================================================================ タイムライン（表／裏）

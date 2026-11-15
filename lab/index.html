@@ -1106,7 +1106,7 @@ body.ura #list.tlMode{background:#efe9f0}
 // 置き場所で切り替える：/lab/（試作）と /chat/（本番）で同じファイルを使う
 // 試作は本番と同じサイトなので、保存の名前に「lab.」を付けて本番の chat.* には書き込まない。通知も登録しない
 const IS_LAB = /\/lab\//.test(location.pathname);
-const APP_VERSION = '第70版（2026-11-14 22:20:00 更新・ボイスメッセージ・モーニングコール・裏の電話と寝落ち通話）' + (IS_LAB ? '【試作】' : '');
+const APP_VERSION = '第71版（2026-11-15 12:55:00 更新・モーニングコールの約束を、時刻をあとから言っても取りこぼさない）' + (IS_LAB ? '【試作】' : '');
 if (IS_LAB) { document.title = '【試作】トーク（統合）'; const mt = document.querySelector('meta[name=apple-mobile-web-app-title]'); if (mt) mt.content = 'トーク試作'; }
 const $ = (id) => document.getElementById(id);
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));

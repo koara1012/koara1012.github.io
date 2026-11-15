@@ -14,7 +14,7 @@
 //    ・Cron トリガー  * * * * *  （毎分。実際に動くのは13分おき）
 // =====================================================================
 
-const VERSION = '第70版（2026-11-14 22:20:00 更新・ボイスメッセージ・モーニングコール・裏の電話と寝落ち通話）';
+const VERSION = '第71版（2026-11-15 12:55:00 更新・モーニングコールの約束を、時刻をあとから言っても取りこぼさない）';
 const DEFAULT_MODEL = 'gemini-flash-latest';
 const DEFAULT_GROK_MODEL = 'grok-4.7';                 // X（Twitter）の Grok と同じ最新世代
 const FALLBACK_GROK_MODEL = 'grok-4-fast-non-reasoning'; // 上が使えないときの予備
@@ -2212,7 +2212,7 @@ async function generateAndStore(env, c, d, hist, lastRead, world = 'omote') {
       // 会う約束：ユーザーが話した直後の返事で、約束が決まった・変わった・取り消されたかも答えてもらう（使うとき・モードがオンのときだけ）
       meet: meetOn(st, c) && !special && d.mode !== 'call' && hist.length && hist[hist.length - 1].sender === 'me' ? { cur: await kvGet(env, 'appt:' + c.id, null) } : null,
       voice: vmsgOpt(c, d, hist), // ボイスメッセージ（第70版）
-      wake: phoneChar(c) && d.mode === 'reply' && hist.length && hist[hist.length - 1].sender === 'me' && WAKE_RE.test(hist[hist.length - 1].text || ''), // モーニングコールを頼まれたかも（第70版）
+      wake: phoneChar(c) && d.mode === 'reply' && hist.length && hist[hist.length - 1].sender === 'me' && wakeTalk(hist.slice(-WAKE_TURNS).map((m) => m.text)), // モーニングコールの話が最近出ていれば時刻を聞く（第71版：あとから時刻を言っても取りこぼさない）
     };
     const wb = await worldBlock(env, c.prompt + '\n' + hist.slice(-20).map((m) => m.text).join('\n'));
     const system = wb + buildSystem(c, special ? { ...d } : d, hist, now, tlInfo, lifeInfo);
@@ -2866,7 +2866,7 @@ ${cl.transcript.length ? '' : cl.dir === 'in' ? '\n# 今回\nユーザーが電�
 async function callReply(env, cl, c, check = '') {
   if (cl.ura) return uraCallReply(env, cl, c, check);
   const lastMe = [...cl.transcript].reverse().find((m) => m.who === 'me');
-  const wake = !check && !cl.morning && phoneChar(c) && lastMe && cl.transcript[cl.transcript.length - 1] === lastMe && WAKE_RE.test(lastMe.text); // モーニングコールを頼まれたかも（第70版）
+  const wake = !check && !cl.morning && phoneChar(c) && lastMe && cl.transcript[cl.transcript.length - 1] === lastMe && wakeTalk(cl.transcript.slice(-WAKE_TURNS).map((m) => m.text)); // モーニングコールの話が最近出ていれば時刻を聞く（第71版）（第70版）
   const st = await getSettings(env), now = Date.now();
   const state = await getState(env, c.id);
   const lifeInfo = await lifeContext(env, c, st, now).catch(() => '');
@@ -2924,23 +2924,37 @@ function sleepRules(cl, check, group) {
 // 起こしている途中（kv mc:run）＝最初の1回＋4分おきにかけ直し3回（計4回）。出たら終わり。最後まで出なければ留守電かボイスメッセージ（性格で）。
 // keep:false（寝落ち通話で［引き継がない］を選んだ夜の約束・設定で選んだとき）＝キャラは約束も朝の通話も不在・留守電も知らない（記録に nokeep。あなたの画面には残る）
 const MC_TRIES = 4, MC_GAP = 4 * 60e3, MC_WARM = 60e3, MC_LATE = 30 * 60e3;
-const WAKE_RE = /起こして|起こしに|起こせ|モーニングコール|モーコ|目覚まし|朝.{0,10}(電話|コール|鳴らして)|(電話|コール).{0,10}朝|起きられる?ように|起きれる?ように/;
-const WAKE_RULE = `\n# モーニングコールの約束\n- ユーザーが、決まった時刻にあなたから電話をかけて起こしてほしい（モーニングコール）と頼んできたら、wake にその時刻を "HH:MM"（24時間・日本時間）で書く。時刻があいまいなら言葉で確かめ、決まるまでは ""。前に引き受けた約束をやめてほしいと言われたら "cancel"。関係ないときは ""。\n- 引き受けるのが基本（キャラの性格に合わせた言い方で、引き受けたことと時刻を言葉でも伝える）。\n`;
+const WAKE_RE = /起こして|起こしに|起こせ|おこして|おこしに|おこせ|モーニングコール|もーにんぐこーる|モーコ|目覚まし|めざまし|朝.{0,10}(電話|でんわ|コール|鳴らして)|(電話|でんわ|コール).{0,10}朝|起きられる?ように|起きれる?ように|おきられる?ように|おきれる?ように/;
+const WAKE_TURNS = 6; // 「起こして」の話が出てから、何回分のやり取りのあいだ時刻を聞き続けるか（キャラの聞き返し・あなたの答えを含む）
+const wakeNorm = (t) => String(t || '').replace(/[\s　]+/g, '').replace(/[０-９]/g, (d) => String.fromCharCode(d.charCodeAt(0) - 0xfee0)); // 音声認識の空白・全角数字
+const wakeTalk = (texts) => texts.some((t) => WAKE_RE.test(wakeNorm(t)));
+const WAKE_RULE = `\n# モーニングコールの約束\n- ユーザーが、決まった時刻にあなたから電話をかけて起こしてほしい（モーニングコール）と頼んできたら、wake にその時刻を "HH:MM"（24時間・日本時間）で書く。「3時間後」「30分後」のように今からの時間で言われたら "+分数"（例：3時間後なら "+180"）。\n- 少し前のやり取りで頼まれて、時刻がこの返事で決まった（例：あなたが「何時に起こしますか？」と聞いて、ユーザーが「6時で」と答えた）ときも、ここで wake に書く。時刻があいまいなら言葉で確かめ、決まるまでは ""。前に引き受けた約束をやめてほしいと言われたら "cancel"。関係ないとき・もう書いたときは ""。\n- 引き受けるのが基本（キャラの性格に合わせた言い方で、引き受けたことと時刻を言葉でも伝える）。\n`;
 const CALL_WAKE_SCHEMA = { type: 'object', properties: { messages: { type: 'array', items: { type: 'string' } }, hangup: { type: 'boolean' }, wake: { type: 'string' } }, required: ['messages', 'hangup', 'wake'], additionalProperties: false };
 const mcDay = (t) => jstDay(t); // 同じ朝かどうか（日本時間の日付）
-function mcNextAt(hhmm, now) { // "HH:MM" → これから来るいちばん近いその時刻（5分以内なら次の日）
-  const m = /^(\d{1,2}):(\d{2})$/.exec(String(hhmm || '').trim()); if (!m || +m[1] > 23 || +m[2] > 59) return 0;
-  let t = jstDayStart(jstDay(now)) + (+m[1] * 60 + +m[2]) * MIN;
+function mcNextAt(hhmm, now) { // "HH:MM"・"6時"・"6時半"・"6時30分"・"+180"（今から180分後） → その時刻（"HH:MM" は、これから来るいちばん近いその時刻。5分以内なら次の日）
+  const v = wakeNorm(hhmm).replace(/：/g, ':');
+  const rel = /^\+(\d{1,4})(分)?$/.exec(v);
+  if (rel) { const n = +rel[1]; return n >= 1 && n <= 24 * 60 ? now + n * MIN : 0; } // 今からの時間（第71版）
+  const m = /^(?:(午前|午後|朝|昼|夜|夕方)?)(\d{1,2})(?::(\d{2})|時(?:(半)|(\d{1,2})分)?)?$/.exec(v);
+  if (!m) return 0;
+  let h = +m[2]; const mi = m[4] ? 30 : +(m[3] || m[5] || 0);
+  if ((m[1] === '午後' || m[1] === '夕方' || m[1] === '夜') && h < 12) h += 12;
+  if (h > 23 || mi > 59 || (!m[3] && !/時/.test(v) && !m[1])) return 0; // ただの数字は受け取らない
+  let t = jstDayStart(jstDay(now)) + (h * 60 + mi) * MIN;
   while (t < now + 5 * MIN) t += 864e5;
   return t;
 }
-async function mcFromAI(env, c, v, { keep, src }) { // AI の wake を約束にする
+async function mcFromAI(env, c, v, { keep, src }) { // AI の wake を約束にする（約束は1つだけ。新しい約束が前のを上書き）
   v = String(v || '').trim();
   if (!v) return null;
-  if (v === 'cancel') { const p = await kvGet(env, 'mc:promise', null); if (p && p.charId === c.id) { await kvDel(env, 'mc:promise'); return { cancel: true, charId: c.id }; } return null; }
-  const at = mcNextAt(v, Date.now()); if (!at) return null;
+  const old = await kvGet(env, 'mc:promise', null);
+  if (v === 'cancel') { if (old && old.charId === c.id) { await kvDel(env, 'mc:promise'); await log(env, `モーニングコールの約束を取りやめ（${c.name}・${fmtTime(old.at)}）`); return { cancel: true, charId: c.id }; } return null; }
+  const at = mcNextAt(v, Date.now());
+  if (!at) { await log(env, `モーニングコールの約束：時刻が読めませんでした（${c.name}・「${v.slice(0, 20)}」）`); return null; }
+  if (old && old.charId === c.id && old.at === at && old.keep === !!keep) return null; // 同じ約束をもう一度書いただけ
   const p = { at, charId: c.id, keep: !!keep, src, made: Date.now() };
   await kvSet(env, 'mc:promise', p);
+  await log(env, `モーニングコールの約束：${c.name}・${fmtTime(at)}（${{ talk: 'トーク', call: '通話', sleep: '寝落ち通話' }[src] || src}${keep ? '' : '・記憶に残さない'}）${old ? `。前の約束（${old.charId === c.id ? '' : '別の子・'}${fmtTime(old.at)}）は上書き` : ''}`);
   return p;
 }
 function morningRules(cl, now) {
@@ -5909,7 +5923,7 @@ ${opt.quote.map((m, i) => `  ${i}：「${trunc(m.text, 60)}」`).join('\n')}`;
   ボイスメッセージにする吹き出しは、声に出して話す言葉だけ（描写・絵文字・顔文字・記号は入れない）。長さはふだん1〜3文の短め。気持ちが高まった大事な場面だけ長めでもよい（最長で声で3分＝800字くらいまで）。
   キャラクターに合うなら、たまに「声が聞きたい」「ボイスメッセージ送って」とユーザーにねだってもよい（しつこくしない）。`;
   }
-  if (opt.wake) { props.wake = { type: 'string' }; extra += '\n- wake：ユーザーが、決まった時刻にあなたから電話をかけて起こしてほしい（モーニングコール）と頼んできて、引き受けたなら、その時刻 "HH:MM"（24時間・日本時間）。時刻があいまいなら messages で確かめ、決まるまでは ""。前に引き受けた約束をやめてほしいと言われたら "cancel"。関係ないときは ""。引き受けるのが基本（性格に合った言い方で、引き受けたことと時刻を messages でも伝える）。'; }
+  if (opt.wake) { props.wake = { type: 'string' }; extra += '\n- wake：ユーザーが、決まった時刻にあなたから電話をかけて起こしてほしい（モーニングコール）と頼んできて、引き受けたなら、その時刻 "HH:MM"（24時間・日本時間）。「3時間後」のように今からの時間で言われたら "+分数"（例 "+180"）。少し前に頼まれて、時刻がこの返事で決まった（あなたが「何時？」と聞いてユーザーが答えた）ときもここで書く。時刻があいまいなら messages で確かめ、決まるまでは ""。前に引き受けた約束をやめてほしいと言われたら "cancel"。関係ないとき・もう書いたときは ""。引き受けるのが基本（性格に合った言い方で、引き受けたことと時刻を messages でも伝える）。'; }
   if (opt.typo) extra += '\n- 今回は、吹き出しのどれか1か所で、スマホらしい自然な打ち間違い（変換ミスなど）をして、次の吹き出しで「＊正しい言葉」と短く訂正する。キャラクターに合わなければしなくてよい。';
   if (opt.react) {
     props.stamp = { type: 'string' };

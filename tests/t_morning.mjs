@@ -48,13 +48,41 @@ let p = kv('mc:promise');
 ok(p && p.charId === a.id && p.at === jst(2026, 12, 2, 7) && p.keep && p.src === 'talk', 'talk promise → tomorrow 7:00, keep');
 await call('POST', '/send', { charId: a.id, text: 'おやすみ' }); ai.length = 0; A.wake = '';
 await call('POST', '/reply', { charId: a.id });
-ok(!ai.some((x) => x.sch.includes('"wake"')), 'unrelated message → no wake option');
+ok(kv('mc:promise').at === jst(2026, 12, 2, 7), 'next message with empty wake keeps the promise');
+for (let i = 0; i < 4; i++) { await call('POST', '/send', { charId: a.id, text: '雑談' + i }); await call('POST', '/reply', { charId: a.id }); }
+ai.length = 0; await call('POST', '/send', { charId: a.id, text: 'ねえ' }); await call('POST', '/reply', { charId: a.id });
+ok(!ai.some((x) => x.sch.includes('"wake"')), 'long after the wake talk → no wake option');
+// 第71版：時刻をあとから言っても取りこぼさない（トーク）
+await call('POST', '/send', { charId: a.id, text: '明日モーニングコールお願いできる？' });
+A.wake = ''; await call('POST', '/reply', { charId: a.id });
+await call('POST', '/send', { charId: a.id, text: '7時半で' });
+A.wake = '7時半'; ai.length = 0; await call('POST', '/reply', { charId: a.id });
+ok(ai.some((x) => x.sch.includes('"wake"') && x.sys.includes('時刻がこの返事で決まった')) && kv('mc:promise').at === jst(2026, 12, 2, 7, 30), 'talk: time given in the next message → promise (7時半)');
+A.wake = '';
 // ---- 約束：ふつうの通話（上書き）
 let r = await call('POST', '/call/start', { charId: m.id }); await call('POST', '/call/connect', { id: r.call.id });
 A.wake = '06:30';
 let s = await call('POST', '/call/say', { id: r.call.id, text: '明日6時半に起こしてくれる？' });
 p = kv('mc:promise');
 ok(s.promise && p.charId === m.id && p.at === jst(2026, 12, 2, 6, 30) && p.keep && p.src === 'call', 'call promise → 6:30, replaces');
+A.wake = '';
+await call('POST', '/call/end', { id: r.call.id });
+// 第71版：通話で「お願い」→「何時？」→「6時で」
+r = await call('POST', '/call/start', { charId: m.id }); await call('POST', '/call/connect', { id: r.call.id });
+A.wake = ''; await call('POST', '/call/say', { id: r.call.id, text: 'あした もーにんぐ こーる おねがい できるかな' }); // 音声認識のひらがな・空白
+ok(ai.some((x) => x.sch.includes('"wake"')), 'call: hiragana with spaces → wake asked');
+A.wake = '06:00'; ai.length = 0;
+s = await call('POST', '/call/say', { id: r.call.id, text: '6時で' });
+ok(ai.some((x) => x.sch.includes('"wake"')) && s.promise && kv('mc:promise').at === jst(2026, 12, 2, 6) && kv('mc:promise').charId === m.id, 'call: time said later → promise');
+s = await call('POST', '/call/say', { id: r.call.id, text: 'ありがとう' });
+ok(!s.promise, 'same promise written again → no second notice');
+A.wake = '+180'; s = await call('POST', '/call/say', { id: r.call.id, text: 'やっぱり3時間後に起こして' });
+ok(s.promise && kv('mc:promise').at === clock + 180 * 60e3, '"+180" → exactly 3 hours later');
+A.wake = '午後3時'; s = await call('POST', '/call/say', { id: r.call.id, text: 'やっぱり午後3時に起こして' });
+ok(s.promise && kv('mc:promise').at === jst(2026, 12, 2, 15), '"午後3時" → 15:00');
+A.wake = '6'; s = await call('POST', '/call/say', { id: r.call.id, text: 'じゃあ6で' });
+ok(!s.promise && DB.raw.prepare("SELECT v FROM kv WHERE k='log'").get()?.v.includes('時刻が読めません') !== false, 'bare number refused (kept the old promise)');
+ok(kv('mc:promise').at === jst(2026, 12, 2, 15), 'old promise kept');
 A.wake = '';
 await call('POST', '/call/end', { id: r.call.id });
 // ---- 約束：寝落ち通話・引き継がない

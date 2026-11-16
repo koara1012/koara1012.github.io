@@ -14,7 +14,7 @@
 //    ・Cron トリガー  * * * * *  （毎分。実際に動くのは13分おき）
 // =====================================================================
 
-const VERSION = '第72版（2026-11-16 13:30:00 更新・予定のお知らせ（頼んだ予定の時刻にキャラが電話で知らせる））';
+const VERSION = '第73版（2026-11-16 18:00:00 更新・予定のお知らせ：「その時間になったら伝えて」なども聞き取る）';
 const DEFAULT_MODEL = 'gemini-flash-latest';
 const DEFAULT_GROK_MODEL = 'grok-4.7';                 // X（Twitter）の Grok と同じ最新世代
 const FALLBACK_GROK_MODEL = 'grok-4-fast-non-reasoning'; // 上が使えないときの予備
@@ -3110,7 +3110,7 @@ ${await callTalk(env, c, 14) || '（なし）'}
 // 時刻ちょうどに頼んだ子が電話（静かな時間・止めている子でも。Bark は重要な通知・音量3）。ほかの電話中なら終わり次第（遅れても必ず）。
 // 同じ子の予定が同じころに重なれば1回の電話で。出なければ4分おきに2回かけ直し（計3回）。最後まで出なければ、予定の中身を入れた留守電かボイスメッセージ（性格で）。
 const REM_MAX = 100, REM_DAYS = 60, REM_TRIES = 3, REM_GAP = 4 * 60e3, REM_VOLUME = 3;
-const REM_RE = /予定|よてい|約束|やくそく|教えて|おしえて|知らせて|しらせて|リマインド|忘れ|わすれ|連絡して|れんらくして|電話して|でんわして|声かけて|こえかけて|変わった|かわった|変更|なくなった|中止|キャンセル|取りやめ|やめになった/;
+const REM_RE = /予定|よてい|約束|やくそく|教えて|おしえて|知らせて|しらせて|伝えて|つたえて|言って|いって(?:くれ|ほし|ね|よ)|リマインド|忘れ|わすれ|思い出させ|連絡して|連絡ちょうだい|れんらくして|電話して|電話ちょうだい|電話くれ|でんわして|かけて|声かけて|こえかけて|になったら|時間になったら|じかんになったら|変わった|かわった|変更|なくなった|中止|キャンセル|取りやめ|やめになった/; // 第73版：「伝えて」「その時間になったら」なども（「12時に床屋…その時間になったら伝えて」を取りこぼした）
 const remTalk = (texts) => texts.some((t) => REM_RE.test(wakeNorm(t)));
 const remNewId = () => 'r' + Date.now().toString(36) + randomAlnum(6);
 const REM_OPS_SCHEMA = { type: 'array', items: { type: 'object', properties: { op: { type: 'string', enum: ['add', 'change', 'cancel'] }, id: { type: 'string' }, when: { type: 'string' }, what: { type: 'string' } }, required: ['op', 'id', 'when', 'what'], additionalProperties: false } };

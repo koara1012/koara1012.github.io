@@ -84,6 +84,11 @@ A.rem = [{ op: 'add', id: '', when: '+180', what: '洗濯物' }];
 s = await call('POST', '/call/say', { id: r.call.id, text: '3時間後に洗濯物のこと教えて' });
 const wash = list().find((x) => x.what === '洗濯物');
 ok(wash && wash.keep === false && wash.src === 'sleep' && wash.at === clock + 180 * 60e3 && s.rems, 'sleep nokeep: +180, keep false');
+// 第73版：「12時に床屋に行くんだけれども、その時間になったら伝えて」（実際に取りこぼした言い方）
+A.rem = [{ op: 'add', id: '', when: '2026-11-17 12:00', what: '床屋' }]; ai.length = 0;
+s = await call('POST', '/call/say', { id: r.call.id, text: '12時に床屋に行くんだけれどもその時間になったら伝えてくれないかい' });
+ok(ai.some((x) => x.sch.includes('"reminders"')) && s.rems && list().some((x) => x.what === '床屋' && x.keep === false), '「その時間になったら伝えて」 → reminder');
+await call('POST', '/rem/del', { id: list().find((x) => x.what === '床屋').id });
 A.rem = [];
 await call('POST', '/call/end', { id: r.call.id, by: 'sleep' });
 // ---- 設定画面から（記憶なし・ランダム）

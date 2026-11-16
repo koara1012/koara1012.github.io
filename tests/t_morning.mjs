@@ -51,7 +51,7 @@ await call('POST', '/reply', { charId: a.id });
 ok(kv('mc:promise').at === jst(2026, 12, 2, 7), 'next message with empty wake keeps the promise');
 for (let i = 0; i < 4; i++) { await call('POST', '/send', { charId: a.id, text: '雑談' + i }); await call('POST', '/reply', { charId: a.id }); }
 ai.length = 0; await call('POST', '/send', { charId: a.id, text: 'ねえ' }); await call('POST', '/reply', { charId: a.id });
-ok(!ai.some((x) => x.sch.includes('"wake"')), 'long after the wake talk → no wake option');
+ok(ai.some((x) => x.sch.includes('"wake"') && x.sys.includes('意味で判断')) && kv('mc:promise').at === jst(2026, 12, 2, 7), '第74版：毎回 AI に聞く（意味で判断）。頼まれていなければ約束は変わらない');
 // 第71版：時刻をあとから言っても取りこぼさない（トーク）
 await call('POST', '/send', { charId: a.id, text: '明日モーニングコールお願いできる？' });
 A.wake = ''; await call('POST', '/reply', { charId: a.id });

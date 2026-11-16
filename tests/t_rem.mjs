@@ -84,6 +84,14 @@ A.rem = [{ op: 'add', id: '', when: '+180', what: '洗濯物' }];
 s = await call('POST', '/call/say', { id: r.call.id, text: '3時間後に洗濯物のこと教えて' });
 const wash = list().find((x) => x.what === '洗濯物');
 ok(wash && wash.keep === false && wash.src === 'sleep' && wash.at === clock + 180 * 60e3 && s.rems, 'sleep nokeep: +180, keep false');
+// 第74版：合図の言葉がない言い回しでも、AI に聞く（意味で判断）
+A.rem = [{ op: 'add', id: '', when: '2026-11-17 13:00', what: '出かける' }]; ai.length = 0;
+s = await call('POST', '/call/say', { id: r.call.id, text: '1時に出るから、そのころひと声ちょうだい' });
+ok(ai.some((x) => x.sch.includes('"reminders"') && x.sys.includes('意味で判断')) && list().some((x) => x.what === '出かける'), 'no keyword ("ひと声ちょうだい") → still asked, reminder saved');
+await call('POST', '/rem/del', { id: list().find((x) => x.what === '出かける').id });
+A.rem = []; ai.length = 0;
+s = await call('POST', '/call/say', { id: r.call.id, text: '今日はいい天気だね' });
+ok(ai.some((x) => x.sch.includes('"reminders"')) && !s.rems, 'unrelated talk: asked, AI wrote nothing → nothing changes');
 // 第73版：「12時に床屋に行くんだけれども、その時間になったら伝えて」（実際に取りこぼした言い方）
 A.rem = [{ op: 'add', id: '', when: '2026-11-17 12:00', what: '床屋' }]; ai.length = 0;
 s = await call('POST', '/call/say', { id: r.call.id, text: '12時に床屋に行くんだけれどもその時間になったら伝えてくれないかい' });

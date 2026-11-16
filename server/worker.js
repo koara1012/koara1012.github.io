@@ -14,7 +14,7 @@
 //    ・Cron トリガー  * * * * *  （毎分。実際に動くのは13分おき）
 // =====================================================================
 
-const VERSION = '第73版（2026-11-16 18:00:00 更新・予定のお知らせ：「その時間になったら伝えて」なども聞き取る）';
+const VERSION = '第74版（2026-11-16 20:20:00 更新・予定のお知らせとモーニングコールの約束を、言い回しにかかわらず意味で聞き取る）';
 const DEFAULT_MODEL = 'gemini-flash-latest';
 const DEFAULT_GROK_MODEL = 'grok-4.7';                 // X（Twitter）の Grok と同じ最新世代
 const FALLBACK_GROK_MODEL = 'grok-4-fast-non-reasoning'; // 上が使えないときの予備
@@ -2244,8 +2244,8 @@ async function generateAndStore(env, c, d, hist, lastRead, world = 'omote') {
       // 会う約束：ユーザーが話した直後の返事で、約束が決まった・変わった・取り消されたかも答えてもらう（使うとき・モードがオンのときだけ）
       meet: meetOn(st, c) && !special && d.mode !== 'call' && hist.length && hist[hist.length - 1].sender === 'me' ? { cur: await kvGet(env, 'appt:' + c.id, null) } : null,
       voice: vmsgOpt(c, d, hist), // ボイスメッセージ（第70版）
-      rem: phoneChar(c) && d.mode === 'reply' && hist.length && hist[hist.length - 1].sender === 'me' && remTalk(hist.slice(-WAKE_TURNS).map((m) => m.text)) ? await remOf(env, c.id) : null, // 予定のお知らせ（第72版）
-      wake: phoneChar(c) && d.mode === 'reply' && hist.length && hist[hist.length - 1].sender === 'me' && wakeTalk(hist.slice(-WAKE_TURNS).map((m) => m.text)), // モーニングコールの話が最近出ていれば時刻を聞く（第71版：あとから時刻を言っても取りこぼさない）
+      rem: phoneChar(c) && d.mode === 'reply' && hist.length && hist[hist.length - 1].sender === 'me' ? await remOf(env, c.id) : null, // 予定のお知らせ（第72版）。第74版：合図の言葉で絞らず、毎回 AI が意味で判断する
+      wake: !!(phoneChar(c) && d.mode === 'reply' && hist.length && hist[hist.length - 1].sender === 'me'), // モーニングコールの約束（第74版：毎回 AI が意味で判断）
     };
     const wb = await worldBlock(env, c.prompt + '\n' + hist.slice(-20).map((m) => m.text).join('\n'));
     const system = wb + buildSystem(c, special ? { ...d } : d, hist, now, tlInfo, lifeInfo);
@@ -2901,9 +2901,10 @@ ${cl.transcript.length ? '' : cl.dir === 'in' ? '\n# 今回\nユーザーが電�
 async function callReply(env, cl, c, check = '') {
   if (cl.ura) return uraCallReply(env, cl, c, check);
   const lastMe = [...cl.transcript].reverse().find((m) => m.who === 'me');
-  const wake = !check && !cl.morning && phoneChar(c) && lastMe && cl.transcript[cl.transcript.length - 1] === lastMe && wakeTalk(cl.transcript.slice(-WAKE_TURNS).map((m) => m.text)); // モーニングコールの話が最近出ていれば時刻を聞く（第71版）（第70版）
+  const userTurn = !check && phoneChar(c) && lastMe && cl.transcript[cl.transcript.length - 1] === lastMe; // あなたが話した直後の返事（第74版：合図の言葉で絞らず、毎回 AI が意味で判断する）
+  const wake = !!userTurn;
   const st = await getSettings(env), now = Date.now();
-  const rem = !check && phoneChar(c) && lastMe && cl.transcript[cl.transcript.length - 1] === lastMe && remTalk(cl.transcript.slice(-WAKE_TURNS).map((m) => m.text)) ? await remOf(env, c.id) : null; // 予定のお知らせ（第72版）
+  const rem = userTurn ? await remOf(env, c.id) : null; // 予定のお知らせ（第72版）
   const state = await getState(env, c.id);
   const lifeInfo = await lifeContext(env, c, st, now).catch(() => '');
   const talk = await callTalk(env, c, 16);
@@ -2966,7 +2967,7 @@ const WAKE_RE = /起こして|起こしに|起こせ|おこして|おこしに|�
 const WAKE_TURNS = 6; // 「起こして」の話が出てから、何回分のやり取りのあいだ時刻を聞き続けるか（キャラの聞き返し・あなたの答えを含む）
 const wakeNorm = (t) => String(t || '').replace(/[\s　]+/g, '').replace(/[０-９]/g, (d) => String.fromCharCode(d.charCodeAt(0) - 0xfee0)); // 音声認識の空白・全角数字
 const wakeTalk = (texts) => texts.some((t) => WAKE_RE.test(wakeNorm(t)));
-const WAKE_RULE = `\n# モーニングコールの約束\n- ユーザーが、決まった時刻にあなたから電話をかけて起こしてほしい（モーニングコール）と頼んできたら、wake にその時刻を "HH:MM"（24時間・日本時間）で書く。「3時間後」「30分後」のように今からの時間で言われたら "+分数"（例：3時間後なら "+180"）。\n- 少し前のやり取りで頼まれて、時刻がこの返事で決まった（例：あなたが「何時に起こしますか？」と聞いて、ユーザーが「6時で」と答えた）ときも、ここで wake に書く。時刻があいまいなら言葉で確かめ、決まるまでは ""。前に引き受けた約束をやめてほしいと言われたら "cancel"。関係ないとき・もう書いたときは ""。\n- 引き受けるのが基本（キャラの性格に合わせた言い方で、引き受けたことと時刻を言葉でも伝える）。\n`;
+const WAKE_RULE = `\n# モーニングコールの約束\n- 言い回しは問わない（意味で判断する）。ユーザーが、決まった時刻にあなたから電話をかけて起こしてほしい（モーニングコール）と頼んできたら、wake にその時刻を "HH:MM"（24時間・日本時間）で書く。「3時間後」「30分後」のように今からの時間で言われたら "+分数"（例：3時間後なら "+180"）。\n- 少し前のやり取りで頼まれて、時刻がこの返事で決まった（例：あなたが「何時に起こしますか？」と聞いて、ユーザーが「6時で」と答えた）ときも、ここで wake に書く。時刻があいまいなら言葉で確かめ、決まるまでは ""。前に引き受けた約束をやめてほしいと言われたら "cancel"。関係ないとき・もう書いたときは ""。\n- 引き受けるのが基本（キャラの性格に合わせた言い方で、引き受けたことと時刻を言葉でも伝える）。口で引き受けたのに wake を書かないのは厳禁（約束が残らない）。\n- ユーザーがはっきり頼んでいないのに書かない。ふだんの会話・ただの予定の話・朝の話題だけなら ""。\n`;
 const CALL_WAKE_SCHEMA = { type: 'object', properties: { messages: { type: 'array', items: { type: 'string' } }, hangup: { type: 'boolean' }, wake: { type: 'string' } }, required: ['messages', 'hangup', 'wake'], additionalProperties: false };
 const mcDay = (t) => jstDay(t); // 同じ朝かどうか（日本時間の日付）
 function mcNextAt(hhmm, now) { // "HH:MM"・"6時"・"6時半"・"6時30分"・"+180"（今から180分後） → その時刻（"HH:MM" は、これから来るいちばん近いその時刻。5分以内なら次の日）
@@ -3150,11 +3151,11 @@ function remParseWhen(v, now) { // "YYYY-MM-DD HH:MM"・"MM-DD HH:MM"・"+分数
 }
 function remRule(mine, now, talk = false) {
   const cur = mine.length ? mine.map((x) => `- [${x.id}] ${remWhen(x.at)} ${x.what}`).join('\n') : '（今はなし）';
-  return `${talk ? '\n- reminders：' : '\n# 予定のお知らせ（reminders）\n- '}ユーザーが「〇日の〇時に△△があるから、時間になったら電話で教えて」のように、予定の時刻に知らせてほしいと頼んできたら、引き受けて reminders に {"op":"add","id":"","when":"YYYY-MM-DD HH:MM"（日本時間・24時間。今は${remWhen(now)}）,"what":"何の予定か（短く。例：歯医者）"} を書く。「3時間後」のように今からの時間なら when は "+分数"（例 "+180"）。日付や時刻があいまい（「来週」だけ・「夕方」だけなど）なら言葉で聞き返し、決まるまでは書かない。少し前に頼まれて、日時がこの返事で決まったときもここで書く。${REM_DAYS}日より先の予定は「ちょっと先すぎます」と断って書かない。
+  return `${talk ? '\n- reminders：' : '\n# 予定のお知らせ（reminders）\n- '}言い回しは問わない（意味で判断する。「その時間になったら伝えて」「12時って覚えといて」「出かける前にひと声ちょうだい」なども同じ）。ユーザーが、予定の時刻に知らせてほしいと頼んできたら、引き受けて reminders に {"op":"add","id":"","when":"YYYY-MM-DD HH:MM"（日本時間・24時間。今は${remWhen(now)}）,"what":"何の予定か（短く。例：歯医者）"} を書く。「3時間後」のように今からの時間なら when は "+分数"（例 "+180"）。日付や時刻があいまい（「来週」だけ・「夕方」だけなど）なら言葉で聞き返し、決まるまでは書かない。少し前に頼まれて、日時がこの返事で決まったときもここで書く。${REM_DAYS}日より先の予定は「ちょっと先すぎます」と断って書かない。
   頼まれていた予定の日時や中身が変わったら {"op":"change","id":"下の一覧の id","when":"新しい日時（変わらなければ "")","what":"新しい中身（変わらなければ "")"}、なくなった・やめると言われたら {"op":"cancel","id":"下の一覧の id","when":"","what":""}。関係ないとき・もう書いたときは []。
   あなたが今頼まれている予定：
 ${cur}
-  引き受けたこと・変えたこと・取りやめたことは、言葉でも自然に伝える（何の予定か・いつかもはっきり）。モーニングコール（起こしてほしい）は reminders には書かない。
+  引き受けたこと・変えたこと・取りやめたことは、言葉でも自然に伝える（何の予定か・いつかもはっきり）。**口で引き受けたのに reminders に書かないのは厳禁**（予定が残らない）。ユーザーがはっきり頼んでいないのに書かない（ただ予定を話しただけなら []）。モーニングコール（起こしてほしい）は reminders には書かない。
 `;
 }
 async function remFromAI(env, c, ops, { keep, src }) { // AI の reminders を予定の一覧に（足す・変える・取りやめる）。変わったものを返す
@@ -6130,7 +6131,7 @@ ${opt.quote.map((m, i) => `  ${i}：「${trunc(m.text, 60)}」`).join('\n')}`;
   キャラクターに合うなら、たまに「声が聞きたい」「ボイスメッセージ送って」とユーザーにねだってもよい（しつこくしない）。`;
   }
   if (opt.rem) { props.reminders = REM_OPS_SCHEMA; extra += remRule(opt.rem, Date.now(), true); }
-  if (opt.wake) { props.wake = { type: 'string' }; extra += '\n- wake：ユーザーが、決まった時刻にあなたから電話をかけて起こしてほしい（モーニングコール）と頼んできて、引き受けたなら、その時刻 "HH:MM"（24時間・日本時間）。「3時間後」のように今からの時間で言われたら "+分数"（例 "+180"）。少し前に頼まれて、時刻がこの返事で決まった（あなたが「何時？」と聞いてユーザーが答えた）ときもここで書く。時刻があいまいなら messages で確かめ、決まるまでは ""。前に引き受けた約束をやめてほしいと言われたら "cancel"。関係ないとき・もう書いたときは ""。引き受けるのが基本（性格に合った言い方で、引き受けたことと時刻を messages でも伝える）。'; }
+  if (opt.wake) { props.wake = { type: 'string' }; extra += '\n- wake：言い回しは問わず意味で判断する。ユーザーが、決まった時刻にあなたから電話をかけて起こしてほしい（モーニングコール）と頼んできて、引き受けたなら、その時刻 "HH:MM"（24時間・日本時間）。「3時間後」のように今からの時間で言われたら "+分数"（例 "+180"）。少し前に頼まれて、時刻がこの返事で決まった（あなたが「何時？」と聞いてユーザーが答えた）ときもここで書く。時刻があいまいなら messages で確かめ、決まるまでは ""。前に引き受けた約束をやめてほしいと言われたら "cancel"。関係ないとき・もう書いたとき・はっきり頼まれていないときは ""。引き受けるのが基本（性格に合った言い方で、引き受けたことと時刻を messages でも伝える）。口で引き受けたのに書かないのは厳禁。'; }
   if (opt.typo) extra += '\n- 今回は、吹き出しのどれか1か所で、スマホらしい自然な打ち間違い（変換ミスなど）をして、次の吹き出しで「＊正しい言葉」と短く訂正する。キャラクターに合わなければしなくてよい。';
   if (opt.react) {
     props.stamp = { type: 'string' };

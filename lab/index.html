@@ -151,6 +151,7 @@ body.ura .costbar{background:#2e2333;color:#cbb9cf;border-color:#43354a}
 /* モーニングコール（第70版） */
 .mcbar{flex:none;display:flex;align-items:center;gap:8px;padding:8px 14px;background:#fff8e6;border-bottom:1px solid var(--line);font-size:13.5px}
 .mcbar[hidden]{display:none}
+.rembar{background:#eef6ff}
 .mcbar span{flex:1}
 .mcbar button{border:0;border-radius:14px;padding:5px 12px;font-size:13px;background:#efe3c4}
 .mcline{display:flex;align-items:center;gap:8px;padding:6px 0;font-size:14px;border-bottom:1px solid var(--line)}
@@ -421,6 +422,7 @@ body.ura #list.tlMode{background:#efe9f0}
   </div>
   <div id="aiAlertBar" style="flex:none" hidden></div>
   <div class="mcbar" id="mcHome" role="button" tabindex="0" hidden></div>
+  <div class="mcbar rembar" id="remHome" role="button" tabindex="0" hidden></div>
   <div class="costbar" id="costBar" role="button" tabindex="0" title="AIの利用料金（目安）"></div>
   <div class="pausebar" id="uraPauseBar"><span id="uraPauseText"></span><button id="uraPauseBtn"></button></div>
   <div class="scroll" id="list"></div>
@@ -460,6 +462,7 @@ body.ura #list.tlMode{background:#efe9f0}
   <div class="pausebar paused" id="charPauseBar" style="display:none"><span id="charPauseText"></span><button id="charPauseBtn">再開する</button></div>
   <div class="meetbar" id="meetBar" hidden></div>
   <div class="mcbar" id="mcChat" hidden></div>
+  <div class="mcbar rembar" id="remChat" role="button" tabindex="0" hidden></div>
   <div id="selHint">消したいメッセージをタップして選んでください</div>
   <div class="scroll" id="msgs"></div>
   <div class="inbar">
@@ -983,6 +986,20 @@ body.ura #list.tlMode{background:#efe9f0}
       テストは1回だけ鳴らします（かけ直しなし・キャラの記憶には残しません）。</div>
     </div>
 
+    <div class="sec">📅 予定のお知らせ（表のトーク）</div>
+    <div class="field">
+      <div id="remNow"><div class="hint">読み込み中…</div></div>
+      <div class="t" style="margin-top:10px" id="remFormT">予定を入れる</div>
+      <div class="inline" style="gap:6px;flex-wrap:wrap"><input type="date" id="remDate" style="width:150px"><input type="time" id="remTime" value="12:00" style="width:110px"></div>
+      <input type="text" id="remWhat" maxlength="60" placeholder="何の予定か（例：歯医者）" style="margin-top:6px">
+      <div class="t" style="margin-top:8px">だれが知らせるか</div>
+      <div class="seg" id="remWho"><button data-v="pick">決めた1人</button><button data-v="random">ランダム</button></div>
+      <div id="remPickBox" style="margin-top:6px"><select id="remChar"></select></div>
+      <div class="btns" style="margin-top:8px"><button class="btn" id="remSave">予定を入れる</button><button class="btn sub" id="remCancelEdit" hidden>直すのをやめる</button></div>
+      <div class="hint">トーク・電話・寝落ち通話・モーニングコールの電話の中で「明後日の15時に歯医者があるから、時間になったら教えて」と頼むと、その子が覚えて、時刻ちょうどに電話で知らせてくれます（いくつでも・60日先まで）。「16時に変わった」「なくなった」と話せば、直したり取りやめたりします。ここから入れた予定は、キャラの記憶には残りません。<br>
+      出なければ4分おきにかけ直し（全部で3回）、最後まで出なければ、予定の中身を入れた留守電かボイスメッセージを残します。静かな時間・AI を止めている子でもかけてきます。ほかの電話中なら、終わり次第かけてきます。Bark の通知は「📅 歯医者（15:00）」の形で、マナーモードでも鳴ります（音はモーニングコールの3分の1くらい）。</div>
+    </div>
+
     <div class="sec">会う約束（試作・表のトーク）</div>
     <div class="field">
       <label class="chk"><input type="checkbox" id="stMeet"> トークで決めた「実際に会う約束」を記録して、時間になったら通知する（ノベル画面で会う）</label>
@@ -1106,7 +1123,7 @@ body.ura #list.tlMode{background:#efe9f0}
 // 置き場所で切り替える：/lab/（試作）と /chat/（本番）で同じファイルを使う
 // 試作は本番と同じサイトなので、保存の名前に「lab.」を付けて本番の chat.* には書き込まない。通知も登録しない
 const IS_LAB = /\/lab\//.test(location.pathname);
-const APP_VERSION = '第71版（2026-11-15 12:55:00 更新・モーニングコールの約束を、時刻をあとから言っても取りこぼさない）' + (IS_LAB ? '【試作】' : '');
+const APP_VERSION = '第72版（2026-11-16 13:30:00 更新・予定のお知らせ（頼んだ予定の時刻にキャラが電話で知らせる））' + (IS_LAB ? '【試作】' : '');
 if (IS_LAB) { document.title = '【試作】トーク（統合）'; const mt = document.querySelector('meta[name=apple-mobile-web-app-title]'); if (mt) mt.content = 'トーク試作'; }
 const $ = (id) => document.getElementById(id);
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
@@ -1530,7 +1547,7 @@ function renderChat(keepPos, forceBottom) {
   $('btnCall').style.display = (grp ? grpPhone : canPhoneHere(c)) ? '' : 'none'; // 裏のグループにも📞（第59版）・裏の1対1にも（第70版）
   $('btnSleep').style.display = sleepOk ? '' : 'none';
   $('btnVoice').style.display = !grp && S.world !== 'ura' && (window.SpeechRecognition || window.webkitSpeechRecognition) ? '' : 'none'; // ボイスメッセージ（第70版・表の個人だけ）
-  renderMeetBar(); renderCharPauseBar(); renderMcBars();
+  renderMeetBar(); renderCharPauseBar(); renderMcBars(); renderRemBars();
   const k = curKey(), ura = isUraKey(k);
   const nm = grp ? grp.name : dispName(c, ura ? 'ura' : 'omote');
   const so = !ura && (S.status || {})[c.id];
@@ -1743,7 +1760,7 @@ function applyWorld() {
   const meta = document.querySelector('meta[name=theme-color]'); if (meta) meta.content = S.world === 'ura' ? '#3b2a3f' : '#24324a';
 }
 function setWorld(w) {
-  setTimeout(() => { try { renderMcBars(); } catch (_) {} }, 0);
+  setTimeout(() => { try { renderMcBars(); renderRemBars(); } catch (_) {} }, 0);
   w = w === 'ura' ? 'ura' : 'omote';
   if (S.world === w) return;
   if (S.view === 'chat') { if (revealQ.length) { revealQ.forEach((m) => S.hidden.delete(m.id)); revealQ.length = 0; } S.typingFor = null; }
@@ -1766,7 +1783,7 @@ function renderAll(keepPos, forceBottom) {
 
 function show(view) {
   S.view = view;
-  if (typeof renderMcBars === 'function') try { renderMcBars(); } catch (_) {}
+  if (typeof renderMcBars === 'function') try { renderMcBars(); renderRemBars(); } catch (_) {}
   for (const [v, id] of [['list', 'listView'], ['chat', 'chatView'], ['edit', 'editView'], ['set', 'setView'], ['post', 'postView'], ['grp', 'grpView'], ['ogr', 'ogrView'], ['glog', 'glogView']]) $(id).classList.toggle('on', v === view);
   if (view !== 'chat') {
     // 別画面に移ったら、待ち中の吹き出しはすぐ出す
@@ -2073,11 +2090,11 @@ function bubHTML(m) {
   if (m.retracted) return `<div class="bub gone">${m.sender === 'me' ? 'メッセージの送信を取り消しました' : '送信を取り消しました'}</div>`;
   const src = m.localImg || (m.image && imgCache[m.image]);
   if (m.kind === 'voice') return vmsgHTML(m);
-  if (m.kind === 'call') { const mt = m.meta || {}; return `<div class="bub call"><span class="ic">${mt.morning ? '⏰' : '📞'}</span><span><b>${mt.morning ? 'モーニングコール' + (mt.test ? '（テスト）' : '') : ''}${mt.declined ? (mt.morning ? '（拒否）' : '着信（拒否）') : mt.morning ? '' : '不在着信'}</b><small>${mt.declined ? 'あなたが拒否しました' : '応答なし'}${mt.nokeep ? '・キャラは知りません' : ''}</small></span></div>`; }
+  if (m.kind === 'call') { const mt = m.meta || {}, sp = mt.morning || mt.remind; return `<div class="bub call"><span class="ic">${mt.morning ? '⏰' : mt.remind ? '📅' : '📞'}</span><span><b>${mt.morning ? 'モーニングコール' + (mt.test ? '（テスト）' : '') : mt.remind ? `予定のお知らせ（${esc(mt.remind)}）` : ''}${mt.declined ? (sp ? '（拒否）' : '着信（拒否）') : sp ? '' : '不在着信'}</b><small>${mt.declined ? 'あなたが拒否しました' : '応答なし'}${mt.nokeep ? '・キャラは知りません' : ''}</small></span></div>`; }
   if (m.kind === 'vm') { const v = vmOf(m.charId, m.id); return `<div class="bub call vm" data-vm="${m.id}"><span class="ic">▶</span><span><b>留守番電話${v && !v.heard ? '<span class="new"></span>' : ''}</b><small>${v ? (v.heard ? 'タップで再生' : '新しい留守電・タップで再生') : '古い留守電（もう残っていません）'}</small></span></div>`; }
   if (m.kind === 'callout') return `<div class="bub call out" data-callback="1"><span class="ic">📞</span><span><b>${m.meta && m.meta.group ? 'グループ通話' : '発信'}</b><small>${m.meta && m.meta.group ? 'だれも出ませんでした' : '応答なし'}・タップでかけ直す</small></span></div>`;
   if (m.kind === 'callog' && m.meta && m.meta.group && m.meta.log && !m.retracted) return `<div class="bub call log" data-gclog="${esc(m.id)}"><span class="ic">${m.meta.sleep ? '🌙' : '📞'}</span><span><b>${m.meta.sleep ? '寝落ち通話' : m.meta.from ? 'グループ通話（続き）' : 'グループ通話'} ${durText(m.meta.dur)}</b><small>タップで会話を読む・続きから話す</small></span></div>`; // 会話が残っている通話（第57版・第59版で裏も）
-  if (m.kind === 'callog') { const mt = m.meta || {}; return `<div class="bub call log" data-callback="1"><span class="ic">${mt.sleep ? '🌙' : mt.morning ? '⏰' : '📞'}</span><span><b>${mt.sleep ? '寝落ち通話' : mt.morning ? 'モーニングコール' : mt.group ? 'グループ通話' : '通話'} ${durText(mt.dur)}</b><small>${mt.nokeep ? '記憶に残さない通話（キャラは知りません）・' : ''}${mt.usd != null ? `約$${Number(mt.usd).toFixed(3)}（約${yenOf(Number(mt.usd))}円）` : 'タップでかけ直す'}</small></span></div>`; }
+  if (m.kind === 'callog') { const mt = m.meta || {}; return `<div class="bub call log" data-callback="1"><span class="ic">${mt.sleep ? '🌙' : mt.morning ? '⏰' : mt.remind ? '📅' : '📞'}</span><span><b>${mt.sleep ? '寝落ち通話' : mt.morning ? 'モーニングコール' : mt.remind ? `予定のお知らせ（${esc(mt.remind)}）` : mt.group ? 'グループ通話' : '通話'} ${durText(mt.dur)}</b><small>${mt.nokeep ? '記憶に残さない通話（キャラは知りません）・' : ''}${mt.usd != null ? `約$${Number(mt.usd).toFixed(3)}（約${yenOf(Number(mt.usd))}円）` : 'タップでかけ直す'}</small></span></div>`; }
   if (m.image || m.localImg) return `<div class="bub photo"><img ${src ? `src="${src}"` : `data-img="${esc(m.image)}"`} alt="${esc(m.alt || '写真')}"></div>${m.text ? `<div class="bub">${esc(m.text)}</div>` : ''}`;
   return `<div class="bub">${quoteHTML(m)}${esc(m.text)}</div>`;
 }
@@ -2423,7 +2440,7 @@ function openSettings() {
   drawMeIcons();
   document.body.classList.remove('ura');
   show('set');
-  refreshPushState(); renderDiag(); bkRefresh(); renderPrefInfo(); renderMcNow();
+  refreshPushState(); renderDiag(); bkRefresh(); renderPrefInfo(); renderMcNow(); renderRemNow();
 }
 async function saveSettings() {
   S.cfg = { url: $('stUrl').value.trim().replace(/\/+$/, ''), token: $('stToken').value };
@@ -3756,7 +3773,7 @@ function showIncoming(call) {
   if (call.ringUntil && Date.now() > call.ringUntil) return;
   CALL.seen.add(call.id);
   CALL.cur = { id: call.id, charId: c.id, dir: 'in', gpuStart: call.ringAt || Date.now(), muted: false, ...(call.ura ? { ura: true } : {}), ...(call.morning ? { morning: true } : {}) };
-  callScreen(c, 'incoming'); setStat(call.morning ? '⏰ モーニングコール' : call.ura ? '着信（裏）' : '着信'); $('cvTime').textContent = '';
+  callScreen(c, 'incoming'); setStat(call.morning ? '⏰ モーニングコール' : call.remind ? '📅 ' + call.remind.map((x) => x.what).join('・') : call.ura ? '着信（裏）' : '着信'); $('cvTime').textContent = '';
   playRingtone();
   // 鳴っている間も GPU を起こし続ける（第51版）。サーバーは起こしてから鳴らすが、Modal は30秒で止まるので、遅れて出ると最初の声が遅くなっていた
   clearInterval(CALL.hb);
@@ -3800,6 +3817,7 @@ async function sayInCall(text) {
     cur.busy = false;
     if (d.ended) { endCall('char'); return; }
     if (d.promise) { mcPromiseToast(d.promise); sync(); } // モーニングコールの約束（第70版）
+    if (d.rems) { d.rems.forEach((o) => remSeen.add(o.op === 'cancel' ? 'x' + o.id : o.op === 'change' ? o.id + o.at + o.what : o.id)); remToast(d.rems, CALL.cur && CALL.cur.charId); sync(); } // 予定のお知らせ（第72版）
     await speakLines(d.lines || []);
     if (d.hangup && CALL.cur === cur && !cur.sleep) endCall('char');
     hfSoon(500);
@@ -3950,11 +3968,87 @@ $('mcTest').onclick = async () => {
   try { const d = await api('POST', '/mc/test', { who: mcForm.who, charId: $('mcChar').value, force: true }); toast(`⏰ ${mcName(d.charId)}さんがテストでかけてきます（GPU が起きるまで少しかかることがあります）`, 5000); setTimeout(sync, 1500); setTimeout(sync, 6000); setTimeout(sync, 15000); }
   catch (e) { toast(e.message); }
 };
+// ---- 予定のお知らせ（第72版）：rem.list（いくつでも）・rem.run（知らせている途中）
+const remSrcName = (src) => ({ talk: 'トークで', call: '電話で', sleep: '寝落ち通話で', morning: 'モーニングコールで', remind: 'お知らせの電話で', set: '画面から' }[src] || '');
+const remSeen = new Set();
+function remToast(ops, charId) {
+  const lines = ops.map((o) => { const nm = mcName(o.charId || charId); return o.op === 'cancel' ? `📅 ${nm}さんが「${o.what}」の予定を取りやめました` : o.op === 'change' ? `📅 ${nm}さんが「${o.what}」の予定を ${mcWhen(o.at)} に変えました` : `📅 ${mcWhen(o.at)} ${o.what} の予定を${nm}さんが覚えました${o.keep === false ? '（記憶に残さない）' : ''}`; });
+  if (lines.length) toast(lines.join('\n'), 5000);
+}
+function remAfterSync(rem) {
+  const prev = S.rem; S.rem = rem;
+  if (prev !== undefined) { // 前の同期と比べて、トークで頼んだ・変えた・取りやめた予定を知らせる
+    const was = new Map(((prev && prev.list) || []).map((x) => [x.id, x])), ops = [];
+    for (const x of (rem && rem.list) || []) { const o = was.get(x.id); if (!o) { if (Date.now() - x.made < 5 * 60e3 && x.src !== 'set' && !remSeen.has(x.id)) ops.push({ op: 'add', ...x }); } else if ((o.at !== x.at || o.what !== x.what) && !remSeen.has(x.id + x.at + x.what)) ops.push({ op: 'change', ...x }); }
+    const now = new Set(((rem && rem.list) || []).map((x) => x.id));
+    for (const [id, o] of was) if (!now.has(id) && o.at > Date.now() + 60e3 && !remSeen.has('x' + id)) ops.push({ op: 'cancel', ...o });
+    ops.forEach((o) => remSeen.add(o.op === 'cancel' ? 'x' + o.id : o.op === 'change' ? o.id + o.at + o.what : o.id));
+    if (ops.length) remToast(ops);
+  }
+  renderRemBars();
+  if (S.view === 'set') renderRemNow();
+}
+function renderRemBars() {
+  const list = (S.rem && S.rem.list) || [], run = S.rem && S.rem.run, ura = S.world === 'ura';
+  const first = list[0];
+  const homeTxt = run ? `📅 ${mcName(run.charId)}さんが予定を知らせています（${run.items.map((x) => x.what).join('・')}）` : first ? `📅 次の予定：${mcWhen(first.at)} ${first.what}（${first.who === 'random' && !first.charId ? 'ランダム' : mcName(first.charId) + 'さん'}）${list.length > 1 ? ` ほか${list.length - 1}件` : ''}` : '';
+  $('remHome').hidden = !homeTxt || ura; $('remHome').innerHTML = homeTxt ? `<span>${esc(homeTxt)}</span>` : '';
+  const mine = list.filter((x) => x.charId && x.charId === S.current), inChat = S.view === 'chat' && !ura && mine.length > 0;
+  $('remChat').hidden = !inChat; $('remChat').innerHTML = inChat ? `<span>${esc(`📅 ${mcWhen(mine[0].at)} ${mine[0].what}${mine.length > 1 ? ` ほか${mine.length - 1}件` : ''}（${mcName(S.current)}さんが知らせます）`)}</span>` : '';
+}
+const remGoSettings = () => { openSettings(); setTimeout(() => { const el = $('remNow'); if (el) el.scrollIntoView({ block: 'center' }); }, 300); };
+$('remHome').onclick = remGoSettings; $('remChat').onclick = remGoSettings;
+const remForm = { who: store.get('rem.who', 'pick'), edit: '' };
+const ymd = (t) => { const d = new Date(t); return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`; };
+function renderRemNow() {
+  const el = $('remNow'); if (!el) return;
+  const list = (S.rem && S.rem.list) || [], run = S.rem && S.rem.run;
+  const rows = [];
+  if (run) rows.push(`<div class="mcline"><span>📞 いま ${esc(mcName(run.charId))}さんが知らせています：${esc(run.items.map((x) => x.what).join('・'))}（${run.tries || 1}回目）</span><button class="btn sub" data-remx="run">これ以上かけない</button></div>`);
+  for (const x of list) rows.push(`<div class="mcline"><span>📅 ${mcWhen(x.at)} <b>${esc(x.what)}</b><br><small>${x.who === 'random' && !x.charId ? 'ランダム' : esc(mcName(x.charId)) + 'さん'}・${remSrcName(x.src)}・${x.keep ? '記憶を引き継ぐ' : '記憶に残さない'}</small></span><button class="btn sub" data-remed="${esc(x.id)}">直す</button><button class="btn sub" data-remdel="${esc(x.id)}">消す</button></div>`);
+  el.innerHTML = rows.join('') || '<div class="hint" style="margin-top:0">予定はありません。</div>';
+  const cs = (S.chars || []).filter((c) => !c.uraOnly && c.voice);
+  const sel = $('remChar'), cur = sel.value || store.get('rem.char', '');
+  sel.innerHTML = cs.map((c) => `<option value="${esc(c.id)}">${esc(c.name)}</option>`).join('') || '<option value="">（声の名前がある子がいません）</option>';
+  if (cs.some((c) => c.id === cur)) sel.value = cur;
+  if (!$('remDate').value) $('remDate').value = ymd(Date.now() + 864e5);
+  $('remWho').querySelectorAll('button').forEach((b) => b.classList.toggle('on', b.dataset.v === remForm.who));
+  $('remPickBox').style.display = remForm.who === 'pick' ? '' : 'none';
+  $('remSave').textContent = remForm.edit ? 'この内容に直す' : '予定を入れる'; $('remCancelEdit').hidden = !remForm.edit; $('remFormT').textContent = remForm.edit ? '予定を直す' : '予定を入れる';
+}
+$('remNow').addEventListener('click', async (e) => {
+  const x = e.target.closest('[data-remx]'), d = e.target.closest('[data-remdel]'), ed = e.target.closest('[data-remed]');
+  if (x) { if (!confirm('今の予定のお知らせ（このあとのかけ直し）をやめますか？')) return; try { remAfterSync((await api('POST', '/rem/del', { run: true })).rem); toast('やめました'); } catch (er) { toast(er.message); } return; }
+  if (d) { const r = ((S.rem && S.rem.list) || []).find((y) => y.id === d.dataset.remdel); if (!r || !confirm(`${mcWhen(r.at)} ${r.what} の予定を消しますか？`)) return; try { remSeen.add('x' + r.id); remAfterSync((await api('POST', '/rem/del', { id: r.id })).rem); toast('消しました'); } catch (er) { toast(er.message); } return; }
+  if (ed) {
+    const r = ((S.rem && S.rem.list) || []).find((y) => y.id === ed.dataset.remed); if (!r) return;
+    const t = new Date(r.at); remForm.edit = r.id; remForm.who = r.who === 'random' && !r.charId ? 'random' : 'pick';
+    $('remDate').value = ymd(r.at); $('remTime').value = `${String(t.getHours()).padStart(2, '0')}:${String(t.getMinutes()).padStart(2, '0')}`; $('remWhat').value = r.what;
+    if (r.charId) $('remChar').value = r.charId;
+    renderRemNow(); $('remWhat').scrollIntoView({ block: 'center' });
+  }
+});
+$('remWho').addEventListener('click', (e) => { const b = e.target.closest('button'); if (!b) return; remForm.who = b.dataset.v; store.set('rem.who', remForm.who); renderRemNow(); });
+$('remChar').onchange = () => store.set('rem.char', $('remChar').value);
+$('remCancelEdit').onclick = () => { remForm.edit = ''; $('remWhat').value = ''; renderRemNow(); };
+$('remSave').onclick = async () => {
+  const body = { date: $('remDate').value, time: $('remTime').value, what: $('remWhat').value.trim(), who: remForm.who, charId: $('remChar').value };
+  if (!body.date || !body.time || !body.what) { toast('日付・時刻・何の予定かを入れてください'); return; }
+  try {
+    const was = remForm.edit;
+    const d = await api('POST', was ? '/rem/edit' : '/rem/add', was ? { ...body, id: was } : body);
+    remForm.edit = ''; $('remWhat').value = '';
+    ((d.rem && d.rem.list) || []).forEach((x) => { remSeen.add(x.id); remSeen.add(x.id + x.at + x.what); });
+    remAfterSync(d.rem);
+    toast(was ? '直しました' : `📅 ${mcWhen(Date.parse(body.date + 'T' + body.time + ':00+09:00'))} ${body.what} を入れました`, 4000);
+  } catch (e) { toast(e.message); }
+};
 // --- 同期のたび：かかってきた電話・留守電・GPU を起こす住所をサーバーに
 let ttsUrlSent = '';
 function phoneAfterSync(d) {
   S.calls = d.calls || []; S.vms = d.vms || S.vms || {};
   mcAfterSync(d.mc || null);
+  remAfterSync(d.rem || null);
   const u = ttsCfg().url;
   if (u && u !== S.settings.ttsUrl && u !== ttsUrlSent) { ttsUrlSent = u; api('POST', '/settings', { settings: { ttsUrl: u } }).catch(() => {}); }
   const ring = S.calls.find((x) => x.dir === 'in' && x.status === 'ringing');
@@ -4043,7 +4137,7 @@ function renderOGroupChat(g, keepPos, forceBottom) {
   $('btnCall').style.display = S.settings.phoneEnabled !== false ? '' : 'none';
   $('btnSleep').style.display = S.settings.phoneEnabled !== false ? '' : 'none';
   $('chatView').querySelector('header.bar').classList.remove('tight');
-  renderMeetBar(); renderCharPauseBar(); renderMcBars();
+  renderMeetBar(); renderCharPauseBar(); renderMcBars(); renderRemBars();
   $('chatTitle').innerHTML = esc(g.name) + `<small>${esc(g.members.map((id) => (charById(id) || {}).name || '（いなくなった人）').join('・'))}${g.paused ? '・止めています' : ''}</small>`;
   const box = $('msgs'), k = g.id;
   box.classList.remove('uraMode');

@@ -14,7 +14,7 @@
 //    ・Cron トリガー  * * * * *  （毎分。実際に動くのは13分おき）
 // =====================================================================
 
-const VERSION = '第71版（2026-11-15 12:55:00 更新・モーニングコールの約束を、時刻をあとから言っても取りこぼさない）';
+const VERSION = '第72版（2026-11-16 13:30:00 更新・予定のお知らせ（頼んだ予定の時刻にキャラが電話で知らせる））';
 const DEFAULT_MODEL = 'gemini-flash-latest';
 const DEFAULT_GROK_MODEL = 'grok-4.7';                 // X（Twitter）の Grok と同じ最新世代
 const FALLBACK_GROK_MODEL = 'grok-4-fast-non-reasoning'; // 上が使えないときの予備
@@ -76,7 +76,7 @@ export default {
     ctx.waitUntil(runDueProactive(env).catch((e) => log(env, '自動送信: ' + e.message))); // 時間をずらした話しかけ
     ctx.waitUntil(runDuePostscripts(env).catch((e) => log(env, '追伸: ' + e.message))); // 追伸・不在着信のあとの言葉
     ctx.waitUntil(runAppointments(env).catch((e) => log(env, '会う約束: ' + e.message))); // 会う約束の通知（試作・使うときだけ）
-    ctx.waitUntil(runMorning(env).catch((e) => log(env, 'モーニングコール: ' + e.message)).then(() => runCalls(env)).catch((e) => log(env, '電話: ' + e.message))); // モーニングコール（第70版）→ 電話：GPU を起こしてから鳴らす・不在・放置・折り返し
+    ctx.waitUntil(runMorning(env).catch((e) => log(env, 'モーニングコール: ' + e.message)).then(() => runReminders(env)).catch((e) => log(env, '予定のお知らせ: ' + e.message)).then(() => runCalls(env)).catch((e) => log(env, '電話: ' + e.message))); // モーニングコール（第70版）→ 電話：GPU を起こしてから鳴らす・不在・放置・折り返し
     ctx.waitUntil(runDisasters(env, minute).catch((e) => log(env, '災害の確認: ' + e.message))); // 地震・速報は毎分、ほかは間をあけて確認
     // 見回りは毎分。キャラごとに13分の中で担当の分をずらして判定する（何人も同じ瞬間に動かないように）
     ctx.waitUntil(tick(env, minute).catch((e) => log(env, 'tick全体: ' + e.message)));
@@ -460,7 +460,8 @@ async function route(key, url, body, env, ctx, req) {
       const vms = {};
       for (const r of vmr) { try { vms[r.k.slice(3)] = JSON.parse(r.v); } catch (_) {} }
       const mc = await mcView(env).catch(() => null); // モーニングコール（第70版）
-      return json({ calls, vms, mc, appts, chars, groups: await loadGroups(env), ogroups: await loadOGroups(env), aiAlerts: await aiAlerts(env), messages, more, reads, charRead, reactions, status, cost: await costSummary(env).catch(() => null), outage: dis && dis.outage ? dis.outage : null, retracted: rt.map((r) => r.id), settings: await getSettings(env), now: Date.now(), version: VERSION });
+      const rem = await remView(env).catch(() => null); // 予定のお知らせ（第72版）
+      return json({ calls, vms, mc, rem, appts, chars, groups: await loadGroups(env), ogroups: await loadOGroups(env), aiAlerts: await aiAlerts(env), messages, more, reads, charRead, reactions, status, cost: await costSummary(env).catch(() => null), outage: dis && dis.outage ? dis.outage : null, retracted: rt.map((r) => r.id), settings: await getSettings(env), now: Date.now(), version: VERSION });
     }
 
     // ---- 立ち絵の表情（ノベル画面から。裏の返事でAIが選ぶ候補。画像は受け取らない）
@@ -546,6 +547,7 @@ async function route(key, url, body, env, ctx, req) {
       cl.status = 'active'; cl.answeredAt = Date.now(); cl.lastAt = Date.now();
       await putCall(env, cl);
       if (cl.morning) await kvDel(env, 'mc:run'); // モーニングコールに出た＝もうかけ直さない
+      if (cl.remind) await kvDel(env, 'rem:run'); // 予定のお知らせに出た＝もうかけ直さない
       const r = await keep(ctx, callReply(env, cl, c));
       cl.transcript.push(...r.lines.map((t) => ({ who: 'char', text: t, at: Date.now() })));
       await putCall(env, cl);
@@ -573,7 +575,7 @@ async function route(key, url, body, env, ctx, req) {
       now2.transcript.push(...r.lines.map((t) => ({ who: 'char', text: t, at: Date.now() })));
       now2.lastAt = Date.now();
       await putCall(env, now2);
-      return json({ lines: r.lines, hangup: r.hangup, ...(r.promise ? { promise: r.promise } : {}) });
+      return json({ lines: r.lines, hangup: r.hangup, ...(r.promise ? { promise: r.promise } : {}), ...(r.rems ? { rems: r.rems } : {}) });
     }
     case 'POST /call/ping': { // 通話中：まだつながっている（放置で切れないように）
       const cl = await getCall(env, body.id);
@@ -598,6 +600,36 @@ async function route(key, url, body, env, ctx, req) {
       await kvSet(env, 'vm:' + id, list);
       return json({ vms: list });
     }
+    // ---- 予定のお知らせ（第72版）
+    case 'GET /rem': return json({ rem: await remView(env), chars: (await mcChars(env)).map((c) => c.id) });
+    case 'POST /rem/add': case 'POST /rem/edit': { // 設定画面から：date "YYYY-MM-DD"・time "HH:MM"・what・who（pick / random）・charId。設定画面から入れた予定は、いつも記憶を引き継がない
+      const at = remParseWhen(`${body.date || ''} ${body.time || ''}`, Date.now());
+      if (at === -1) throw new HttpError(400, '60日より先の予定は入れられません');
+      if (!at) throw new HttpError(400, '日付と時刻を、これから先の日時で入れてください');
+      const what = String(body.what || '').trim().slice(0, 60);
+      if (!what) throw new HttpError(400, '何の予定かを入れてください');
+      const who = body.who === 'random' ? 'random' : 'pick';
+      let charId = '';
+      if (who === 'pick') { const c = await omoteChar(env, body.charId); if (!phoneChar(c)) throw new HttpError(400, 'この子には声の名前がないので、お知らせの電話はできません'); charId = c.id; }
+      else if (!(await mcChars(env)).length) throw new HttpError(400, 'ランダムで選べる子がいません（声の名前があって、表のトークで1回でも話した子）');
+      const list = await remList(env);
+      if (key === 'POST /rem/edit') {
+        const r = list.find((x) => x.id === String(body.id || ''));
+        if (!r) throw new HttpError(404, 'その予定が見つかりません（もう知らせたか、消えています）');
+        Object.assign(r, { at, what, ...(r.src === 'set' ? { who, charId } : {}) });
+      } else {
+        if (list.length >= REM_MAX) throw new HttpError(400, `予定は${REM_MAX}件までです`);
+        list.push({ id: remNewId(), at, what, who, charId, keep: false, src: 'set', made: Date.now() });
+      }
+      await remSave(env, list);
+      return json({ rem: await remView(env) });
+    }
+    case 'POST /rem/del': { // 予定を消す（id）。run：知らせている途中のかけ直しをやめる
+      if (body.run) await kvDel(env, 'rem:run');
+      else { const list = await remList(env), r = list.find((x) => x.id === String(body.id || '')); await remSave(env, list.filter((x) => x !== r)); if (r) await log(env, `予定のお知らせを消しました（画面から・${fmtTime(r.at)} ${r.what}）`); }
+      return json({ rem: await remView(env) });
+    }
+
     // ---- モーニングコール（第70版）
     case 'GET /mc': return json({ mc: await mcView(env), chars: (await mcChars(env)).map((c) => c.id) });
     case 'POST /mc/set': { // 手で入れる（1回だけ）：time "HH:MM"（これから来るその時刻）、who 'pick'|'random'、charId、keep
@@ -2212,12 +2244,13 @@ async function generateAndStore(env, c, d, hist, lastRead, world = 'omote') {
       // 会う約束：ユーザーが話した直後の返事で、約束が決まった・変わった・取り消されたかも答えてもらう（使うとき・モードがオンのときだけ）
       meet: meetOn(st, c) && !special && d.mode !== 'call' && hist.length && hist[hist.length - 1].sender === 'me' ? { cur: await kvGet(env, 'appt:' + c.id, null) } : null,
       voice: vmsgOpt(c, d, hist), // ボイスメッセージ（第70版）
+      rem: phoneChar(c) && d.mode === 'reply' && hist.length && hist[hist.length - 1].sender === 'me' && remTalk(hist.slice(-WAKE_TURNS).map((m) => m.text)) ? await remOf(env, c.id) : null, // 予定のお知らせ（第72版）
       wake: phoneChar(c) && d.mode === 'reply' && hist.length && hist[hist.length - 1].sender === 'me' && wakeTalk(hist.slice(-WAKE_TURNS).map((m) => m.text)), // モーニングコールの話が最近出ていれば時刻を聞く（第71版：あとから時刻を言っても取りこぼさない）
     };
     const wb = await worldBlock(env, c.prompt + '\n' + hist.slice(-20).map((m) => m.text).join('\n'));
     const system = wb + buildSystem(c, special ? { ...d } : d, hist, now, tlInfo, lifeInfo);
     const contents = buildContents(hist, 'omote', images);
-    if (opt.news || opt.photo || opt.edit || opt.typo || opt.retract || opt.react || opt.quote || opt.ps || opt.meet || opt.voice || opt.wake || special) {
+    if (opt.news || opt.photo || opt.edit || opt.typo || opt.retract || opt.react || opt.quote || opt.ps || opt.meet || opt.voice || opt.wake || opt.rem || special) {
       rich = await callOmoteRich(env, { ...c, maxSplit: special ? 2 : c.maxSplit }, d, system, contents, opt);
       texts = rich.texts;
       rich.srcImage = newPhotos.length ? images[newPhotos[newPhotos.length - 1].image] : null;
@@ -2273,6 +2306,7 @@ async function generateAndStore(env, c, d, hist, lastRead, world = 'omote') {
   const out = items.map((x, i) => ({ id: res[i].meta.last_row_id, charId: key, sender: x.sender, text: x.text, at: t0 + i, ...(x.image ? { image: x.image, alt: x.alt } : {}), ...(x.replyTo ? { replyTo: x.replyTo } : {}), ...(x.face ? { face: x.face } : {}), ...(x.kind ? { kind: x.kind, meta: x.meta } : {}) }));
   // モーニングコールの約束（第70版）：トークで頼まれて引き受けた
   if (rich && rich.wake) await mcFromAI(env, c, rich.wake, { keep: true, src: 'talk' }).catch((e) => log(env, 'モーニングコールの約束: ' + e.message));
+  if (rich && rich.reminders && rich.reminders.length) await remFromAI(env, c, rich.reminders, { keep: true, src: 'talk' }).catch((e) => log(env, '予定のお知らせ: ' + e.message)); // 予定のお知らせ（第72版）
   // 会う約束：決まった・変わった・取り消された
   if (rich && rich.meet) await applyMeet(env, c, rich.meet, now).catch((e) => log(env, '会う約束: ' + e.message));
   // 追伸：数分後に、思い出したように一言
@@ -2569,7 +2603,7 @@ const phoneChar = (c) => !!(c && !c.uraOnly && c.voice);
 const uraPhoneChar = (c) => !!(c && c.voice);
 const callKey = (cl) => cl.charId + (cl.ura ? URA : '');
 const callCharOf = (env, cl) => (cl.ura ? getChar(env, cl.charId) : omoteChar(env, cl.charId));
-const callStop = (st, cl) => (cl.ura ? !!st.uraPaused : !cl.morning && omoteStop(st, cl.charId));
+const callStop = (st, cl) => (cl.ura ? !!st.uraPaused : !cl.morning && !cl.remind && omoteStop(st, cl.charId)); // モーニングコール・予定のお知らせは、止めている子でも話す
 const callNm = (c, cl) => (cl && cl.ura ? c.uraName || c.name : c.name);
 function phoneQuiet(ts, st) { // 電話に出られない時間（「通知と同じ」なら静かな時間と同じ）
   if (st.phoneQuietMode === 'off') return false;
@@ -2591,7 +2625,7 @@ async function getCall(env, id) {
 }
 const putCall = (env, cl) => kvSet(env, 'call:' + cl.id, cl);
 const delCall = (env, id) => env.DB.prepare('DELETE FROM kv WHERE k=?').bind('call:' + id).run();
-const callPublic = (cl) => ({ id: cl.id, charId: cl.charId, ...(cl.group ? { group: cl.group, invited: cl.invited || [] } : {}), ...(cl.morning ? { morning: true, ...(cl.nokeep ? { nokeep: true } : {}), ...(cl.test ? { test: true } : {}) } : {}), ...(cl.ura && !cl.group ? { ura: true } : {}), members: cl.members, dir: cl.dir, status: cl.status, created: cl.created, ringAt: cl.ringAt || 0, answeredAt: cl.answeredAt || 0, ringUntil: cl.ringAt ? cl.ringAt + CALL_RING_MS + CALL_GRACE_MS : 0 });
+const callPublic = (cl) => ({ id: cl.id, charId: cl.charId, ...(cl.group ? { group: cl.group, invited: cl.invited || [] } : {}), ...(cl.morning ? { morning: true, ...(cl.nokeep ? { nokeep: true } : {}), ...(cl.test ? { test: true } : {}) } : {}), ...(cl.ura && !cl.group ? { ura: true } : {}), ...(cl.remind ? { remind: cl.remind.map((x) => ({ at: x.at, what: x.what })), ...(cl.nokeep ? { nokeep: true } : {}) } : {}), members: cl.members, dir: cl.dir, status: cl.status, created: cl.created, ringAt: cl.ringAt || 0, answeredAt: cl.answeredAt || 0, ringUntil: cl.ringAt ? cl.ringAt + CALL_RING_MS + CALL_GRACE_MS : 0 });
 // アプリが「今は通話していない」と言ったときに、残っている通話（画面が固まった・アプリを閉じたなどで切れなかったもの）を片付ける。
 // 話していた通話は、ふつうに切ったときと同じく記録とまとめを残す（第54版）
 async function clearStaleCalls(env) {
@@ -2691,12 +2725,12 @@ async function maybeRingUra(env, c, st, now) {
 async function ringNow(env, cl, st, c) {
   cl.status = 'ringing'; cl.ringAt = Date.now();
   await putCall(env, cl);
-  await callNotify(env, st, c, callNm(c, cl), cl.morning ? '⏰ モーニングコール' : cl.ura ? '📞 着信（裏）' : '📞 着信', CALL_URL + '?call=' + encodeURIComponent(cl.id), true, !!cl.morning);
+  await callNotify(env, st, c, callNm(c, cl), cl.morning ? '⏰ モーニングコール' : cl.remind ? remTitle(cl.remind) : cl.ura ? '📞 着信（裏）' : '📞 着信', CALL_URL + '?call=' + encodeURIComponent(cl.id), true, cl.morning ? 8 : cl.remind ? REM_VOLUME : 0);
 }
 async function advanceCall(env, cl, st, c) {
   if (cl.status !== 'warming') return;
   if (await warmTTS(env, st)) return ringNow(env, cl, st, c);
-  if (cl.morning && Date.now() - cl.created > 60e3) return ringNow(env, cl, st, c); // モーニングコールは、声が遅れても時間どおりに鳴らす
+  if ((cl.morning || cl.remind) && Date.now() - cl.created > 60e3) return ringNow(env, cl, st, c); // モーニングコール・予定のお知らせは、声が遅れても時間どおりに鳴らす
   if (Date.now() - cl.created > CALL_WARM_GIVEUP) { await delCall(env, cl.id); await log(env, `電話（${c.name}）：声のサーバーを起こせなかったので、かけるのをやめました`); }
 }
 // 毎分：起こしている途中の着信・鳴りっぱなし・放置された通話・折り返しの予定
@@ -2737,6 +2771,7 @@ const VM_SCHEMA = { type: 'object', properties: { leave_voicemail: { type: 'bool
 async function callMissed(env, cl, c, how) {
   if (!['ringing', 'warming'].includes(cl.status)) return;
   if (cl.morning) return mcMissed(env, cl, c, how); // モーニングコール（第70版）：4分おきにかけ直す・最後は留守電かボイスメッセージ
+  if (cl.remind) return remMissed(env, cl, c, how); // 予定のお知らせ（第72版）：4分おきに2回かけ直す・最後は予定の中身を入れた留守電かボイスメッセージ
   await delCall(env, cl.id);
   const now = Date.now(), st = await getSettings(env), key = callKey(cl), nm = callNm(c, cl);
   const miss = await callMsg(env, key, 'char', 'call', '', how === 'declined' ? { declined: true } : null);
@@ -2860,14 +2895,15 @@ ${talk || '（なし）'}
 ${cl.sleep ? '' : el >= CALL_MAX_MS ? '- もう1時間近く話している。この返事で自然に話をまとめて、別れのあいさつをして hangup を true にする。\n' : el >= CALL_WRAP_MS ? '- かなり長く話している。そろそろ自然に話をまとめる方向へ（今すぐ切らなくてよい）。\n' : ''}${DIR_RULE}- ユーザーの行動・発言・気持ちを勝手に決めない。
 - 自分がAIであることには触れない。
 - キャラクターが未成年の設定である場合、性的な内容は一切話さない。
-${cl.transcript.length ? '' : cl.dir === 'in' ? '\n# 今回\nユーザーが電話に出たところ。かけた側として「もしもし」から話し始める。\n' : '\n# 今回\n電話に出たところ。「もしもし」など、出たときの第一声から。\n'}${sleepRules(cl, check)}${morningRules(cl, now)}${wake ? WAKE_RULE : ''}
-出力は {"messages": ["言葉1", "言葉2"], "hangup": false${wake ? ', "wake": ""' : ''}} の形のJSONのみ。`;
+${cl.transcript.length ? '' : cl.dir === 'in' ? '\n# 今回\nユーザーが電話に出たところ。かけた側として「もしもし」から話し始める。\n' : '\n# 今回\n電話に出たところ。「もしもし」など、出たときの第一声から。\n'}${sleepRules(cl, check)}${morningRules(cl, now)}${remindRules(cl, now)}${wake ? WAKE_RULE : ''}
+出力は {"messages": ["言葉1", "言葉2"], "hangup": false${wake ? ', "wake": ""' : ''}} の形のJSON（予定の欄があれば "reminders" も）のみ。`;
 }
 async function callReply(env, cl, c, check = '') {
   if (cl.ura) return uraCallReply(env, cl, c, check);
   const lastMe = [...cl.transcript].reverse().find((m) => m.who === 'me');
   const wake = !check && !cl.morning && phoneChar(c) && lastMe && cl.transcript[cl.transcript.length - 1] === lastMe && wakeTalk(cl.transcript.slice(-WAKE_TURNS).map((m) => m.text)); // モーニングコールの話が最近出ていれば時刻を聞く（第71版）（第70版）
   const st = await getSettings(env), now = Date.now();
+  const rem = !check && phoneChar(c) && lastMe && cl.transcript[cl.transcript.length - 1] === lastMe && remTalk(cl.transcript.slice(-WAKE_TURNS).map((m) => m.text)) ? await remOf(env, c.id) : null; // 予定のお知らせ（第72版）
   const state = await getState(env, c.id);
   const lifeInfo = await lifeContext(env, c, st, now).catch(() => '');
   const talk = await callTalk(env, c, 16);
@@ -2879,14 +2915,16 @@ async function callReply(env, cl, c, check = '') {
   }
   if (!turns.length || turns[turns.length - 1].role !== 'user') turns.push({ role: 'user', parts: [{ text: check ? '（ユーザーは何も言わない）' : cl.transcript.length ? '（少し黙っている）' : cl.dir === 'in' ? '（電話に出た）' : '（着信）' }] });
   const wb = await worldBlock(env, c.prompt + '\n' + cl.transcript.slice(-20).map((m) => m.text).join('\n'));
-  const r = await callAIObj(env, 'omote', wb + buildCallSystem(c, cl, lifeInfo, talk, state, now, check, wake), turns, wake ? CALL_WAKE_SCHEMA : CALL_SCHEMA, 'call_reply');
+  const r = await callAIObj(env, 'omote', wb + buildCallSystem(c, cl, lifeInfo, talk, state, now, check, wake) + (rem ? remRule(rem, now) : ''), turns, callSchema(wake, !!rem), 'call_reply');
   const lines = (Array.isArray(r && r.messages) ? r.messages : []).map((t) => String(t || '').replace(/^「([\s\S]*)」$/, '$1').trim()).filter(Boolean).slice(0, 3);
   if (!lines.length) throw new Error('返答が空でした');
   if (looksRefused(lines)) throw new AiRefused();
   const hangup = !cl.sleep && (!!(r && r.hangup) || (cl.answeredAt && now - cl.answeredAt > CALL_MAX_MS + 3 * MIN)); // 寝落ち通話はキャラから切らない（切るのはアプリ）
   let promise = null;
   if (wake) promise = await mcFromAI(env, c, r && r.wake, { keep: !cl.nokeep, src: cl.sleep ? 'sleep' : 'call' }).catch((e) => { log(env, 'モーニングコールの約束: ' + e.message); return null; });
-  return { lines: check === 'ask' ? lines.slice(0, 1) : lines, hangup, ...(promise ? { promise } : {}) };
+  let rems = null;
+  if (rem) rems = await remFromAI(env, c, r && r.reminders, { keep: !cl.nokeep, src: cl.sleep ? 'sleep' : cl.morning ? 'morning' : cl.remind ? 'remind' : 'call' }).catch((e) => { log(env, '予定のお知らせ: ' + e.message); return null; });
+  return { lines: check === 'ask' ? lines.slice(0, 1) : lines, hangup, ...(promise ? { promise } : {}), ...(rems && rems.length ? { rems } : {}) };
 }
 function callTurns(cl, check) {
   const turns = [];
@@ -3066,6 +3104,173 @@ ${await callTalk(env, c, 14) || '（なし）'}
   await pushToAll(env, c, out);
 }
 
+// ================================================================ 予定のお知らせ（第72版・表だけ・寝落ち通話やモーニングコールとは別枠）
+// kv rem:list ＝ [{ id, at, what, charId, who（pick/random。設定画面から）, keep, src（talk/call/sleep/morning/remind/set）, made }]（いくつでも・60日先まで・くり返しなし）
+// トーク・1対1の通話（ふつう・寝落ち・モーニングコール・予定のお知らせ）で頼む・変える・取りやめる（AI が reminders に書く）。設定画面からも（いつも記憶を引き継がない）。
+// 時刻ちょうどに頼んだ子が電話（静かな時間・止めている子でも。Bark は重要な通知・音量3）。ほかの電話中なら終わり次第（遅れても必ず）。
+// 同じ子の予定が同じころに重なれば1回の電話で。出なければ4分おきに2回かけ直し（計3回）。最後まで出なければ、予定の中身を入れた留守電かボイスメッセージ（性格で）。
+const REM_MAX = 100, REM_DAYS = 60, REM_TRIES = 3, REM_GAP = 4 * 60e3, REM_VOLUME = 3;
+const REM_RE = /予定|よてい|約束|やくそく|教えて|おしえて|知らせて|しらせて|リマインド|忘れ|わすれ|連絡して|れんらくして|電話して|でんわして|声かけて|こえかけて|変わった|かわった|変更|なくなった|中止|キャンセル|取りやめ|やめになった/;
+const remTalk = (texts) => texts.some((t) => REM_RE.test(wakeNorm(t)));
+const remNewId = () => 'r' + Date.now().toString(36) + randomAlnum(6);
+const REM_OPS_SCHEMA = { type: 'array', items: { type: 'object', properties: { op: { type: 'string', enum: ['add', 'change', 'cancel'] }, id: { type: 'string' }, when: { type: 'string' }, what: { type: 'string' } }, required: ['op', 'id', 'when', 'what'], additionalProperties: false } };
+function callSchema(wake, rem) {
+  if (!wake && !rem) return CALL_SCHEMA;
+  const props = { ...CALL_SCHEMA.properties, ...(wake ? { wake: { type: 'string' } } : {}), ...(rem ? { reminders: REM_OPS_SCHEMA } : {}) };
+  return { type: 'object', properties: props, required: Object.keys(props), additionalProperties: false };
+}
+const remSrcText = (src) => ({ talk: 'トーク', call: '電話', sleep: '寝落ち通話', morning: 'モーニングコールの電話', remind: '予定のお知らせの電話', set: '' }[src] || '');
+const remWhen = (t) => { const p = jstParts(t); return `${p.mo}/${p.d}(${p.w}) ${p.h}:${String(p.mi).padStart(2, '0')}`; };
+const remTitle = (items) => '📅 ' + items.map((x) => { const p = jstParts(x.at); return `${x.what}（${p.h}:${String(p.mi).padStart(2, '0')}）`; }).join('・');
+async function remList(env) { const l = await kvGet(env, 'rem:list', []); return Array.isArray(l) ? l : []; }
+const remSave = (env, list) => kvSet(env, 'rem:list', list.sort((a, b) => a.at - b.at).slice(0, REM_MAX));
+async function remOf(env, charId) { return (await remList(env)).filter((x) => x.charId === charId); }
+async function remView(env) {
+  const [list, run] = await Promise.all([remList(env), kvGet(env, 'rem:run', null)]);
+  if (!list.length && !run) return null;
+  return { list, run };
+}
+function remParseWhen(v, now) { // "YYYY-MM-DD HH:MM"・"MM-DD HH:MM"・"+分数" → 時刻（過ぎていれば 0、60日より先なら -1）
+  v = String(v || '').replace(/[０-９]/g, (d) => String.fromCharCode(d.charCodeAt(0) - 0xfee0)).replace(/：/g, ':').replace(/[＋]/g, '+').replace(/[年月\/]/g, '-').replace(/日/g, ' ').replace(/[\s　]+/g, ' ').trim(); // 空白は残す（日と時刻の区切り）
+  let t = 0;
+  const rel = /^\+(\d{1,6})(分)?$/.exec(v.replace(/\s/g, ''));
+  if (rel) t = now + +rel[1] * MIN;
+  else {
+    const m2 = /^(?:(\d{4})-)?(\d{1,2})-(\d{1,2})(?:\s*|T)(\d{1,2})(?::(\d{2})|時(?:(半)|(\d{1,2})分)?)$/.exec(v);
+    if (!m2) return 0;
+    const p = jstParts(now), y = m2[1] ? +m2[1] : p.y, mo = +m2[2], d = +m2[3], h = +m2[4], mi = m2[6] ? 30 : +(m2[5] || m2[7] || 0);
+    if (mo < 1 || mo > 12 || d < 1 || d > 31 || h > 23 || mi > 59) return 0;
+    const iso = (yy) => Date.parse(`${yy}-${String(mo).padStart(2, '0')}-${String(d).padStart(2, '0')}T${String(h).padStart(2, '0')}:${String(mi).padStart(2, '0')}:00+09:00`);
+    t = iso(y);
+    if (!m2[1] && t < now - 60e3) t = iso(y + 1); // 年を書かずに、もう過ぎた日付 → 来年
+  }
+  if (!t || t < now - 60e3) return 0;
+  if (t > now + REM_DAYS * 864e5) return -1;
+  return t;
+}
+function remRule(mine, now, talk = false) {
+  const cur = mine.length ? mine.map((x) => `- [${x.id}] ${remWhen(x.at)} ${x.what}`).join('\n') : '（今はなし）';
+  return `${talk ? '\n- reminders：' : '\n# 予定のお知らせ（reminders）\n- '}ユーザーが「〇日の〇時に△△があるから、時間になったら電話で教えて」のように、予定の時刻に知らせてほしいと頼んできたら、引き受けて reminders に {"op":"add","id":"","when":"YYYY-MM-DD HH:MM"（日本時間・24時間。今は${remWhen(now)}）,"what":"何の予定か（短く。例：歯医者）"} を書く。「3時間後」のように今からの時間なら when は "+分数"（例 "+180"）。日付や時刻があいまい（「来週」だけ・「夕方」だけなど）なら言葉で聞き返し、決まるまでは書かない。少し前に頼まれて、日時がこの返事で決まったときもここで書く。${REM_DAYS}日より先の予定は「ちょっと先すぎます」と断って書かない。
+  頼まれていた予定の日時や中身が変わったら {"op":"change","id":"下の一覧の id","when":"新しい日時（変わらなければ "")","what":"新しい中身（変わらなければ "")"}、なくなった・やめると言われたら {"op":"cancel","id":"下の一覧の id","when":"","what":""}。関係ないとき・もう書いたときは []。
+  あなたが今頼まれている予定：
+${cur}
+  引き受けたこと・変えたこと・取りやめたことは、言葉でも自然に伝える（何の予定か・いつかもはっきり）。モーニングコール（起こしてほしい）は reminders には書かない。
+`;
+}
+async function remFromAI(env, c, ops, { keep, src }) { // AI の reminders を予定の一覧に（足す・変える・取りやめる）。変わったものを返す
+  if (!Array.isArray(ops) || !ops.length) return [];
+  const now = Date.now(), list = await remList(env), out = [];
+  for (const o of ops.slice(0, 5)) {
+    const op = String((o && o.op) || ''), id = String((o && o.id) || ''), what = String((o && o.what) || '').trim().slice(0, 60);
+    if (op === 'add') {
+      const at = remParseWhen(o.when, now);
+      if (at === -1) { await log(env, `予定のお知らせ：60日より先なので入れませんでした（${c.name}・${what}）`); continue; }
+      if (!at || !what) { await log(env, `予定のお知らせ：日時か中身が読めませんでした（${c.name}・「${String(o.when || '').slice(0, 20)}」${what}）`); continue; }
+      if (list.some((x) => x.charId === c.id && x.at === at && x.what === what)) continue; // 同じものをもう一度書いただけ
+      if (list.length >= REM_MAX) { await log(env, `予定のお知らせ：${REM_MAX}件をこえたので入れませんでした`); continue; }
+      const r = { id: remNewId(), at, what, charId: c.id, who: 'pick', keep: !!keep, src, made: now };
+      list.push(r); out.push({ op, ...r });
+      await log(env, `予定のお知らせを覚えました：${c.name}・${remWhen(at)} ${what}（${remSrcText(src)}${keep ? '' : '・記憶に残さない'}）`);
+    } else if (op === 'change' || op === 'cancel') {
+      const r = list.find((x) => x.id === id && x.charId === c.id);
+      if (!r) continue;
+      if (op === 'cancel') { list.splice(list.indexOf(r), 1); out.push({ op, ...r }); await log(env, `予定のお知らせを取りやめ：${c.name}・${remWhen(r.at)} ${r.what}`); continue; }
+      const at = o.when ? remParseWhen(o.when, now) : r.at;
+      if (!at || at === -1) { await log(env, `予定のお知らせ：変更の日時が読めませんでした（${c.name}・「${String(o.when || '').slice(0, 20)}」）`); continue; }
+      const before = `${remWhen(r.at)} ${r.what}`;
+      Object.assign(r, { at, ...(what ? { what } : {}), changed: now });
+      out.push({ op, ...r });
+      await log(env, `予定のお知らせを変更：${c.name}・${before} → ${remWhen(r.at)} ${r.what}`);
+    }
+  }
+  if (out.length) await remSave(env, list);
+  return out;
+}
+function remindRules(cl, now) {
+  if (!cl.remind) return '';
+  const items = cl.remind.map((x) => {
+    const late = now - x.at > 3 * MIN ? `（予定の時刻を${Math.round((now - x.at) / MIN)}分すぎてしまった。前の電話が長引いたため）` : '';
+    const from = x.src === 'set' ? 'ユーザーが自分で登録した予定' : `${remWhen(x.made)}ごろに${remSrcText(x.src)}で頼まれた`;
+    return `- ${remWhen(x.at)}：${x.what}（${from}）${late}`;
+  }).join('\n');
+  const el = cl.answeredAt ? now - cl.answeredAt : 0;
+  return `\n# 予定のお知らせ（最優先）\nユーザーに頼まれていた予定の時刻になったので、知らせるためにあなたから電話をかけた。${(cl.remTry || 1) > 1 ? `（これが${cl.remTry}回目の電話。前の電話には出てもらえなかった）` : ''}
+${items}
+- 最初に、何の予定か・何時かをはっきり伝えて（例：「前に${remSrcText(cl.remind[0].src) || '話'}で言ってた歯医者、15時ですけど大丈夫ですか？」）、大丈夫かを確かめる。遅れてしまったなら、そのことにも触れる。
+- ユーザーが大丈夫と言ったら、少しだけ話して、あなたのほうから別れのあいさつをして hangup を true にする（長電話にしない。予定のじゃまをしない）。
+${el > 8 * MIN ? '- もう十分話した。この返事で自然に話をまとめて、別れのあいさつをして hangup を true にする。\n' : ''}`;
+}
+async function remRing(env, run) {
+  const st = await getSettings(env), c = (await loadChars(env)).find((x) => x.id === run.charId);
+  if (!c) { await kvDel(env, 'rem:run'); await log(env, `予定のお知らせ：かける子がいませんでした（${run.items.map((x) => x.what).join('・')}）`); return; }
+  const calls = await listCalls(env);
+  if (calls.some((x) => x.remind && ['warming', 'ringing', 'active'].includes(x.status))) return;
+  if (busyCall(calls) || (await kvGet(env, 'mc:run', null))) return; // ほかの電話・モーニングコールの途中：終わり次第（遅れても必ずかける）
+  run.tries = (run.tries || 0) + 1; run.nextAt = 0; run.lastRing = Date.now();
+  await kvSet(env, 'rem:run', run);
+  const cl = { id: newCallId(), charId: c.id, members: [c.id], dir: 'in', status: 'warming', created: Date.now(), why: 'remind', remind: run.items, remTry: run.tries, transcript: [], ...(run.keep ? {} : { nokeep: true }) };
+  await putCall(env, cl);
+  await advanceCall(env, cl, st, c);
+}
+async function runReminders(env) {
+  const now = Date.now();
+  let run = await kvGet(env, 'rem:run', null);
+  if (run) {
+    if (run.nextAt && run.nextAt <= now) await remRing(env, run);
+    else if (!run.nextAt && !(await listCalls(env)).some((x) => x.remind) && now - (run.lastRing || now) > 10 * MIN) await kvDel(env, 'rem:run'); // 念のため：通話が見当たらないまま残ったもの
+    return;
+  }
+  const list = await remList(env);
+  const due = list.filter((x) => x.at <= now);
+  const soon = list.filter((x) => x.at > now && x.at - now <= 90e3);
+  if (soon.length || due.length) await warmTTS(env, await getSettings(env), 15e3).catch(() => {}); // 1分前に GPU を起こしておく
+  if (!due.length) return;
+  if (busyCall(await listCalls(env)) || (await kvGet(env, 'mc:run', null))) return; // 電話中なら、終わり次第
+  const first = due[0];
+  let charId = first.charId;
+  if (first.who === 'random' && !charId) { const cs = await mcChars(env); charId = cs.length ? cs[Math.floor(Math.random() * cs.length)].id : ''; }
+  if (!charId) { await remSave(env, list.filter((x) => x !== first)); await log(env, `予定のお知らせ：かけられる子がいませんでした（${first.what}）`); return; }
+  const group = due.filter((x) => x === first || (x.charId === charId && x.who !== 'random' && !!x.keep === !!first.keep)); // 同じ子の予定は1回の電話で
+  await remSave(env, list.filter((x) => !group.includes(x)));
+  run = { charId, keep: !!first.keep, items: group.map((x) => ({ id: x.id, at: x.at, what: x.what, src: x.src, made: x.made })), tries: 0, nextAt: now, at: first.at };
+  await kvSet(env, 'rem:run', run);
+  await remRing(env, run);
+}
+async function remMissed(env, cl, c, how) {
+  await delCall(env, cl.id);
+  const run = await kvGet(env, 'rem:run', null), now = Date.now();
+  const nk = cl.nokeep ? { nokeep: true } : {};
+  const what = cl.remind.map((x) => x.what).join('・').slice(0, 100);
+  const miss = await callMsg(env, c.id, 'char', 'call', '', { remind: what, ...(how === 'declined' ? { declined: true } : {}), ...nk });
+  const last = !run || how === 'declined' || (run.tries || 0) >= REM_TRIES;
+  if (!last) { run.nextAt = (cl.ringAt || now) + REM_GAP; run.lastRing = cl.ringAt || now; await kvSet(env, 'rem:run', run); await pushToAll(env, c, [miss]); return; }
+  await kvDel(env, 'rem:run');
+  const out = [miss];
+  try {
+    const items = cl.remind.map((x) => `- ${remWhen(x.at)}：${x.what}`).join('\n');
+    const sys = `あなたは${c.name}として、ユーザーに頼まれていた予定を知らせるために電話を${cl.remTry || REM_TRIES}回かけたが、${how === 'declined' ? '切られてしまった（拒否された）' : '一度も出てもらえなかった'}。最後に、留守番電話かボイスメッセージ（トークに声で送る）のどちらかを1つ残す。
+# キャラクター: ${c.name}
+${charPersona(c, 'omote', 3000)}
+# 知らせる予定
+${items}
+# 決めること
+- kind：留守番電話（voicemail）か、ボイスメッセージ（voice_message）か。キャラクターの性格で選ぶ。
+- text：残す言葉。**何の予定か・何時かを必ず入れる**。声に出して話す言葉だけで1〜3文（15秒くらいまで）。書き言葉・絵文字・描写・（ ）書きは使わない。
+- 自分がAIであることには触れない。キャラクターが未成年の設定である場合、性的な内容は一切書かない。`;
+    const r = await aiJson(env, 'omote', sys, '（予定のお知らせの電話に出てもらえなかった）', MC_LEAVE_SCHEMA, 'remind_leave');
+    const text = String((r && r.text) || '').trim().slice(0, 300);
+    if (text && r.kind === 'voice_message') out.push(await callMsg(env, c.id, 'char', 'voice', text, { est: vmsgEst(text), remind: what, ...nk }));
+    else if (text) {
+      const m = await callMsg(env, c.id, 'char', 'vm', text, { remind: what, ...nk });
+      const list = await kvGet(env, 'vm:' + c.id, []);
+      list.push({ id: m.id, at: m.at, text, heard: false });
+      await kvSet(env, 'vm:' + c.id, list.slice(-VM_MAX));
+      out.push(m);
+    }
+  } catch (e) { await log(env, `予定のお知らせの留守電（${c.name}）: ${e.message}`); }
+  await pushToAll(env, c, out);
+}
+
 // 第68版：記憶を引き継がない寝落ち通話の記録（と、だれも出なかった記録）は、キャラ（AI）に見せない。あなたの画面には残す。
 // AI に渡す履歴は aiRecent で読む（/sync など、画面に返すものは recent のまま）
 const aiHidden = (m) => !!(m && m.kind && m.meta && m.meta.nokeep); // 記憶を引き継がない寝落ち通話・モーニングコール（第70版）の記録・不在・留守電・ボイスメッセージ
@@ -3086,7 +3291,8 @@ async function finishCall(env, cl, c, { by = 'me', est = null } = {}) {
   }
   if (sum && !cl.ura) await env.DB.prepare("INSERT INTO memories (char_id,kind,text,due,status,created,followed) VALUES (?, 'fact', ?, '', 'open', ?, 0)").bind(c.id, `${jstDay(now)}にユーザーと電話で話した：${sum}`.slice(0, 200), now).run(); // 裏は表の記憶に入れない（裏のトークの記録 meta.sum で覚えている）
   if (cl.morning) await kvDel(env, 'mc:run'); // 出た＝起こし終わり
-  const meta = { dur, by, dir: cl.dir, ...(cl.sleep ? { sleep: true } : {}), ...(cl.morning ? { morning: true } : {}), ...(cl.test ? { test: true } : {}), ...(cl.nokeep ? { nokeep: true } : {}), ...(sum ? { sum } : {}), ...(est && Number.isFinite(Number(est.usd)) ? { usd: Math.round(Number(est.usd) * 1e4) / 1e4, gpuMs: Math.round(num(est.gpuMs, 0)) } : {}) };
+  if (cl.remind) await kvDel(env, 'rem:run');
+  const meta = { dur, by, dir: cl.dir, ...(cl.sleep ? { sleep: true } : {}), ...(cl.morning ? { morning: true } : {}), ...(cl.remind ? { remind: cl.remind.map((x) => x.what).join('・').slice(0, 100) } : {}), ...(cl.test ? { test: true } : {}), ...(cl.nokeep ? { nokeep: true } : {}), ...(sum ? { sum } : {}), ...(est && Number.isFinite(Number(est.usd)) ? { usd: Math.round(Number(est.usd) * 1e4) / 1e4, gpuMs: Math.round(num(est.gpuMs, 0)) } : {}) };
   return callMsg(env, callKey(cl), cl.dir === 'in' ? 'char' : 'me', 'callog', '', meta);
 }
 
@@ -5923,6 +6129,7 @@ ${opt.quote.map((m, i) => `  ${i}：「${trunc(m.text, 60)}」`).join('\n')}`;
   ボイスメッセージにする吹き出しは、声に出して話す言葉だけ（描写・絵文字・顔文字・記号は入れない）。長さはふだん1〜3文の短め。気持ちが高まった大事な場面だけ長めでもよい（最長で声で3分＝800字くらいまで）。
   キャラクターに合うなら、たまに「声が聞きたい」「ボイスメッセージ送って」とユーザーにねだってもよい（しつこくしない）。`;
   }
+  if (opt.rem) { props.reminders = REM_OPS_SCHEMA; extra += remRule(opt.rem, Date.now(), true); }
   if (opt.wake) { props.wake = { type: 'string' }; extra += '\n- wake：ユーザーが、決まった時刻にあなたから電話をかけて起こしてほしい（モーニングコール）と頼んできて、引き受けたなら、その時刻 "HH:MM"（24時間・日本時間）。「3時間後」のように今からの時間で言われたら "+分数"（例 "+180"）。少し前に頼まれて、時刻がこの返事で決まった（あなたが「何時？」と聞いてユーザーが答えた）ときもここで書く。時刻があいまいなら messages で確かめ、決まるまでは ""。前に引き受けた約束をやめてほしいと言われたら "cancel"。関係ないとき・もう書いたときは ""。引き受けるのが基本（性格に合った言い方で、引き受けたことと時刻を messages でも伝える）。'; }
   if (opt.typo) extra += '\n- 今回は、吹き出しのどれか1か所で、スマホらしい自然な打ち間違い（変換ミスなど）をして、次の吹き出しで「＊正しい言葉」と短く訂正する。キャラクターに合わなければしなくてよい。';
   if (opt.react) {
@@ -5951,6 +6158,7 @@ ${Object.keys(STAMPS).filter((k) => k !== '🏃').map((k) => `  ${k}：${STAMPS[
     postscript: opt.ps ? String((r && r.postscript) || '').trim().slice(0, 200) : '',
     voiceIdx: opt.voice && Number.isInteger(Number(r && r.voice)) ? Number(r.voice) : -1,
     wake: opt.wake ? String((r && r.wake) || '').trim() : '',
+    reminders: opt.rem && Array.isArray(r && r.reminders) ? r.reminders : null,
     meet: opt.meet && r ? { status: String(r.meet_status || '').trim(), date: String(r.meet_date || '').trim(), time: String(r.meet_time || '').trim(), place: String(r.meet_place || '').trim() } : null,
   };
 }
@@ -6201,7 +6409,7 @@ async function sendBark(env, st, { title, body, cid, group, url, ring, silent, c
   if (st.barkSound) p.sound = st.barkSound;
   if (url) p.url = url; // タップで開くページ（会う約束・電話の通知）
   if (ring) { p.call = '1'; p.level = 'timeSensitive'; } // 着信：Bark の着信音を鳴らし続ける
-  if (critical) { p.level = 'critical'; p.volume = '8'; } // モーニングコール（第70版）：マナーモードでも鳴る（Bark のアプリで「重要な通知」を許可したとき）
+  if (critical) { p.level = 'critical'; p.volume = String(critical === true ? 8 : critical); } // モーニングコール（第70版・音量8）・予定のお知らせ（第72版・音量3）：マナーモードでも鳴る（Bark のアプリで「重要な通知」を許可したとき）
   if (silent) { p.level = 'passive'; delete p.sound; } // 音なしで届く
   const icon = await barkIconUrl(env, cid).catch(() => '');
   if (icon) p.icon = icon;

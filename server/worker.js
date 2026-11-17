@@ -14,7 +14,7 @@
 //    ・Cron トリガー  * * * * *  （毎分。実際に動くのは13分おき）
 // =====================================================================
 
-const VERSION = '第77版（2026-11-17 13:15:00 更新・テストの電話は記憶に残さない・その時刻の様子と「ふだんなら」を表示）';
+const VERSION = '第78版（2026-11-17 15:00:00 更新・寝落ち通話は必ず出る・テストの説明で［終了］が隠れないように）';
 const DEFAULT_MODEL = 'gemini-flash-latest';
 const DEFAULT_GROK_MODEL = 'grok-4.7';                 // X（Twitter）の Grok と同じ最新世代
 const FALLBACK_GROK_MODEL = 'grok-4-fast-non-reasoning'; // 上が使えないときの予備
@@ -512,7 +512,7 @@ async function route(key, url, body, env, ctx, req) {
       const busy = busyCall(calls);
       if (busy && busy.status === 'active') throw new HttpError(409, 'いまは別の電話中です');
       for (const x of calls) if (x.status === 'dialing') await delCall(env, x.id);
-      const d = ura ? await decideAnswerUra(env, c, st, Date.now()) : await decideAnswer(env, c, st, Date.now());
+      const d = body.sleep ? { answer: true, after: 'none', line: '', reason: '寝落ち通話' } : ura ? await decideAnswerUra(env, c, st, Date.now()) : await decideAnswer(env, c, st, Date.now()); // 第78版：寝落ち通話は必ず出る
       const test = !!body.test; // テスト発信（第49版）：AI がどう決めても必ず出る。ふだんなら出たかどうかと、その理由を返す。第77版：テストは記憶に残さない
       const testInfo = test ? { would: !!d.answer, reason: String(d.reason || '').slice(0, 200), now: ura ? '' : activityText(await getState(env, c.id), Date.now(), c.id).slice(0, 200) } : null;
       const cl = { id: newCallId(), charId: c.id, members: [c.id], dir: 'out', status: 'dialing', created: Date.now(), answer: test || !!d.answer, after: d.after || 'none', line: String(d.line || '').slice(0, 200), transcript: [], test, ...(test ? { nokeep: true, testInfo } : {}), ...(ura ? { ura: true } : {}), ...(body.sleep ? { sleep: true, ...(body.keep === false ? { nokeep: true } : {}) } : {}) }; // 寝落ち通話（第66版）
@@ -736,7 +736,7 @@ async function route(key, url, body, env, ctx, req) {
       if (busy && busy.status === 'active') throw new HttpError(409, 'いまは別の電話中です');
       for (const x of calls) if (x.status === 'dialing') await delCall(env, x.id);
       const test = !!body.test;
-      const d = test || (!g.ura && !g.lateJoin) ? null : g.ura ? await decideUraGroupAnswer(env, g, ms, Date.now(), chars) : await decideGroupAnswer(env, g, ms, Date.now()); // 裏も「ふつう」なら出る子を決める（第62版。test＝必ず全員出る）
+      const d = test || body.sleep || (!g.ura && !g.lateJoin) ? null : g.ura ? await decideUraGroupAnswer(env, g, ms, Date.now(), chars) : await decideGroupAnswer(env, g, ms, Date.now()); // 裏も「ふつう」なら出る子を決める（第62版。test＝必ず全員出る。第78版：寝落ち通話も全員出る）
       const joined = d ? ms.filter((c) => d[c.id] && d[c.id].answer).map((c) => c.id) : ms.map((c) => c.id);
       const cl = { id: newCallId(), group: g.id, ...(g.ura ? { ura: true } : {}), ...(body.sleep ? { sleep: true, ...(body.keep === false ? { nokeep: true } : {}) } : {}), charId: g.id, members: joined, invited: ms.map((c) => c.id), dir: 'out', status: 'dialing', created: Date.now(), transcript: [], batch: 0, test };
       if (body.from) { // 前の通話の最後の流れを、そのまま覚えてかけ直す（言ったことにはしない＝old）

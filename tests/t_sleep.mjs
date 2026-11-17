@@ -112,4 +112,19 @@ const ug = (await call('POST', '/group', { group: { name: '裏', members: [a.id]
 r = await call('POST', '/gcall/start', { groupId: ug.id, sleep: true, keep: false });
 ok(r.call && r.call.status, 'ura group sleep allowed (第70版)');
 
+// ---- 第78版：寝落ち通話は、AI が「出られない」と決めても必ず出る（1対1・グループ）
+const ansAI = answer; answer.one = { messages: ['もしもし'], hangup: false };
+const fetch0 = globalThis.fetch;
+globalThis.fetch = async (u, i) => { const b = JSON.parse(i.body || '{}'); const sch = JSON.stringify(b.generationConfig ? b.generationConfig.responseSchema : b.response_format || {}); if (sch.includes('"after"')) return new Response(JSON.stringify({ candidates: [{ content: { parts: [{ text: JSON.stringify({ answer: false, reason: '授業中', after: 'none', line: '' }) }] } }] })); if (sch.includes('"members"')) return new Response(JSON.stringify({ choices: [{ message: { content: JSON.stringify({ members: [{ name: '朱里', answer: false, reason: '' }] }) } }] })); return fetch0(u, i); };
+let rs = await call('POST', '/call/start', { charId: a.id });
+ok(!rs.call.answer && rs.ringMs > 20000, 'normal call: AI says busy → no answer');
+await call('POST', '/call/decline', { id: rs.call.id });
+rs = await call('POST', '/call/start', { charId: a.id, sleep: true, keep: false });
+rs = await call('POST', '/call/connect', { id: rs.call.id });
+ok(rs.answered, 'sleep call: always answers');
+await call('POST', '/call/end', { id: rs.call.id });
+const ug2 = (await call('POST', '/group', { group: { name: '裏2', members: [a.id] } })).group;
+rs = await call('POST', '/gcall/start', { groupId: ug2.id, sleep: true, keep: true });
+ok(rs.call.members.includes(a.id), 'ura group sleep call: everyone answers');
+globalThis.fetch = fetch0;
 console.log(fails ? `${fails} FAILED` : 'ALL PASSED');

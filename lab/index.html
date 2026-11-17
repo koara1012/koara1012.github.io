@@ -151,6 +151,9 @@ body.ura .costbar{background:#2e2333;color:#cbb9cf;border-color:#43354a}
 /* モーニングコール（第70版） */
 .mcbar{flex:none;display:flex;align-items:center;gap:8px;padding:8px 14px;background:#fff8e6;border-bottom:1px solid var(--line);font-size:13.5px}
 .mcbar[hidden]{display:none}
+.cvTest{margin:6px 18px 0;padding:6px 10px;border-radius:10px;background:rgba(255,255,255,.18);color:#fff;font-size:12.5px;line-height:1.45;text-align:center}
+.cvTest[hidden]{display:none}
+.bub.call small.tinfo,.bub.callog small.tinfo{display:block;margin-top:3px;opacity:.85}
 .rembar{background:#eef6ff}
 .mcbar span{flex:1}
 .mcbar button{border:0;border-radius:14px;padding:5px 12px;font-size:13px;background:#efe3c4}
@@ -1102,6 +1105,7 @@ body.ura #list.tlMode{background:#efe9f0}
   <button id="cvFxToggle">☎ 電話の音 OFF</button>
   <div class="cvName" id="cvName"></div>
   <div class="cvStat" id="cvStat"></div>
+  <div class="cvTest" id="cvTest" hidden></div>
   <div class="cvTime" id="cvTime"></div>
   <div class="cvAvWrap"><i></i><i class="r2"></i><div class="cvAv" id="cvAv"></div></div>
   <div id="cvMembers"></div>
@@ -1123,7 +1127,7 @@ body.ura #list.tlMode{background:#efe9f0}
 // 置き場所で切り替える：/lab/（試作）と /chat/（本番）で同じファイルを使う
 // 試作は本番と同じサイトなので、保存の名前に「lab.」を付けて本番の chat.* には書き込まない。通知も登録しない
 const IS_LAB = /\/lab\//.test(location.pathname);
-const APP_VERSION = '第76版（2026-11-17 12:20:00 更新・着信の［拒否］を押すと「本当に拒否しますか？」と確かめる）' + (IS_LAB ? '【試作】' : '');
+const APP_VERSION = '第77版（2026-11-17 13:15:00 更新・テストの電話は記憶に残さない・その時刻の様子と「ふだんなら」を表示）' + (IS_LAB ? '【試作】' : '');
 if (IS_LAB) { document.title = '【試作】トーク（統合）'; const mt = document.querySelector('meta[name=apple-mobile-web-app-title]'); if (mt) mt.content = 'トーク試作'; }
 const $ = (id) => document.getElementById(id);
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
@@ -2090,11 +2094,11 @@ function bubHTML(m) {
   if (m.retracted) return `<div class="bub gone">${m.sender === 'me' ? 'メッセージの送信を取り消しました' : '送信を取り消しました'}</div>`;
   const src = m.localImg || (m.image && imgCache[m.image]);
   if (m.kind === 'voice') return vmsgHTML(m);
-  if (m.kind === 'call') { const mt = m.meta || {}, sp = mt.morning || mt.remind; return `<div class="bub call"><span class="ic">${mt.morning ? '⏰' : mt.remind ? '📅' : '📞'}</span><span><b>${mt.morning ? 'モーニングコール' + (mt.test ? '（テスト）' : '') : mt.remind ? `予定のお知らせ（${esc(mt.remind)}）` : ''}${mt.declined ? (sp ? '（拒否）' : '着信（拒否）') : sp ? '' : '不在着信'}</b><small>${mt.declined ? 'あなたが拒否しました' : '応答なし'}${mt.nokeep ? '・キャラは知りません' : ''}</small></span></div>`; }
+  if (m.kind === 'call') { const mt = m.meta || {}, sp = mt.morning || mt.remind; return `<div class="bub call"><span class="ic">${mt.morning ? '⏰' : mt.remind ? '📅' : '📞'}</span><span><b>${mt.morning ? 'モーニングコール' + (mt.test ? '（テスト）' : '') : mt.remind ? `予定のお知らせ（${esc(mt.remind)}）` : ''}${mt.declined ? (sp ? '（拒否）' : '着信（拒否）') : sp ? '' : '不在着信'}${mt.test && !mt.morning ? '（テスト）' : ''}</b><small>${mt.declined ? 'あなたが拒否しました' : '応答なし'}${mt.nokeep ? '・キャラは知りません' : ''}</small>${mt.testInfo ? `<small class="tinfo">${esc(testInfoText(mt.testInfo, 'in')).replace(/\n/g, '<br>')}</small>` : ''}</span></div>`; }
   if (m.kind === 'vm') { const v = vmOf(m.charId, m.id); return `<div class="bub call vm" data-vm="${m.id}"><span class="ic">▶</span><span><b>留守番電話${v && !v.heard ? '<span class="new"></span>' : ''}</b><small>${v ? (v.heard ? 'タップで再生' : '新しい留守電・タップで再生') : '古い留守電（もう残っていません）'}</small></span></div>`; }
   if (m.kind === 'callout') return `<div class="bub call out" data-callback="1"><span class="ic">📞</span><span><b>${m.meta && m.meta.group ? 'グループ通話' : '発信'}</b><small>${m.meta && m.meta.group ? 'だれも出ませんでした' : '応答なし'}・タップでかけ直す</small></span></div>`;
   if (m.kind === 'callog' && m.meta && m.meta.group && m.meta.log && !m.retracted) return `<div class="bub call log" data-gclog="${esc(m.id)}"><span class="ic">${m.meta.sleep ? '🌙' : '📞'}</span><span><b>${m.meta.sleep ? '寝落ち通話' : m.meta.from ? 'グループ通話（続き）' : 'グループ通話'} ${durText(m.meta.dur)}</b><small>タップで会話を読む・続きから話す</small></span></div>`; // 会話が残っている通話（第57版・第59版で裏も）
-  if (m.kind === 'callog') { const mt = m.meta || {}; return `<div class="bub call log" data-callback="1"><span class="ic">${mt.sleep ? '🌙' : mt.morning ? '⏰' : mt.remind ? '📅' : '📞'}</span><span><b>${mt.sleep ? '寝落ち通話' : mt.morning ? 'モーニングコール' : mt.remind ? `予定のお知らせ（${esc(mt.remind)}）` : mt.group ? 'グループ通話' : '通話'} ${durText(mt.dur)}</b><small>${mt.nokeep ? '記憶に残さない通話（キャラは知りません）・' : ''}${mt.usd != null ? `約$${Number(mt.usd).toFixed(3)}（約${yenOf(Number(mt.usd))}円）` : 'タップでかけ直す'}</small></span></div>`; }
+  if (m.kind === 'callog') { const mt = m.meta || {}; return `<div class="bub call log" data-callback="1"><span class="ic">${mt.sleep ? '🌙' : mt.morning ? '⏰' : mt.remind ? '📅' : '📞'}</span><span><b>${mt.sleep ? '寝落ち通話' : mt.morning ? 'モーニングコール' : mt.remind ? `予定のお知らせ（${esc(mt.remind)}）` : mt.group ? 'グループ通話' : '通話'}${mt.test && !mt.morning ? '（テスト）' : ''} ${durText(mt.dur)}</b><small>${mt.nokeep ? '記憶に残さない通話（キャラは知りません）・' : ''}${mt.usd != null ? `約$${Number(mt.usd).toFixed(3)}（約${yenOf(Number(mt.usd))}円）` : 'タップでかけ直す'}</small>${mt.testInfo ? `<small class="tinfo">${esc(testInfoText(mt.testInfo, mt.dir)).replace(/\n/g, '<br>')}</small>` : ''}</span></div>`; }
   if (m.image || m.localImg) return `<div class="bub photo"><img ${src ? `src="${src}"` : `data-img="${esc(m.image)}"`} alt="${esc(m.alt || '写真')}"></div>${m.text ? `<div class="bub">${esc(m.text)}</div>` : ''}`;
   return `<div class="bub">${quoteHTML(m)}${esc(m.text)}</div>`;
 }
@@ -3674,6 +3678,7 @@ function callScreen(c, mode) { // mode: dial / incoming / active / vm
       ? '<button class="cvBtn gray" id="cvVmPlay">▶ 再生</button><button class="cvBtn" id="cvVmClose">閉じる</button>'
       : `<button class="cvBtn gray" id="cvMute">🔊 スピーカー</button><button class="cvBtn" id="cvEnd">📞 終了</button>`;
   $('cvInput').hidden = mode !== 'active';
+  renderCvTest(mode);
   $('cvSub').innerHTML = ''; $('cvSub').hidden = mode === 'vm' ? !vmSubsOn() : !callSubsOn();
   $('cvSubToggle').textContent = (mode === 'vm' ? vmSubsOn() : callSubsOn()) ? '字幕 ON' : '字幕 OFF';
   const on = (id, f) => { const b = $(id); if (b) b.onclick = f; };
@@ -3682,6 +3687,18 @@ function callScreen(c, mode) { // mode: dial / incoming / active / vm
   on('cvVmPlay', () => vmPlay()); on('cvVmClose', () => closeCallScreen());
 }
 function setStat(t) { $('cvStat').textContent = t; }
+// テストの電話（第77版）：記憶に残さない。その時刻にキャラが何をしていたか・ふだんなら出たか（かけてきたか）を、通話中ずっと見せる
+function testInfoText(ti, dir) {
+  if (!ti) return '';
+  const a = dir === 'out' && ti.would !== undefined ? `ふだんなら${ti.would ? '出ていました' : '出ていませんでした'}${ti.reason ? `（${ti.reason}）` : ''}` : (ti.off || 'ふだんでも、かけてくることがある時間です');
+  return `${a}${ti.now ? `\nその時刻の様子：${ti.now.replace(/^いま：/, '')}` : ''}`;
+}
+function renderCvTest(mode) {
+  const cur = CALL.cur, ti = mode !== 'vm' && cur && cur.test ? cur.testInfo : null, el = $('cvTest');
+  el.hidden = !(mode !== 'vm' && cur && cur.test);
+  el.textContent = el.hidden ? '' : `テスト（記憶に残しません）\n${testInfoText(ti, cur.dir)}`.trim();
+  el.style.whiteSpace = 'pre-line';
+}
 function subLine(who, text) {
   const box = $('cvSub');
   box.insertAdjacentHTML('beforeend', `<div class="${who}">${who === 'me' ? 'あなた：' : ''}${esc(text)}</div>`);
@@ -3745,8 +3762,8 @@ async function startOutgoing(c, test, opt) { // test：必ず出るテスト発�
   let r;
   try { r = await api('POST', '/call/start', { charId: c.id, test: !!test, force: true, ...(sl || {}), ...(ura ? { ura: true } : {}) }); } // force：残っている通話を片付けてからかける（第54版）
   catch (e) { toast(e.message); closeCallScreen(); return; }
-  if (r.test) toast(`テスト：ふだんなら${r.test.wouldAnswer ? '出ていました' : '出ませんでした'}${r.test.reason ? '（' + r.test.reason + '）' : ''}${r.test.now ? '。今の様子：' + r.test.now : ''}`, 9000);
   if (!CALL.cur) { api('POST', '/call/decline', { id: r.call.id }).catch(() => {}); return; }
+  if (r.test) { CALL.cur.test = true; CALL.cur.testInfo = { would: r.test.wouldAnswer, reason: r.test.reason, now: r.test.now }; renderCvTest(CALL.screenMode); } // 第77版：通話中ずっと見せる
   CALL.cur.id = r.call.id;
   await sleep(r.ringMs);
   if (!CALL.cur) { api('POST', '/call/decline', { id: r.call.id }).catch(() => {}); return; }
@@ -3772,7 +3789,7 @@ function showIncoming(call) {
   const c = charById(call.charId); if (!c) return;
   if (call.ringUntil && Date.now() > call.ringUntil) return;
   CALL.seen.add(call.id);
-  CALL.cur = { id: call.id, charId: c.id, dir: 'in', gpuStart: call.ringAt || Date.now(), muted: false, ...(call.ura ? { ura: true } : {}), ...(call.morning ? { morning: true } : {}) };
+  CALL.cur = { id: call.id, charId: c.id, dir: 'in', gpuStart: call.ringAt || Date.now(), muted: false, ...(call.ura ? { ura: true } : {}), ...(call.morning ? { morning: true } : {}), ...(call.test ? { test: true, testInfo: call.testInfo } : {}) };
   callScreen(c, 'incoming'); setStat(call.morning ? '⏰ モーニングコール' : call.remind ? '📅 ' + call.remind.map((x) => x.what).join('・') : call.ura ? '着信（裏）' : '着信'); $('cvTime').textContent = '';
   playRingtone();
   // 鳴っている間も GPU を起こし続ける（第51版）。サーバーは起こしてから鳴らすが、Modal は30秒で止まるので、遅れて出ると最初の声が遅くなっていた

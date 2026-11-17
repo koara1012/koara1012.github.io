@@ -100,7 +100,7 @@ answer.ans = { answer: false, after: 'callback', line: '' };
 // ---- 着信（テスト）：GPU を起こしてから鳴らす・Bark は着信音を鳴らし続ける
 DB.raw.prepare("DELETE FROM kv WHERE k LIKE 'callback:%'").run();
 health = 0; bark.length = 0;
-r = await call('POST', '/call/test', { charId: c.id });
+r = await call('POST', '/call/test', { charId: c.id, keep: true });
 await flush();
 let s = await call('GET', '/sync?since=0');
 let ring = s.calls.find((x) => x.status === 'ringing');
@@ -113,7 +113,7 @@ r = await call('POST', '/call/end', { id: ring.id, by: 'me' });
 ok(r.message && r.message.sender === 'char' && r.message.meta.dur >= 0, 'incoming call log');
 
 // ---- 着信を拒否 → 留守電（残す）
-r = await call('POST', '/call/test', { charId: c.id }); await flush();
+r = await call('POST', '/call/test', { charId: c.id, keep: true }); await flush();
 ring = (await call('GET', '/sync?since=0')).calls.find((x) => x.status === 'ringing');
 await call('POST', '/call/decline', { id: ring.id }); await flush();
 s = await call('GET', '/sync?since=0');
@@ -124,7 +124,7 @@ await call('POST', '/vm/heard', { charId: c.id, id: vm.id });
 ok((await call('GET', '/sync?since=0')).vms[c.id].slice(-1)[0].heard === true, 'voicemail marked heard');
 // 不在（25秒＋猶予を過ぎた）→ 留守電を残さないことも
 answer.vm = { leave_voicemail: false, voicemail: '', send_line: true, line: 'なんで出ないの？' };
-r = await call('POST', '/call/test', { charId: c.id }); await flush();
+r = await call('POST', '/call/test', { charId: c.id, keep: true }); await flush();
 ring = (await call('GET', '/sync?since=0')).calls.find((x) => x.status === 'ringing');
 const k = 'call:' + ring.id; const raw = JSON.parse(DB.raw.prepare('SELECT v FROM kv WHERE k=?').get(k).v); raw.ringAt -= 60e3;
 DB.raw.prepare('UPDATE kv SET v=? WHERE k=?').run(JSON.stringify(raw), k);
@@ -137,7 +137,7 @@ try { await call('POST', '/call/answer', { id: ring.id }); ok(false, 'late answe
 
 // ---- 起こせないときは鳴らさない
 healthOk = false; bark.length = 0;
-r = await call('POST', '/call/test', { charId: c.id }); await flush();
+r = await call('POST', '/call/test', { charId: c.id, keep: true }); await flush();
 ok(!(await call('GET', '/sync?since=0')).calls.length && !bark.length, 'GPU not awake → not ringing yet');
 const wk = DB.raw.prepare("SELECT k,v FROM kv WHERE k LIKE 'call:%'").get();
 ok(wk && JSON.parse(wk.v).status === 'warming', 'call waits while warming');

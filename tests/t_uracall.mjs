@@ -71,7 +71,7 @@ ai.length = 0; await call('POST', '/send', { charId: a.id + '#ura', text: 'お�
 ok(ai.some((x) => x.user.includes('おはよう')) && !ai.some((x) => x.user.includes('ないしょ') || (x.user.match(/（電話で/g) || []).length > 1), 'ura nokeep sleep call hidden from the character');
 
 // ---- 着信（裏）：拒否 → 留守電は裏のトークに
-r = await call('POST', '/call/test', { charId: a.id, ura: true });
+r = await call('POST', '/call/test', { charId: a.id, ura: true, keep: true });
 ok(r.call.ura && r.call.status === 'ringing', 'ura incoming rings');
 ai.length = 0;
 await call('POST', '/call/decline', { id: r.call.id });

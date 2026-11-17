@@ -14,7 +14,7 @@
 //    ・Cron トリガー  * * * * *  （毎分。実際に動くのは13分おき）
 // =====================================================================
 
-const VERSION = '第74版（2026-11-16 20:20:00 更新・予定のお知らせとモーニングコールの約束を、言い回しにかかわらず意味で聞き取る）';
+const VERSION = '第75版（2026-11-17 12:15:00 更新・通話の［終了］を押すと「本当に終了しますか？」と確かめる）';
 const DEFAULT_MODEL = 'gemini-flash-latest';
 const DEFAULT_GROK_MODEL = 'grok-4.7';                 // X（Twitter）の Grok と同じ最新世代
 const FALLBACK_GROK_MODEL = 'grok-4-fast-non-reasoning'; // 上が使えないときの予備

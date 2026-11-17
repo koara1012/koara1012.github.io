@@ -1123,7 +1123,7 @@ body.ura #list.tlMode{background:#efe9f0}
 // 置き場所で切り替える：/lab/（試作）と /chat/（本番）で同じファイルを使う
 // 試作は本番と同じサイトなので、保存の名前に「lab.」を付けて本番の chat.* には書き込まない。通知も登録しない
 const IS_LAB = /\/lab\//.test(location.pathname);
-const APP_VERSION = '第74版（2026-11-16 20:20:00 更新・予定のお知らせとモーニングコールの約束を、言い回しにかかわらず意味で聞き取る）' + (IS_LAB ? '【試作】' : '');
+const APP_VERSION = '第75版（2026-11-17 12:15:00 更新・通話の［終了］を押すと「本当に終了しますか？」と確かめる）' + (IS_LAB ? '【試作】' : '');
 if (IS_LAB) { document.title = '【試作】トーク（統合）'; const mt = document.querySelector('meta[name=apple-mobile-web-app-title]'); if (mt) mt.content = 'トーク試作'; }
 const $ = (id) => document.getElementById(id);
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
@@ -3678,7 +3678,7 @@ function callScreen(c, mode) { // mode: dial / incoming / active / vm
   $('cvSubToggle').textContent = (mode === 'vm' ? vmSubsOn() : callSubsOn()) ? '字幕 ON' : '字幕 OFF';
   const on = (id, f) => { const b = $(id); if (b) b.onclick = f; };
   on('cvDecline', () => declineCall()); on('cvAnswer', () => answerCall());
-  on('cvEnd', () => endCall('me')); on('cvMute', toggleMute);
+  on('cvEnd', () => { const cur = CALL.cur; if (!confirm('本当に通話を終了しますか？')) return; if (CALL.cur && CALL.cur === cur) endCall('me'); }); on('cvMute', toggleMute); // 第75版：まちがって切らないように一拍置く（すべての通話の［終了］）
   on('cvVmPlay', () => vmPlay()); on('cvVmClose', () => closeCallScreen());
 }
 function setStat(t) { $('cvStat').textContent = t; }

@@ -157,6 +157,8 @@ body.ura .costbar{background:#2e2333;color:#cbb9cf;border-color:#43354a}
 #callView.hasTest .cvAvWrap i{inset:-14px}
 #callView.hasTest #cvSub{min-height:32px}
 .cvTest[hidden]{display:none}
+.cvAudioFix{flex:none;margin:8px 0 0;border:0;border-radius:18px;padding:9px 16px;background:#fff;color:#2a5596;font-size:14px;font-weight:700;box-shadow:0 2px 8px rgba(0,0,0,.15);position:relative;z-index:3}
+.cvAudioFix[hidden]{display:none}
 .bub.call small.tinfo,.bub.callog small.tinfo{display:block;margin-top:3px;opacity:.85}
 .rembar{background:#eef6ff}
 .mcbar span{flex:1}
@@ -1110,6 +1112,7 @@ body.ura #list.tlMode{background:#efe9f0}
   <div class="cvName" id="cvName"></div>
   <div class="cvStat" id="cvStat"></div>
   <div class="cvTest" id="cvTest" hidden></div>
+  <button class="cvAudioFix" id="cvAudioFix" hidden>🔊 声が聞こえないとき：タップで音を戻す</button>
   <div class="cvTime" id="cvTime"></div>
   <div class="cvAvWrap"><i></i><i class="r2"></i><div class="cvAv" id="cvAv"></div></div>
   <div id="cvMembers"></div>
@@ -1131,7 +1134,7 @@ body.ura #list.tlMode{background:#efe9f0}
 // 置き場所で切り替える：/lab/（試作）と /chat/（本番）で同じファイルを使う
 // 試作は本番と同じサイトなので、保存の名前に「lab.」を付けて本番の chat.* には書き込まない。通知も登録しない
 const IS_LAB = /\/lab\//.test(location.pathname);
-const APP_VERSION = '第78版（2026-11-17 15:00:00 更新・寝落ち通話は必ず出る・テストの説明で［終了］が隠れないように）' + (IS_LAB ? '【試作】' : '');
+const APP_VERSION = '第79版（2026-11-18 16:30:00 更新・アプリを行き来したあと声が聞こえなくなるのを直した）' + (IS_LAB ? '【試作】' : '');
 if (IS_LAB) { document.title = '【試作】トーク（統合）'; const mt = document.querySelector('meta[name=apple-mobile-web-app-title]'); if (mt) mt.content = 'トーク試作'; }
 const $ = (id) => document.getElementById(id);
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
@@ -3294,11 +3297,54 @@ const durText = (ms) => { const s = Math.round((ms || 0) / 1000); return s >= 60
 const yenOf = (usd) => Math.round(usd * (S.settings.yen || 150) * 10) / 10;
 // --- 音（Web Audio。iPhone は最初の操作のあとでないと鳴らない）
 let actx = null, voiceGain = null;
+// 第79版：iPhone はアプリを行き来すると、音の通り道を「中断（interrupted）」にすることがある。前は「一時停止（suspended）」のときしか鳴らし直していなかったので、
+// 戻ってきても声がずっと聞こえなかった（字幕は進む）。→ running 以外なら鳴らし直す・戻ってきたら確かめる・だめなら作り直す・それでもだめなら「🔊 タップで音を戻す」・聞きそびれた言葉はもう一度
+const AUD = { missed: [], replaying: false, last: '' };
+function acNew() {
+  const AC = window.AudioContext || window.webkitAudioContext;
+  actx = AC ? new AC() : null; voiceGain = null; fxNodes = []; fxNoise = null;
+  if (actx) actx.onstatechange = () => audState();
+}
 function ac() {
-  if (!actx) { const AC = window.AudioContext || window.webkitAudioContext; actx = AC ? new AC() : null; }
-  if (actx && actx.state === 'suspended') actx.resume().catch(() => {});
+  if (!actx || actx.state === 'closed') acNew();
+  if (actx && actx.state !== 'running') actx.resume().catch(() => {});
   return actx;
 }
+function audState() {
+  const st = actx ? actx.state : 'none';
+  if (st !== AUD.last) { logDiag(`音の状態：${AUD.last || '始め'} → ${st}`); AUD.last = st; }
+  if (st === 'running') { audTapBtn(false); audReplay(); }
+  else if (voiceSrc && voiceSrc._buf) audMiss(voiceSrc._buf, voiceSrc._cid); // 話している途中で止まった言葉は、あとでもう一度
+}
+function audMiss(buf, cid) { if (!buf || AUD.missed.some((x) => x.buf === buf)) return; AUD.missed.push({ buf, cid }); AUD.missed = AUD.missed.slice(-3); }
+async function audEnsure(why) { // 音が鳴る状態にする。鳴るなら true
+  let c = ac(); if (!c) return false;
+  if (c.state === 'running') return true;
+  try { await Promise.race([c.resume(), sleep(700)]); } catch (_) {}
+  if (actx.state === 'running') { logDiag(`音を鳴らし直しました（${why}）`); return true; }
+  try { c.close(); } catch (_) {} // 作り直す（声の加工・雑音もつなぎ直す）
+  acNew(); c = actx; if (!c) return false;
+  if (CALL.cur || CALL.vm) { vGain(); fxNoiseSync(); }
+  try { await Promise.race([c.resume(), sleep(700)]); } catch (_) {}
+  if (c.state === 'running') { logDiag(`音の通り道を作り直しました（${why}）`); return true; }
+  logDiag(`音が鳴らせません（${why}・${c.state}）。タップを待ちます`);
+  if (CALL.cur || CALL.vm) audTapBtn(true);
+  return false;
+}
+function audTapBtn(on) { const b = $('cvAudioFix'); if (b) b.hidden = !on; }
+$('cvAudioFix').onclick = () => { audEnsure('ボタン').then((ok) => { if (ok) { audTapBtn(false); audReplay(); toast('音を戻しました'); } else toast('まだ音が戻りません。もう一度タップするか、iPhone の消音スイッチと音量を確かめてください', 5000); }); };
+async function audReplay() { // 聞きそびれた言葉を、音が戻ったあとにもう一度流す（通話中だけ）
+  if (AUD.replaying || !AUD.missed.length) return;
+  if (!(CALL.cur || CALL.vm)) { AUD.missed = []; return; }
+  AUD.replaying = true;
+  try { while (AUD.missed.length && (CALL.cur || CALL.vm) && actx && actx.state === 'running') { const x = AUD.missed.shift(); if (voiceSrc) await sleep(300); else await playBuf(x.buf, x.cid, true); } }
+  finally { AUD.replaying = false; }
+}
+const audBack = () => { if (document.visibilityState === 'visible' && actx) audEnsure('アプリに戻った').then((ok) => { if (ok) audReplay(); }); };
+document.addEventListener('visibilitychange', audBack);
+window.addEventListener('pageshow', audBack);
+window.addEventListener('focus', audBack);
+document.addEventListener('pointerdown', () => { if (actx && actx.state !== 'running') { if (actx.state === 'closed') acNew(); actx.resume().then(() => { if (actx.state !== 'running') audEnsure('タップ'); }).catch(() => audEnsure('タップ')); } }, true); // さわったら、すぐ鳴らし直す（iPhone はさわったときなら鳴らし直せる）
 function vGain() {
   const c = ac(); if (!c) return null;
   if (!voiceGain) { voiceGain = c.createGain(); fxRoute(); }
@@ -3410,7 +3456,8 @@ function setCharVol(id, v) {
   store.set('vol.char', m);
   if (voiceVol && voiceVol.id === id) voiceVol.g.gain.value = v;
 }
-function playBuf(buf, charId) {
+async function playBuf(buf, charId, again) {
+  if (actx && actx.state !== 'running' && !(await audEnsure('話す前'))) { if (!again) audMiss(buf, charId); } // 鳴らせないまま流れた言葉は、音が戻ったらもう一度
   return new Promise((res) => {
     const c = ac(), g = vGain(); if (!c || !g) return res();
     const s = c.createBufferSource(); s.buffer = buf;
@@ -3421,6 +3468,7 @@ function playBuf(buf, charId) {
     s.onended = fin; s._done = fin;
     guard = setTimeout(fin, buf.duration * 1000 + 2500); // 第67版：iPhone では「鳴り終わった」の知らせが来ないことがある（マイクの切り替えなど）。長さ＋2.5秒で終わったことにする
     hfStop(); // キャラが話しているあいだはマイクを止める（自分の声を拾わないように）
+    s._buf = buf; s._cid = charId;
     voiceSrc = s; s.start();
   });
 }
@@ -3534,9 +3582,11 @@ async function vmsgPlay(m) {
   try { buf = await vmsgAudio(m); }
   catch (e) { vmsgState(m.id, ''); toast('声を用意できませんでした：' + e.message, 5000); return; }
   if (tok !== VMSG.tok) { vmsgState(m.id, ''); return; } // そのあいだに別のを押した
-  const src = c.createBufferSource(); src.buffer = buf;
-  const g = c.createGain(); g.gain.value = ttsCfg().vol * charVol(baseId(m.charId));
-  src.connect(g); g.connect(c.destination);
+  await audEnsure('ボイスメッセージ'); // 第79版：止まっていたら鳴らし直す（作り直したら新しい通り道で）
+  const c2 = ac() || c;
+  const src = c2.createBufferSource(); src.buffer = buf;
+  const g = c2.createGain(); g.gain.value = ttsCfg().vol * charVol(baseId(m.charId));
+  src.connect(g); g.connect(c2.destination);
   src.onended = () => { if (VMSG.cur && VMSG.cur.src === src) { VMSG.cur = null; vmsgState(m.id, ''); } };
   VMSG.cur = { id: m.id, src };
   vmsgState(m.id, 'play');
@@ -3711,6 +3761,7 @@ function subLine(who, text) {
   box.scrollTop = box.scrollHeight;
 }
 function closeCallScreen() {
+  AUD.missed = []; audTapBtn(false); // 第79版
   CALL.screenMode = 'closed';
   hfStop(); clearInterval(CALL.sleepT);
   $('volPop').classList.remove('on');

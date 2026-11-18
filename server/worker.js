@@ -14,7 +14,7 @@
 //    ・Cron トリガー  * * * * *  （毎分。実際に動くのは13分おき）
 // =====================================================================
 
-const VERSION = '第78版（2026-11-17 15:00:00 更新・寝落ち通話は必ず出る・テストの説明で［終了］が隠れないように）';
+const VERSION = '第79版（2026-11-18 16:30:00 更新・アプリを行き来したあと声が聞こえなくなるのを直した）';
 const DEFAULT_MODEL = 'gemini-flash-latest';
 const DEFAULT_GROK_MODEL = 'grok-4.7';                 // X（Twitter）の Grok と同じ最新世代
 const FALLBACK_GROK_MODEL = 'grok-4-fast-non-reasoning'; // 上が使えないときの予備

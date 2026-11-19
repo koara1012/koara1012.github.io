@@ -1118,7 +1118,7 @@ body.ura #list.tlMode{background:#efe9f0}
   <div id="cvMembers"></div>
   <div id="cvSub"></div>
   <div id="cvInput" hidden>
-    <div class="cvModes"><button id="cvModeText">⌨ 文字</button><button id="cvModeMic">🎤 声</button><button id="cvAuto" hidden>💬 勝手に話す</button></div>
+    <div class="cvModes"><button id="cvModeText">⌨ 文字</button><button id="cvModeMic">🎤 声</button><button id="cvHfBtn">🎧 オート OFF</button><button id="cvAuto" hidden>💬 勝手に話す</button></div>
     <div id="cvTextRow"><input type="text" id="cvText" placeholder="話しかける" autocomplete="off"><button id="cvSend">送る</button></div>
     <div id="cvMicRow" hidden><button id="cvMic">🎤 話す</button><button id="cvMicX" class="off">✕ やめる</button><div id="cvHeard"></div></div>
   </div>
@@ -1134,7 +1134,7 @@ body.ura #list.tlMode{background:#efe9f0}
 // 置き場所で切り替える：/lab/（試作）と /chat/（本番）で同じファイルを使う
 // 試作は本番と同じサイトなので、保存の名前に「lab.」を付けて本番の chat.* には書き込まない。通知も登録しない
 const IS_LAB = /\/lab\//.test(location.pathname);
-const APP_VERSION = '第79版（2026-11-18 16:30:00 更新・アプリを行き来したあと声が聞こえなくなるのを直した）' + (IS_LAB ? '【試作】' : '');
+const APP_VERSION = '第80版（2026-11-20 02:55:00 更新・すべての通話に［🎧 オート］（触らずに聞き取る）のオンとオフ）' + (IS_LAB ? '【試作】' : '');
 if (IS_LAB) { document.title = '【試作】トーク（統合）'; const mt = document.querySelector('meta[name=apple-mobile-web-app-title]'); if (mt) mt.content = 'トーク試作'; }
 const $ = (id) => document.getElementById(id);
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
@@ -3914,6 +3914,7 @@ async function endCall(by) {
 // --- 文字／声
 function setInputMode(m, nostore) { // nostore：寝落ち通話で声にするとき、ふだんの選び方は変えない
   if (!nostore) store.set('call.mode', m);
+  renderHfBtn();
   $('cvModeText').classList.toggle('on', m === 'text'); $('cvModeMic').classList.toggle('on', m === 'mic');
   $('cvTextRow').hidden = m !== 'text'; $('cvMicRow').hidden = m !== 'mic';
   if (m !== 'mic') micStop(true);
@@ -4298,11 +4299,15 @@ function hfPrime() { // タップの中で一度マイクを始めて、すぐ�
   const SR = window.SpeechRecognition || window.webkitSpeechRecognition; if (!SR) return;
   try { const r = new SR(); r.lang = 'ja-JP'; r.onerror = () => {}; r.start(); setTimeout(() => { try { r.abort(); } catch (_) {} }, 400); } catch (_) {}
 }
-function hfWanted() { const cur = CALL.cur; return !!(cur && cur.sleep && cur.answeredAt && !cur.ending && !cur.hfFail && cur.sleepStage !== 'final' && !cur.speaking && !rec && !voiceSrc && CALL.screenMode === 'active'); } // speaking：返事のセリフを流している途中（セリフの合間にマイクを切り替えない。第67版）
+// 第80版：［🎧 オート］＝触らずに聞き取る（前は寝落ち通話だけ）。すべての通話で ON/OFF できる。最初は寝落ち通話が ON・ほかは OFF（前の選び方は覚えない）
+const hfOn = (cur) => !!(cur && (cur.hfAuto !== undefined ? cur.hfAuto : cur.sleep));
+function renderHfBtn() { const cur = CALL.cur, b = $('cvHfBtn'); if (!b) return; const on = hfOn(cur) && !(cur && cur.hfFail); b.textContent = on ? '🎧 オート ON' : '🎧 オート OFF'; b.classList.toggle('on', on); }
+function hfWanted() { const cur = CALL.cur; return !!(cur && hfOn(cur) && cur.answeredAt && !cur.ending && !cur.hfFail && !(cur.sleep && cur.sleepStage === 'final') && !cur.speaking && !cur.typing && !rec && !voiceSrc && CALL.screenMode === 'active'); } // speaking：返事のセリフを流している途中（セリフの合間にマイクを切り替えない。第67版）
 function hfFailNote(why) {
   const cur = CALL.cur; if (cur) cur.hfFail = true;
   logDiag('寝落ち通話のマイク: ' + why);
-  toast('画面に触らずにマイクを始められませんでした。返事は🎤を押すか、文字でしてください', 8000);
+  toast('画面に触らずにマイクを始められませんでした。［🎧 オート］を押すと、もう一度始めます（返事は🎤や文字でもできます）', 8000);
+  renderHfBtn();
 }
 function hfStart() {
   if (hf || !hfWanted()) return;
@@ -4323,7 +4328,17 @@ function hfStart() {
   if (!$('cvHeard').textContent) $('cvHeard').textContent = '🎙 聞いています…（話しかけると返事になります）';
 }
 function hfStop() { clearTimeout(hfTimer); const r = hf; hf = null; hfBusyText = false; if (r) { r.onend = null; try { r.abort(); } catch (_) {} } }
-function hfSoon(ms = 700) { clearTimeout(hfTimer); if (CALL.cur && CALL.cur.sleep) hfTimer = setTimeout(hfStart, ms); }
+function hfSoon(ms = 700) { clearTimeout(hfTimer); if (hfOn(CALL.cur)) hfTimer = setTimeout(hfStart, ms); }
+$('cvHfBtn').onclick = () => { // さわったときに始める（iPhone はタップの中ならマイクを始めさせてくれる）
+  const cur = CALL.cur; if (!cur) return;
+  const on = !(hfOn(cur) && !cur.hfFail);
+  cur.hfAuto = on; cur.hfFail = false;
+  if (on) { if (CALL.screenMode === 'active' && !voiceSrc && !rec) { hfStop(); hfStart(); } else hfSoon(300); toast('🎧 オート：話しかけると、そのまま返事になります', 3000); }
+  else { hfStop(); $('cvHeard').textContent = ''; toast('🎧 オートをやめました（🎤 か文字で話してください）', 3000); }
+  renderHfBtn();
+};
+$('cvText').addEventListener('focus', () => { if (CALL.cur) { CALL.cur.typing = true; hfStop(); } }); // 文字を打っているあいだは聞き取りを止める
+$('cvText').addEventListener('blur', () => { if (CALL.cur) { CALL.cur.typing = false; hfSoon(600); } });
 function sleepUser(cur) { if (cur && cur.sleep && cur.sleepStage !== 'final') { cur.lastUser = Date.now(); cur.sleepStage = null; cur.sleepDue = false; } } // あなたが返事をした（おやすみを言い始めたあとは戻さない）
 function sleepBegin(cur) { // 通話がつながった
   if (!cur || !cur.sleep) return;

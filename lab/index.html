@@ -394,6 +394,16 @@ body.ura #list.tlMode{background:#efe9f0}
 #glogBody .glsum{background:#f1f3f7;border-radius:10px;padding:10px 12px;margin-bottom:14px;font-size:14px}
 .glbar{flex:none;padding:10px 14px calc(env(safe-area-inset-bottom) + 10px);border-top:1px solid var(--line);background:var(--bg)}
 #cvSub .old{opacity:.55}
+/* 第81版：［📝状況］としゃべり続ける子 */
+.cvModes{flex-wrap:wrap}.cvModes button{padding:5px 11px}
+#cvSub .scene{color:#9a5d0c;font-size:13px}#callView.grp #cvSub .scene b{color:#9a5d0c}
+#cvSub .ramb{color:#7550b8;font-size:13px;opacity:.9}#callView.grp #cvSub .ramb b{color:#7550b8}
+.cvM.ramb .av{border-color:#b89cf0}
+#cvScene{position:relative;z-index:2;flex:0 0 auto;box-sizing:border-box;width:100%;max-width:440px;margin:2px 0;padding:3px 10px;border-radius:10px;background:rgba(255,236,200,.85);color:#7a4a08;font-size:12.5px;line-height:1.45;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;text-align:left}
+#cvSceneRow{margin:0 0 6px}#cvSceneText{width:100%;box-sizing:border-box;border:1px solid #e0b46a;border-radius:10px;padding:6px 10px;font-size:15px;min-height:52px;resize:vertical}
+.cvSceneBtns{display:flex;gap:6px;justify-content:flex-end;margin-top:4px}.cvSceneBtns button{border:1px solid #d9a24a;background:#fff;color:#7a4a08;border-radius:14px;padding:5px 14px;font-size:13px}
+.cvSceneBtns button#cvSceneSend{background:#c9871f;border-color:#c9871f;color:#fff}.cvSceneBtns button.off{display:none}
+#glogBody .gl.scene{color:#9a5d0c}#glogBody .gl.scene b{color:#9a5d0c}
 /* グループ通話のかけ方を選ぶ（第62版・裏のグループの📞） */
 #gcPick{position:fixed;inset:0;z-index:44;display:none;align-items:flex-end;justify-content:center;background:rgba(0,0,0,.45)}
 #gcPick.on{display:flex}
@@ -701,6 +711,12 @@ body.ura #list.tlMode{background:#efe9f0}
       <label class="t" for="grPrompt">グループ設定（AIだけが読む）</label>
       <textarea id="grPrompt" style="min-height:140px" placeholder="例：ほのぼのした日常回。ここでは全員タメ口。誰かが話しているときは割り込まない。ユーザーを取り合う展開を多めに。"></textarea>
       <div class="hint">画面には出ません。このグループの関係・ルール・雰囲気・進め方などを書きます。各キャラの設定と食い違うときは、このグループの中ではこちらが優先されます（口調や一人称など、食い違わない部分はそのまま）。リセットしても残ります。</div>
+    </div>
+    <div class="field">
+      <label class="t" for="grRambler">グループ通話で、しゃべり続ける子</label>
+      <select id="grRambler"></select>
+      <textarea id="grRambleTopic" maxlength="300" style="min-height:60px;margin-top:6px" placeholder="どんな話をし続けるか（任意）　例：生き物の豆知識／昔のゲームの話"></textarea>
+      <div class="hint">グループ通話（寝落ち通話も）のあいだ、ほかの子が話している後ろで、この子がずっと自分の話を続けます（声が重なります。だれも話していないあいだは黙ります）。ほかの子は触れません。あなたがこの子に話しかけたときだけ、ふつうに返事をします。何を話すかの欄が空なら、キャラ設定からその子らしい話を選びます。ひとり話は、通話の記録とまとめには残りません。声の大きさは、通話画面でその子のアイコンを押すと変えられます。</div>
     </div>
     <div class="field">
       <label class="t">ナレーション（情景や動作の描写）</label>
@@ -1116,9 +1132,11 @@ body.ura #list.tlMode{background:#efe9f0}
   <div class="cvTime" id="cvTime"></div>
   <div class="cvAvWrap"><i></i><i class="r2"></i><div class="cvAv" id="cvAv"></div></div>
   <div id="cvMembers"></div>
+  <div id="cvScene" hidden title="押すと書き直せます"></div>
   <div id="cvSub"></div>
   <div id="cvInput" hidden>
-    <div class="cvModes"><button id="cvModeText">⌨ 文字</button><button id="cvModeMic">🎤 声</button><button id="cvHfBtn">🎧 オート OFF</button><button id="cvAuto" hidden>💬 勝手に話す</button></div>
+    <div class="cvModes"><button id="cvModeText">⌨ 文字</button><button id="cvModeMic">🎤 声</button><button id="cvHfBtn">🎧 オート OFF</button><button id="cvSceneBtn">📝 状況</button><button id="cvAuto" hidden>💬 勝手に話す</button></div>
+    <div id="cvSceneRow" hidden><textarea id="cvSceneText" maxlength="400" placeholder="今の状況（例：急に雨が降ってきた／二人とも布団の中）。通話が終わるまでずっと効きます"></textarea><div class="cvSceneBtns"><button id="cvSceneX">閉じる</button><button id="cvSceneClear">消す</button><button id="cvSceneSend">決める</button></div></div>
     <div id="cvTextRow"><input type="text" id="cvText" placeholder="話しかける" autocomplete="off"><button id="cvSend">送る</button></div>
     <div id="cvMicRow" hidden><button id="cvMic">🎤 話す</button><button id="cvMicX" class="off">✕ やめる</button><div id="cvHeard"></div></div>
   </div>
@@ -1134,7 +1152,7 @@ body.ura #list.tlMode{background:#efe9f0}
 // 置き場所で切り替える：/lab/（試作）と /chat/（本番）で同じファイルを使う
 // 試作は本番と同じサイトなので、保存の名前に「lab.」を付けて本番の chat.* には書き込まない。通知も登録しない
 const IS_LAB = /\/lab\//.test(location.pathname);
-const APP_VERSION = '第80版（2026-11-20 02:55:00 更新・すべての通話に［🎧 オート］（触らずに聞き取る）のオンとオフ）' + (IS_LAB ? '【試作】' : '');
+const APP_VERSION = '第81版（2026-11-21 17:00:00 更新・通話中の［📝状況］（すべての通話）・裏のグループ通話の「しゃべり続ける子」）' + (IS_LAB ? '【試作】' : '');
 if (IS_LAB) { document.title = '【試作】トーク（統合）'; const mt = document.querySelector('meta[name=apple-mobile-web-app-title]'); if (mt) mt.content = 'トーク試作'; }
 const $ = (id) => document.getElementById(id);
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
@@ -2104,8 +2122,8 @@ function bubHTML(m) {
   if (m.kind === 'call') { const mt = m.meta || {}, sp = mt.morning || mt.remind; return `<div class="bub call"><span class="ic">${mt.morning ? '⏰' : mt.remind ? '📅' : '📞'}</span><span><b>${mt.morning ? 'モーニングコール' + (mt.test ? '（テスト）' : '') : mt.remind ? `予定のお知らせ（${esc(mt.remind)}）` : ''}${mt.declined ? (sp ? '（拒否）' : '着信（拒否）') : sp ? '' : '不在着信'}${mt.test && !mt.morning ? '（テスト）' : ''}</b><small>${mt.declined ? 'あなたが拒否しました' : '応答なし'}${mt.nokeep ? '・キャラは知りません' : ''}</small>${mt.testInfo ? `<small class="tinfo">${esc(testInfoText(mt.testInfo, 'in')).replace(/\n/g, '<br>')}</small>` : ''}</span></div>`; }
   if (m.kind === 'vm') { const v = vmOf(m.charId, m.id); return `<div class="bub call vm" data-vm="${m.id}"><span class="ic">▶</span><span><b>留守番電話${v && !v.heard ? '<span class="new"></span>' : ''}</b><small>${v ? (v.heard ? 'タップで再生' : '新しい留守電・タップで再生') : '古い留守電（もう残っていません）'}</small></span></div>`; }
   if (m.kind === 'callout') return `<div class="bub call out" data-callback="1"><span class="ic">📞</span><span><b>${m.meta && m.meta.group ? 'グループ通話' : '発信'}</b><small>${m.meta && m.meta.group ? 'だれも出ませんでした' : '応答なし'}・タップでかけ直す</small></span></div>`;
-  if (m.kind === 'callog' && m.meta && m.meta.group && m.meta.log && !m.retracted) return `<div class="bub call log" data-gclog="${esc(m.id)}"><span class="ic">${m.meta.sleep ? '🌙' : '📞'}</span><span><b>${m.meta.sleep ? '寝落ち通話' : m.meta.from ? 'グループ通話（続き）' : 'グループ通話'} ${durText(m.meta.dur)}</b><small>タップで会話を読む・続きから話す</small></span></div>`; // 会話が残っている通話（第57版・第59版で裏も）
-  if (m.kind === 'callog') { const mt = m.meta || {}; return `<div class="bub call log" data-callback="1"><span class="ic">${mt.sleep ? '🌙' : mt.morning ? '⏰' : mt.remind ? '📅' : '📞'}</span><span><b>${mt.sleep ? '寝落ち通話' : mt.morning ? 'モーニングコール' : mt.remind ? `予定のお知らせ（${esc(mt.remind)}）` : mt.group ? 'グループ通話' : '通話'}${mt.test && !mt.morning ? '（テスト）' : ''} ${durText(mt.dur)}</b><small>${mt.nokeep ? '記憶に残さない通話（キャラは知りません）・' : ''}${mt.usd != null ? `約$${Number(mt.usd).toFixed(3)}（約${yenOf(Number(mt.usd))}円）` : 'タップでかけ直す'}</small>${mt.testInfo ? `<small class="tinfo">${esc(testInfoText(mt.testInfo, mt.dir)).replace(/\n/g, '<br>')}</small>` : ''}</span></div>`; }
+  if (m.kind === 'callog' && m.meta && m.meta.group && m.meta.log && !m.retracted) return `<div class="bub call log" data-gclog="${esc(m.id)}"><span class="ic">${m.meta.sleep ? '🌙' : '📞'}</span><span><b>${m.meta.sleep ? '寝落ち通話' : m.meta.from ? 'グループ通話（続き）' : 'グループ通話'} ${durText(m.meta.dur)}</b><small>タップで会話を読む・続きから話す</small>${Array.isArray(m.meta.scenes) && m.meta.scenes.length ? `<small class="tinfo">📝 状況：${esc(m.meta.scenes.join(' → '))}</small>` : ''}</span></div>`; // 会話が残っている通話（第57版・第59版で裏も）
+  if (m.kind === 'callog') { const mt = m.meta || {}; return `<div class="bub call log" data-callback="1"><span class="ic">${mt.sleep ? '🌙' : mt.morning ? '⏰' : mt.remind ? '📅' : '📞'}</span><span><b>${mt.sleep ? '寝落ち通話' : mt.morning ? 'モーニングコール' : mt.remind ? `予定のお知らせ（${esc(mt.remind)}）` : mt.group ? 'グループ通話' : '通話'}${mt.test && !mt.morning ? '（テスト）' : ''} ${durText(mt.dur)}</b><small>${mt.nokeep ? '記憶に残さない通話（キャラは知りません）・' : ''}${mt.usd != null ? `約$${Number(mt.usd).toFixed(3)}（約${yenOf(Number(mt.usd))}円）` : 'タップでかけ直す'}</small>${mt.testInfo ? `<small class="tinfo">${esc(testInfoText(mt.testInfo, mt.dir)).replace(/\n/g, '<br>')}</small>` : ''}${Array.isArray(mt.scenes) && mt.scenes.length ? `<small class="tinfo">📝 状況：${esc(mt.scenes.join(' → '))}</small>` : ''}</span></div>`; }
   if (m.image || m.localImg) return `<div class="bub photo"><img ${src ? `src="${src}"` : `data-img="${esc(m.image)}"`} alt="${esc(m.alt || '写真')}"></div>${m.text ? `<div class="bub">${esc(m.text)}</div>` : ''}`;
   return `<div class="bub">${quoteHTML(m)}${esc(m.text)}</div>`;
 }
@@ -2659,6 +2677,8 @@ function openGroupEdit(id) {
   const mem = new Set(g ? g.members : []), roles = (g && g.roles) || {};
   $('grMembers').innerHTML = S.chars.map((c) => `<label><input type="checkbox" value="${esc(c.id)}" ${mem.has(c.id) ? 'checked' : ''}>${avatarHTML(c, '', 'ura')}<span>${esc(dispName(c, 'ura'))}</span></label>
     <textarea data-role="${esc(c.id)}" maxlength="1500" placeholder="このグループでの${esc(dispName(c, 'ura'))}の立場（任意）　例：○○の幼なじみ。○○にだけ少し冷たい" ${mem.has(c.id) ? '' : 'hidden'}>${esc(roles[c.id] || '')}</textarea>`).join('');
+  $('grRambleTopic').value = g ? g.rambleTopic || '' : '';
+  fillRambler(g ? g.rambler || '' : '');
   $('grDanger').style.display = g ? '' : 'none';
   $('grMemBox').style.display = g ? '' : 'none';
   if (g) loadOGroupMemory(g.id, true);
@@ -2677,7 +2697,14 @@ $('grSplit').addEventListener('input', syncGroupLabels);
 $('grMembers').addEventListener('change', (e) => { // チェックした子だけ「立場」の欄を出す
   const cb = e.target.closest('input[type=checkbox]'); if (!cb) return;
   const ta = $('grMembers').querySelector(`textarea[data-role="${CSS.escape(cb.value)}"]`); if (ta) ta.hidden = !cb.checked;
+  fillRambler($('grRambler').value);
 });
+function fillRambler(sel) { // しゃべり続ける子（第81版）：チェックしたメンバーの中から1人（声の名前がある子）
+  const ids = [...$('grMembers').querySelectorAll('input:checked')].map((x) => x.value).filter((id) => { const c = charById(id); return c && c.voice; });
+  $('grRambler').innerHTML = '<option value="">なし</option>' + ids.map((id) => `<option value="${esc(id)}" ${id === sel ? 'selected' : ''}>${esc(dispName(charById(id), 'ura'))}</option>`).join('');
+  $('grRambleTopic').style.display = $('grRambler').value ? '' : 'none';
+}
+$('grRambler').addEventListener('change', () => { $('grRambleTopic').style.display = $('grRambler').value ? '' : 'none'; });
 $('btnGrpBack').onclick = () => { if (grpEdit && grpEdit.id && grpFrom === 'chat' && groupById(grpEdit.id)) openChat(grpEdit.id, 'ura'); else { show('list'); renderAll(); } };
 $('grSave').onclick = async () => {
   const members = [...$('grMembers').querySelectorAll('input:checked')].map((x) => x.value);
@@ -2685,7 +2712,7 @@ $('grSave').onclick = async () => {
   if (members.length > 10) return toast('メンバーは10人までです');
   const roles = {};
   for (const ta of $('grMembers').querySelectorAll('textarea[data-role]')) if (members.includes(ta.dataset.role) && ta.value.trim()) roles[ta.dataset.role] = ta.value.trim();
-  const group = { id: grpEdit.id || undefined, name: $('grName').value.trim() || members.map((id) => speakerName(id)).join('・').slice(0, 40), members, synopsis: $('grSyn').value, prompt: $('grPrompt').value, roles, narration: grpEdit.narration, length: grpEdit.length, maxSplit: +$('grSplit').value };
+  const group = { id: grpEdit.id || undefined, name: $('grName').value.trim() || members.map((id) => speakerName(id)).join('・').slice(0, 40), members, synopsis: $('grSyn').value, prompt: $('grPrompt').value, roles, narration: grpEdit.narration, length: grpEdit.length, maxSplit: +$('grSplit').value, rambler: $('grRambler').value, rambleTopic: $('grRambleTopic').value.trim() };
   $('grSave').disabled = true;
   try {
     const d = await api('POST', '/group', { group });
@@ -3446,7 +3473,7 @@ async function ttsBuf(voice, text) {
   return await c.decodeAudioData(await r.arrayBuffer());
 }
 let voiceSrc = null;
-function stopVoice() { const v = voiceSrc; if (v) { try { v.onended = null; v.stop(); } catch (_) {} if (v._done) v._done(); } voiceSrc = null; if (CALL.cur) CALL.cur.speakTok = (CALL.cur.speakTok || 0) + 1; } // 止めたときも待っている側を終わらせる（第67版）
+function stopVoice() { rambleStop(); const v = voiceSrc; if (v) { try { v.onended = null; v.stop(); } catch (_) {} if (v._done) v._done(); } voiceSrc = null; if (CALL.cur) CALL.cur.speakTok = (CALL.cur.speakTok || 0) + 1; } // 止めたときも待っている側を終わらせる（第67版）
 // キャラごとの音量（第64版）：0〜200%。端末ごと（store 'vol.char' = { キャラid: 0〜2 }）。声1本ごとに音量をはさみ、話している最中に変えてもすぐ効く
 const charVol = (id) => { const v = Number((store.get('vol.char', {}) || {})[id]); return Number.isFinite(v) ? Math.max(0, Math.min(2, v)) : 1; };
 let voiceVol = null; // いま流している声の { id, g }
@@ -3455,6 +3482,7 @@ function setCharVol(id, v) {
   if (Math.abs(v - 1) < 0.001) delete m[id]; else m[id] = Math.round(v * 100) / 100;
   store.set('vol.char', m);
   if (voiceVol && voiceVol.id === id) voiceVol.g.gain.value = v;
+  if (RMB.src && CALL.cur && CALL.cur.rambler === id) RMB.src.cg.gain.value = v; // しゃべり続ける子（第81版）
 }
 async function playBuf(buf, charId, again) {
   if (actx && actx.state !== 'running' && !(await audEnsure('話す前'))) { if (!again) audMiss(buf, charId); } // 鳴らせないまま流れた言葉は、音が戻ったらもう一度
@@ -3732,7 +3760,7 @@ function callScreen(c, mode) { // mode: dial / incoming / active / vm
       ? '<button class="cvBtn gray" id="cvVmPlay">▶ 再生</button><button class="cvBtn" id="cvVmClose">閉じる</button>'
       : `<button class="cvBtn gray" id="cvMute">🔊 スピーカー</button><button class="cvBtn" id="cvEnd">📞 終了</button>`;
   $('cvInput').hidden = mode !== 'active';
-  renderCvTest(mode);
+  renderCvTest(mode); renderCvScene();
   $('cvSub').innerHTML = ''; $('cvSub').hidden = mode === 'vm' ? !vmSubsOn() : !callSubsOn();
   $('cvSubToggle').textContent = (mode === 'vm' ? vmSubsOn() : callSubsOn()) ? '字幕 ON' : '字幕 OFF';
   const on = (id, f) => { const b = $(id); if (b) b.onclick = f; };
@@ -3771,6 +3799,8 @@ function closeCallScreen() {
   stopTones(); stopVoice(); micStop(true);
   clearInterval(CALL.clock); clearInterval(CALL.hb); clearTimeout(CALL.ringTo);
   CALL.cur = null; CALL.vm = null;
+  RMB.q = []; RMB.ready = []; RMB.wait = 0; // 第81版
+  $('cvSceneRow').hidden = true; $('cvScene').hidden = true; $('cvSceneBtn').classList.remove('on');
   $('callView').className = ''; $('cvMembers').innerHTML = ''; $('cvAuto').hidden = true;
 }
 function startClock(from) { clearInterval(CALL.clock); const f = () => { $('cvTime').textContent = fmtClock(Date.now() - from); }; f(); CALL.clock = setInterval(f, 500); }
@@ -3887,14 +3917,18 @@ async function sayInCall(text) {
   subLine('me', text); cur.busy = true; setStat('…');
   try {
     const d = await api('POST', '/call/say', { id: cur.id, text });
+    await callAfterSay(cur, d);
+  } catch (e) { cur.busy = false; setStat('通話中'); toast(e.message); hfSoon(500); }
+}
+async function callAfterSay(cur, d) { // 話した・状況を書いたあとの返事を流す（1対1）
     cur.busy = false;
     if (d.ended) { endCall('char'); return; }
     if (d.promise) { mcPromiseToast(d.promise); sync(); } // モーニングコールの約束（第70版）
     if (d.rems) { d.rems.forEach((o) => remSeen.add(o.op === 'cancel' ? 'x' + o.id : o.op === 'change' ? o.id + o.at + o.what : o.id)); remToast(d.rems, CALL.cur && CALL.cur.charId); sync(); } // 予定のお知らせ（第72版）
+    if (CALL.cur === cur) setStat('通話中');
     await speakLines(d.lines || []);
     if (d.hangup && CALL.cur === cur && !cur.sleep) endCall('char');
     hfSoon(500);
-  } catch (e) { cur.busy = false; setStat('通話中'); toast(e.message); hfSoon(500); }
 }
 async function endCall(by) {
   if (CALL.cur && CALL.cur.group) return endGroupCall(by);
@@ -4254,8 +4288,9 @@ async function openGcLog(id) {
       if (wasOld && !x.old) html += '<div class="glsep">― ここから、この通話 ―</div>';
       if (i === 0 && x.old) html += '<div class="glsep">― 前回の通話の最後のほう ―</div>';
       wasOld = !!x.old;
-      const nm = x.who === 'me' ? 'あなた' : gcCharName(charById(x.who), glog.ura);
-      html += `<div class="gl ${x.who === 'me' ? 'me' : ''} ${x.old ? 'old' : ''}"><b>${esc(nm)}：</b>${esc(x.text)}</div>`;
+      const sc = x.who === 'me' && (x.scene || String(x.text).startsWith(SCENE_PFX)); // ［📝状況］（第81版）
+      const nm = sc ? '📝 状況' : x.who === 'me' ? 'あなた' : gcCharName(charById(x.who), glog.ura);
+      html += `<div class="gl ${sc ? 'scene' : x.who === 'me' ? 'me' : ''} ${x.old ? 'old' : ''}"><b>${esc(nm)}：</b>${esc(sc ? String(x.text).slice(SCENE_PFX.length) : x.text)}</div>`;
     });
     $('glogBody').innerHTML = html || '<div class="hint">会話がありません</div>';
     $('glogBody').scrollTop = $('glogBody').scrollHeight;
@@ -4339,6 +4374,41 @@ $('cvHfBtn').onclick = () => { // さわったときに始める（iPhone はタ
 };
 $('cvText').addEventListener('focus', () => { if (CALL.cur) { CALL.cur.typing = true; hfStop(); } }); // 文字を打っているあいだは聞き取りを止める
 $('cvText').addEventListener('blur', () => { if (CALL.cur) { CALL.cur.typing = false; hfSoon(600); } });
+// ---- ［📝状況］（第81版・すべての通話）：台詞ではなく、今の状況を書く。通話が終わるまでずっと効く（書き直すと入れ替わる・［消す］で消える）。
+// サーバーは【状況・指示】付きでキャラに伝え、キャラはその場で反応する。字幕・記録・まとめにも入る（記憶に残さない通話には残らない）
+const SCENE_PFX = '【状況・指示】';
+function renderCvScene() {
+  const cur = CALL.cur, sc = (cur && cur.scene) || '', el = $('cvScene');
+  el.hidden = !sc || CALL.screenMode !== 'active';
+  el.textContent = sc ? '📝 状況：' + sc : '';
+  $('cvSceneBtn').classList.toggle('on', !!sc);
+}
+function openSceneEdit(on) {
+  const cur = CALL.cur; if (on && !(cur && cur.answeredAt)) return;
+  $('cvSceneRow').hidden = !on;
+  if (on) { $('cvSceneText').value = cur.scene || ''; $('cvSceneClear').classList.toggle('off', !cur.scene); $('cvSceneText').focus(); }
+  else if (cur) { cur.typing = false; hfSoon(600); }
+}
+$('cvSceneBtn').onclick = () => openSceneEdit($('cvSceneRow').hidden);
+$('cvScene').onclick = () => openSceneEdit(true);
+$('cvSceneX').onclick = () => openSceneEdit(false);
+$('cvSceneSend').onclick = () => { const v = $('cvSceneText').value.replace(/\s+/g, ' ').trim(); if (!v) { toast('状況を書いてください（消すときは［消す］）'); return; } openSceneEdit(false); sendScene(v); };
+$('cvSceneClear').onclick = () => { if (!CALL.cur || !CALL.cur.scene) return; openSceneEdit(false); sendScene(''); };
+$('cvSceneText').addEventListener('focus', () => { if (CALL.cur) { CALL.cur.typing = true; hfStop(); } });
+$('cvSceneText').addEventListener('blur', () => { if (CALL.cur && $('cvSceneRow').hidden) { CALL.cur.typing = false; hfSoon(600); } });
+async function sendScene(v) {
+  const cur = CALL.cur; if (!cur || !cur.answeredAt || cur.ending) return;
+  sleepUser(cur); hfStop();
+  for (let i = 0; cur.busy && i < 200 && CALL.cur === cur; i++) await sleep(300); // 返事を待っている途中なら、届いてから
+  if (CALL.cur !== cur || cur.ending) return;
+  stopVoice(); if (cur.group) gcTalking(''); // 話している途中なら止めて、状況を先に
+  cur.scene = v; renderCvScene();
+  subLine('scene', v ? '📝 状況：' + v : '📝 状況を消しました');
+  if (cur.group) { gcAsk('', v); return; }
+  cur.busy = true; if (v) setStat('…');
+  try { await callAfterSay(cur, await api('POST', '/call/say', { id: cur.id, scene: v })); }
+  catch (e) { cur.busy = false; setStat('通話中'); toast(e.message); hfSoon(500); }
+}
 function sleepUser(cur) { if (cur && cur.sleep && cur.sleepStage !== 'final') { cur.lastUser = Date.now(); cur.sleepStage = null; cur.sleepDue = false; } } // あなたが返事をした（おやすみを言い始めたあとは戻さない）
 function sleepBegin(cur) { // 通話がつながった
   if (!cur || !cur.sleep) return;
@@ -4474,6 +4544,7 @@ function gcScreen(g, mode) {
   $('cvAuto').hidden = mode !== 'active'; syncAutoBtn();
 }
 function gcSub(id, text) {
+  if (id === 'me' && String(text).startsWith(SCENE_PFX)) { subLine('scene', '📝 状況：' + String(text).slice(SCENE_PFX.length)); return; }
   if (id === 'me') { subLine('me', text); return; }
   const box = $('cvSub'), c = charById(id);
   box.insertAdjacentHTML('beforeend', `<div class="them"><b>${esc(c ? gcCharName(c, CALL.cur && CALL.cur.ura) : '？')}：</b>${esc(text)}</div>`);
@@ -4492,7 +4563,7 @@ async function startGroupCall(g, test, from, old, picked, opt) { // opt：{ slee
   if (ms.length > 7) { toast(`グループ通話に入れるのは7人までです（声の名前がある子が${ms.length}人います）`); return; }
   if (!picked && !confirm(test && from ? `「${g.name}」に、前回の続きからグループ通話をかけます（必ず全員出ます）。よろしいですか？` : test ? `テスト：「${g.name}」にグループ通話をかけます（全員出ます）。よろしいですか？` : from ? `「${g.name}」に、前回の続きからグループ通話をかけますか？` : `「${g.name}」にグループ通話をかけますか？`)) return;
   ac();
-  const sl = opt && opt.sleep && !ura ? { sleep: true, keep: opt.keep !== false } : null;
+  const sl = opt && opt.sleep ? { sleep: true, keep: opt.keep !== false } : null; // 第81版：裏のグループの🌙も寝落ち通話に（第70版から、ここで外れていた）
   CALL.cur = { group: g.id, ura, dir: 'out', gpuStart: Date.now(), muted: false, invited: ms.map((c) => c.id), members: [], started: 0, batchDone: true, queued: [], ...(sl || {}) };
   gcScreen(g, 'dial'); setStat('呼び出し中…'); $('cvTime').textContent = '';
   playRingback();
@@ -4536,7 +4607,8 @@ async function gcDial(g, test, r, warm, gpuT0, cancel) {
 }
 function beginGroupActive(g, d) {
   const cur = CALL.cur; if (!cur) return;
-  Object.assign(cur, { id: d.call.id, answeredAt: Date.now(), members: d.call.members });
+  Object.assign(cur, { id: d.call.id, answeredAt: Date.now(), members: d.call.members, rambler: d.call.rambler || '' });
+  RMB.q = []; RMB.ready = []; rambleAdd(cur, d.ramble); // しゃべり続ける子（第81版）
   gcScreen(g, 'active'); setStat('通話中'); startClock(cur.answeredAt);
   sleepBegin(cur);
   if ((cur.old || []).length) { // 続きから：前回の最後のほうを薄く出しておく
@@ -4550,8 +4622,69 @@ function beginGroupActive(g, d) {
   CALL.hb = setInterval(() => { wakeTTS(); if (++n % 3 === 0 && CALL.cur) api('POST', '/call/ping', { id: CALL.cur.id }).catch(() => {}); }, 20000);
   gcPlay(d.lines || [], d.wait);
 }
+// ---- しゃべり続ける子（第81版・裏のグループ通話）：ほかの子のセリフが流れているあいだだけ、後ろで声を重ねて流す（だれも話していないあいだは黙る）。
+// q＝まだ声にしていないひとり話・ready＝声を作っている／作ったもの（先に2つまで）。足りなくなったらサーバーに続きを頼む。字幕は別の色。ひとり話は記録に残らない
+const RMB = { q: [], ready: [], on: false, tok: 0, src: null, fetching: false, wait: 0 };
+function rambleAdd(cur, list) { if (cur && cur.rambler && Array.isArray(list)) RMB.q.push(...list.map((t) => String(t || '').trim()).filter(Boolean)); }
+function rambleFill(cur) {
+  const c = charById(cur.rambler);
+  while (RMB.ready.length < 2 && RMB.q.length) {
+    const text = RMB.q.shift(), sp = speakText(text);
+    RMB.ready.push({ text, buf: c && c.voice && sp ? ttsBuf(c.voice, sp).catch((e) => { logDiag('しゃべり続ける子の声: ' + e.message); return null; }) : Promise.resolve(null) });
+  }
+  if (RMB.q.length + RMB.ready.length < 3 && !RMB.fetching && Date.now() > RMB.wait) { // 続きを頼む
+    RMB.fetching = true;
+    api('POST', '/gcall/ramble', { id: cur.id }).then((d) => { if (CALL.cur !== cur) return; if (d.ramble && d.ramble.length) rambleAdd(cur, d.ramble); else RMB.wait = Date.now() + 20000; })
+      .catch((e) => { logDiag('しゃべり続ける子の続き: ' + e.message); RMB.wait = Date.now() + 20000; }).finally(() => { RMB.fetching = false; });
+  }
+}
+function rambleStart(cur) {
+  if (!cur || !cur.rambler || RMB.on || cur.ending) return;
+  RMB.on = true; const tok = ++RMB.tok;
+  const alive = () => RMB.on && RMB.tok === tok && CALL.cur === cur;
+  (async () => {
+    while (alive()) {
+      rambleFill(cur);
+      const it = RMB.ready[0];
+      if (!it) { await sleep(400); continue; }
+      const buf = await it.buf;
+      if (!alive()) return; // 流さなかった分は次に回す
+      if (actx && actx.state !== 'running') { await sleep(500); continue; } // 音が止まっているあいだは進めない
+      RMB.ready.shift(); rambleFill(cur);
+      if (!buf) continue;
+      gcRambleSub(cur, it.text);
+      await rambleBuf(cur, buf);
+    }
+  })();
+}
+function rambleBuf(cur, buf) {
+  return new Promise((res) => {
+    const c = ac(), g = vGain(); if (!c || !g || c.state !== 'running') return res();
+    const s = c.createBufferSource(); s.buffer = buf;
+    const cg = c.createGain(); cg.gain.value = charVol(cur.rambler); s.connect(cg); cg.connect(g);
+    let done = false, gd = 0;
+    const fin = () => { if (done) return; done = true; clearTimeout(gd); if (RMB.src && RMB.src.s === s) RMB.src = null; $('cvMembers').querySelectorAll('.cvM.ramb').forEach((el) => el.classList.remove('ramb')); res(); };
+    s.onended = () => { try { cg.disconnect(); } catch (_) {} fin(); };
+    gd = setTimeout(fin, buf.duration * 1000 + 2500);
+    RMB.src = { s, cg, fin };
+    const el = $('cvMembers').querySelector(`.cvM[data-cvm="${CSS.escape(cur.rambler)}"]`); if (el) el.classList.add('ramb');
+    s.start();
+  });
+}
+function rambleStop() { // すぐに小さくして止める
+  RMB.on = false; RMB.tok++;
+  const x = RMB.src; if (!x) return; RMB.src = null;
+  try { const t = x.cg.context.currentTime; x.cg.gain.setTargetAtTime(0, t, 0.05); x.s.stop(t + 0.25); } catch (_) { try { x.s.stop(); } catch (_) {} }
+  x.fin();
+}
+function gcRambleSub(cur, text) {
+  const box = $('cvSub'), c = charById(cur.rambler);
+  box.insertAdjacentHTML('beforeend', `<div class="ramb"><b>${esc(c ? gcCharName(c, cur.ura) : '？')}：</b>${esc(text)}</div>`);
+  while (box.children.length > 400) box.firstChild.remove();
+  box.scrollTop = box.scrollHeight;
+}
 // --- セリフを順に流す（声は全部いっしょに頼む＝1人目を流している間に次ができる）。流し終えたら、黙っていれば続きを頼む
-async function gcPlay(lines, wait) { const cur0 = CALL.cur; if (cur0) cur0.speaking = true; try { return await gcPlay0(lines, wait); } finally { if (cur0) cur0.speaking = false; hfSoon(700); } }
+async function gcPlay(lines, wait) { const cur0 = CALL.cur; if (cur0) cur0.speaking = true; try { return await gcPlay0(lines, wait); } finally { rambleStop(); if (cur0) cur0.speaking = false; hfSoon(700); } } // だれも話していないあいだは、しゃべり続ける子も黙る
 async function gcPlay0(lines, wait) {
   const cur = CALL.cur; if (!cur || cur.ending) return;
   if (rec) { cur.pending = { lines, wait }; return; } // 🎤で話している最中に届いた：話し終えるまで待つ
@@ -4564,8 +4697,10 @@ async function gcPlay0(lines, wait) {
     if (!CALL.cur || CALL.cur.speakTok !== tok) return;
     cur.started = i + 1;
     gcSub(lines[i].id, lines[i].text); gcTalking(lines[i].id); setStat('通話中');
+    if (cur.rambler) { if (lines[i].id === cur.rambler) rambleStop(); else rambleStart(cur); } // ほかの子が話しているあいだは、しゃべり続ける子が後ろで話す（本人があなたに返事をするあいだは止める）
     if (buf) await playBuf(buf, lines[i].id); else await sleep(Math.min(6000, 600 + lines[i].text.length * 110));
   }
+  rambleStop();
   if (!CALL.cur || CALL.cur.speakTok !== tok) return;
   cur.batchDone = true; gcTalking('');
   if (cur.sleepDue && !cur.sleepStage) { sleepCheckRun('ask'); return; } // 寝落ち通話：返事がないまま時間がたった
@@ -4596,17 +4731,19 @@ function groupResume() { // 🎤をやめた（何も言わなかった）：待
   if (cur.pending) { const p = cur.pending; cur.pending = null; gcPlay(p.lines, p.wait); }
   else if (!cur.busy && gcAuto()) gcNext(1500); // ［勝手に話す］オン：続きを頼む（途中で止めていたら、聞いたところまで）
 }
-async function gcAsk(text) {
+async function gcAsk(text, scene) { // scene：［📝状況］を書いた（第81版。'' は消した）
   const cur = CALL.cur; if (!cur || cur.ending) return;
   clearTimeout(cur.contTimer);
   const heard = cur.pending ? 0 : cur.batchDone ? null : cur.started; // さえぎったら、聞いたところまで
   cur.pending = null; cur.batchDone = true;
-  cur.busy = true; if (text) setStat('…');
+  cur.busy = true; if (text || scene) setStat('…');
   try {
-    const d = await api('POST', '/gcall/say', { id: cur.id, text, heard, auto: !text && gcAuto() });
+    const d = await api('POST', '/gcall/say', { id: cur.id, text, heard, auto: !text && gcAuto(), ...(scene != null ? { scene } : {}) });
     cur.busy = false;
     if (CALL.cur !== cur) return;
     if (d.ended) { endGroupCall(); return; }
+    rambleAdd(cur, d.ramble);
+    if (scene === '') { setStat('通話中'); if (gcAuto()) gcNext(1500); return; } // 消しただけ（返事なし）
     if (cur.queued.length) { cur.pending = { lines: d.lines || [], wait: d.wait }; const t = cur.queued.splice(0).join('\n'); gcAsk(t); return; } // 待っている間にあなたが話した：届いたセリフは聞かずに、あなたの言葉を先に
     if (d.paused) { setStat('止めています'); return; }
     gcPlay(d.lines || [], d.wait);

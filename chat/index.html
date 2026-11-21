@@ -403,6 +403,7 @@ body.ura #list.tlMode{background:#efe9f0}
 #cvSceneRow{margin:0 0 6px}#cvSceneText{width:100%;box-sizing:border-box;border:1px solid #e0b46a;border-radius:10px;padding:6px 10px;font-size:15px;min-height:52px;resize:vertical}
 .cvSceneBtns{display:flex;gap:6px;justify-content:flex-end;margin-top:4px}.cvSceneBtns button{border:1px solid #d9a24a;background:#fff;color:#7a4a08;border-radius:14px;padding:5px 14px;font-size:13px}
 .cvSceneBtns button#cvSceneSend{background:#c9871f;border-color:#c9871f;color:#fff}.cvSceneBtns button.off{display:none}
+#grRamblers .rmb{margin:0 0 8px}#grRamblers label{display:flex;align-items:center;gap:6px;font-size:14px}#grRamblers textarea{min-height:48px;margin-top:4px}
 #glogBody .gl.scene{color:#9a5d0c}#glogBody .gl.scene b{color:#9a5d0c}
 /* グループ通話のかけ方を選ぶ（第62版・裏のグループの📞） */
 #gcPick{position:fixed;inset:0;z-index:44;display:none;align-items:flex-end;justify-content:center;background:rgba(0,0,0,.45)}
@@ -713,10 +714,9 @@ body.ura #list.tlMode{background:#efe9f0}
       <div class="hint">画面には出ません。このグループの関係・ルール・雰囲気・進め方などを書きます。各キャラの設定と食い違うときは、このグループの中ではこちらが優先されます（口調や一人称など、食い違わない部分はそのまま）。リセットしても残ります。</div>
     </div>
     <div class="field">
-      <label class="t" for="grRambler">グループ通話で、しゃべり続ける子</label>
-      <select id="grRambler"></select>
-      <textarea id="grRambleTopic" maxlength="300" style="min-height:60px;margin-top:6px" placeholder="どんな話をし続けるか（任意）　例：生き物の豆知識／昔のゲームの話"></textarea>
-      <div class="hint">グループ通話（寝落ち通話も）のあいだ、ほかの子が話している後ろで、この子がずっと自分の話を続けます（声が重なります。だれも話していないあいだは黙ります）。ほかの子は触れません。あなたがこの子に話しかけたときだけ、ふつうに返事をします。何を話すかの欄が空なら、キャラ設定からその子らしい話を選びます。ひとり話は、通話の記録とまとめには残りません。声の大きさは、通話画面でその子のアイコンを押すと変えられます。</div>
+      <label class="t">グループ通話で、しゃべり続ける子（何人でも）</label>
+      <div id="grRamblers"></div>
+      <div class="hint">選んだ子は、グループ通話（寝落ち通話も）のあいだ、ほかの子が話している後ろで、全員同時にずっと自分の話を続けます（声が重なります。だれも話していないあいだは黙ります）。ほかの子も、しゃべり続ける子どうしも触れません。あなたが話しかけた子だけ、ふつうに返事をします。何を話すかの欄が空なら、キャラ設定からその子らしい話を選びます。ひとり話は、通話の記録とまとめには残りません。出た子が全員しゃべり続ける子のときは、1人だけふつうに話します。声の大きさは、通話画面でその子のアイコンを押すと変えられます。</div>
     </div>
     <div class="field">
       <label class="t">ナレーション（情景や動作の描写）</label>
@@ -1152,7 +1152,7 @@ body.ura #list.tlMode{background:#efe9f0}
 // 置き場所で切り替える：/lab/（試作）と /chat/（本番）で同じファイルを使う
 // 試作は本番と同じサイトなので、保存の名前に「lab.」を付けて本番の chat.* には書き込まない。通知も登録しない
 const IS_LAB = /\/lab\//.test(location.pathname);
-const APP_VERSION = '第81版（2026-11-21 17:00:00 更新・通話中の［📝状況］（すべての通話）・裏のグループ通話の「しゃべり続ける子」）' + (IS_LAB ? '【試作】' : '');
+const APP_VERSION = '第82版（2026-11-21 17:50:00 更新・裏のグループ通話の「しゃべり続ける子」を何人でも（全員同時・一人ずつ話す内容））' + (IS_LAB ? '【試作】' : '');
 if (IS_LAB) { document.title = '【試作】トーク（統合）'; const mt = document.querySelector('meta[name=apple-mobile-web-app-title]'); if (mt) mt.content = 'トーク試作'; }
 const $ = (id) => document.getElementById(id);
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
@@ -2677,8 +2677,7 @@ function openGroupEdit(id) {
   const mem = new Set(g ? g.members : []), roles = (g && g.roles) || {};
   $('grMembers').innerHTML = S.chars.map((c) => `<label><input type="checkbox" value="${esc(c.id)}" ${mem.has(c.id) ? 'checked' : ''}>${avatarHTML(c, '', 'ura')}<span>${esc(dispName(c, 'ura'))}</span></label>
     <textarea data-role="${esc(c.id)}" maxlength="1500" placeholder="このグループでの${esc(dispName(c, 'ura'))}の立場（任意）　例：○○の幼なじみ。○○にだけ少し冷たい" ${mem.has(c.id) ? '' : 'hidden'}>${esc(roles[c.id] || '')}</textarea>`).join('');
-  $('grRambleTopic').value = g ? g.rambleTopic || '' : '';
-  fillRambler(g ? g.rambler || '' : '');
+  fillRamblers(Object.fromEntries((g ? g.ramblers || (g.rambler ? [{ id: g.rambler, topic: g.rambleTopic }] : []) : []).map((x) => [x.id, x.topic || ''])));
   $('grDanger').style.display = g ? '' : 'none';
   $('grMemBox').style.display = g ? '' : 'none';
   if (g) loadOGroupMemory(g.id, true);
@@ -2697,14 +2696,15 @@ $('grSplit').addEventListener('input', syncGroupLabels);
 $('grMembers').addEventListener('change', (e) => { // チェックした子だけ「立場」の欄を出す
   const cb = e.target.closest('input[type=checkbox]'); if (!cb) return;
   const ta = $('grMembers').querySelector(`textarea[data-role="${CSS.escape(cb.value)}"]`); if (ta) ta.hidden = !cb.checked;
-  fillRambler($('grRambler').value);
+  fillRamblers(readRamblers());
 });
-function fillRambler(sel) { // しゃべり続ける子（第81版）：チェックしたメンバーの中から1人（声の名前がある子）
+// しゃべり続ける子（第81版・第82版で何人でも）：チェックしたメンバー（声の名前がある子）ごとに［しゃべり続ける］と「何を話し続けるか」
+function readRamblers() { const m = {}; $('grRamblers').querySelectorAll('.rmb').forEach((el) => { if (el.querySelector('input').checked) m[el.dataset.id] = el.querySelector('textarea').value; }); return m; }
+function fillRamblers(sel) {
   const ids = [...$('grMembers').querySelectorAll('input:checked')].map((x) => x.value).filter((id) => { const c = charById(id); return c && c.voice; });
-  $('grRambler').innerHTML = '<option value="">なし</option>' + ids.map((id) => `<option value="${esc(id)}" ${id === sel ? 'selected' : ''}>${esc(dispName(charById(id), 'ura'))}</option>`).join('');
-  $('grRambleTopic').style.display = $('grRambler').value ? '' : 'none';
+  $('grRamblers').innerHTML = ids.length ? ids.map((id) => { const on = id in sel, nm = dispName(charById(id), 'ura'); return `<div class="rmb" data-id="${esc(id)}"><label><input type="checkbox" ${on ? 'checked' : ''}>${esc(nm)}がしゃべり続ける</label><textarea maxlength="300" placeholder="${esc(nm)}が何を話し続けるか（任意）　例：生き物の豆知識／昔のゲームの話" ${on ? '' : 'hidden'}>${esc(sel[id] || '')}</textarea></div>`; }).join('') : '<div class="hint">声の名前があるメンバーを選ぶと、ここに出ます</div>';
 }
-$('grRambler').addEventListener('change', () => { $('grRambleTopic').style.display = $('grRambler').value ? '' : 'none'; });
+$('grRamblers').addEventListener('change', (e) => { const el = e.target.closest('.rmb'); if (el && e.target.type === 'checkbox') el.querySelector('textarea').hidden = !e.target.checked; });
 $('btnGrpBack').onclick = () => { if (grpEdit && grpEdit.id && grpFrom === 'chat' && groupById(grpEdit.id)) openChat(grpEdit.id, 'ura'); else { show('list'); renderAll(); } };
 $('grSave').onclick = async () => {
   const members = [...$('grMembers').querySelectorAll('input:checked')].map((x) => x.value);
@@ -2712,7 +2712,7 @@ $('grSave').onclick = async () => {
   if (members.length > 10) return toast('メンバーは10人までです');
   const roles = {};
   for (const ta of $('grMembers').querySelectorAll('textarea[data-role]')) if (members.includes(ta.dataset.role) && ta.value.trim()) roles[ta.dataset.role] = ta.value.trim();
-  const group = { id: grpEdit.id || undefined, name: $('grName').value.trim() || members.map((id) => speakerName(id)).join('・').slice(0, 40), members, synopsis: $('grSyn').value, prompt: $('grPrompt').value, roles, narration: grpEdit.narration, length: grpEdit.length, maxSplit: +$('grSplit').value, rambler: $('grRambler').value, rambleTopic: $('grRambleTopic').value.trim() };
+  const group = { id: grpEdit.id || undefined, name: $('grName').value.trim() || members.map((id) => speakerName(id)).join('・').slice(0, 40), members, synopsis: $('grSyn').value, prompt: $('grPrompt').value, roles, narration: grpEdit.narration, length: grpEdit.length, maxSplit: +$('grSplit').value, ramblers: Object.entries(readRamblers()).filter(([id]) => members.includes(id)).map(([id, topic]) => ({ id, topic: topic.trim() })) };
   $('grSave').disabled = true;
   try {
     const d = await api('POST', '/group', { group });
@@ -3482,7 +3482,7 @@ function setCharVol(id, v) {
   if (Math.abs(v - 1) < 0.001) delete m[id]; else m[id] = Math.round(v * 100) / 100;
   store.set('vol.char', m);
   if (voiceVol && voiceVol.id === id) voiceVol.g.gain.value = v;
-  if (RMB.src && CALL.cur && CALL.cur.rambler === id) RMB.src.cg.gain.value = v; // しゃべり続ける子（第81版）
+  const P = RMB.p[id]; if (P && P.src) P.src.cg.gain.value = v; // しゃべり続ける子（第81版）
 }
 async function playBuf(buf, charId, again) {
   if (actx && actx.state !== 'running' && !(await audEnsure('話す前'))) { if (!again) audMiss(buf, charId); } // 鳴らせないまま流れた言葉は、音が戻ったらもう一度
@@ -3799,7 +3799,7 @@ function closeCallScreen() {
   stopTones(); stopVoice(); micStop(true);
   clearInterval(CALL.clock); clearInterval(CALL.hb); clearTimeout(CALL.ringTo);
   CALL.cur = null; CALL.vm = null;
-  RMB.q = []; RMB.ready = []; RMB.wait = 0; // 第81版
+  RMB.p = {}; // 第81版
   $('cvSceneRow').hidden = true; $('cvScene').hidden = true; $('cvSceneBtn').classList.remove('on');
   $('callView').className = ''; $('cvMembers').innerHTML = ''; $('cvAuto').hidden = true;
 }
@@ -4607,8 +4607,8 @@ async function gcDial(g, test, r, warm, gpuT0, cancel) {
 }
 function beginGroupActive(g, d) {
   const cur = CALL.cur; if (!cur) return;
-  Object.assign(cur, { id: d.call.id, answeredAt: Date.now(), members: d.call.members, rambler: d.call.rambler || '' });
-  RMB.q = []; RMB.ready = []; rambleAdd(cur, d.ramble); // しゃべり続ける子（第81版）
+  Object.assign(cur, { id: d.call.id, answeredAt: Date.now(), members: d.call.members, ramblers: d.call.ramblers || [] });
+  RMB.p = {}; rambleAdd(cur, d.ramble); // しゃべり続ける子（第81版・第82版で何人でも）
   gcScreen(g, 'active'); setStat('通話中'); startClock(cur.answeredAt);
   sleepBegin(cur);
   if ((cur.old || []).length) { // 続きから：前回の最後のほうを薄く出しておく
@@ -4622,63 +4622,76 @@ function beginGroupActive(g, d) {
   CALL.hb = setInterval(() => { wakeTTS(); if (++n % 3 === 0 && CALL.cur) api('POST', '/call/ping', { id: CALL.cur.id }).catch(() => {}); }, 20000);
   gcPlay(d.lines || [], d.wait);
 }
-// ---- しゃべり続ける子（第81版・裏のグループ通話）：ほかの子のセリフが流れているあいだだけ、後ろで声を重ねて流す（だれも話していないあいだは黙る）。
-// q＝まだ声にしていないひとり話・ready＝声を作っている／作ったもの（先に2つまで）。足りなくなったらサーバーに続きを頼む。字幕は別の色。ひとり話は記録に残らない
-const RMB = { q: [], ready: [], on: false, tok: 0, src: null, fetching: false, wait: 0 };
-function rambleAdd(cur, list) { if (cur && cur.rambler && Array.isArray(list)) RMB.q.push(...list.map((t) => String(t || '').trim()).filter(Boolean)); }
-function rambleFill(cur) {
-  const c = charById(cur.rambler);
-  while (RMB.ready.length < 2 && RMB.q.length) {
-    const text = RMB.q.shift(), sp = speakText(text);
-    RMB.ready.push({ text, buf: c && c.voice && sp ? ttsBuf(c.voice, sp).catch((e) => { logDiag('しゃべり続ける子の声: ' + e.message); return null; }) : Promise.resolve(null) });
+// ---- しゃべり続ける子（第81版・裏のグループ通話。第82版で何人でも）：ほかの子のセリフが流れているあいだだけ、後ろで声を重ねて流す（選んだ子は全員同時。だれも話していないあいだは黙る）。
+// 一人ずつ RMB.p[id]：q＝まだ声にしていないひとり話・ready＝声を作っている／作ったもの（先に2つまで）・src＝鳴らしている声。足りなくなったらサーバーに続きを頼む（who）。字幕は別の色。ひとり話は記録に残らない
+const RMB = { p: {} };
+const rmbIds = (cur) => (cur && cur.ramblers) || [];
+const rmbP = (id) => RMB.p[id] || (RMB.p[id] = { q: [], ready: [], on: false, tok: 0, src: null, fetching: false, wait: 0 });
+function rambleAdd(cur, map) { // map：{ キャラid: [話…] }
+  if (!cur || !map || typeof map !== 'object' || Array.isArray(map)) return;
+  for (const id of rmbIds(cur)) if (Array.isArray(map[id])) rmbP(id).q.push(...map[id].map((t) => String(t || '').trim()).filter(Boolean));
+}
+function rambleFill(cur, id) {
+  const P = rmbP(id), c = charById(id);
+  while (P.ready.length < 2 && P.q.length) {
+    const text = P.q.shift(), sp = speakText(text);
+    P.ready.push({ text, buf: c && c.voice && sp ? ttsBuf(c.voice, sp).catch((e) => { logDiag('しゃべり続ける子の声: ' + e.message); return null; }) : Promise.resolve(null) });
   }
-  if (RMB.q.length + RMB.ready.length < 3 && !RMB.fetching && Date.now() > RMB.wait) { // 続きを頼む
-    RMB.fetching = true;
-    api('POST', '/gcall/ramble', { id: cur.id }).then((d) => { if (CALL.cur !== cur) return; if (d.ramble && d.ramble.length) rambleAdd(cur, d.ramble); else RMB.wait = Date.now() + 20000; })
-      .catch((e) => { logDiag('しゃべり続ける子の続き: ' + e.message); RMB.wait = Date.now() + 20000; }).finally(() => { RMB.fetching = false; });
+  if (P.q.length + P.ready.length < 3 && !P.fetching && Date.now() > P.wait) { // 続きを頼む
+    P.fetching = true;
+    api('POST', '/gcall/ramble', { id: cur.id, who: id }).then((d) => { if (CALL.cur !== cur) return; if (d.ramble && (d.ramble[id] || []).length) rambleAdd(cur, d.ramble); else P.wait = Date.now() + 20000; })
+      .catch((e) => { logDiag('しゃべり続ける子の続き: ' + e.message); P.wait = Date.now() + 20000; }).finally(() => { P.fetching = false; });
   }
 }
-function rambleStart(cur) {
-  if (!cur || !cur.rambler || RMB.on || cur.ending) return;
-  RMB.on = true; const tok = ++RMB.tok;
-  const alive = () => RMB.on && RMB.tok === tok && CALL.cur === cur;
+function rambleStart(cur, speaker) { // speaker：いま話している子（その子がしゃべり続ける子なら、その子だけ止める）
+  for (const id of rmbIds(cur)) { if (id === speaker) rambleStopOne(id); else rambleStartOne(cur, id); }
+}
+function rambleStartOne(cur, id) {
+  const P = rmbP(id);
+  if (!cur || P.on || cur.ending) return;
+  P.on = true; const tok = ++P.tok;
+  const alive = () => P.on && P.tok === tok && CALL.cur === cur;
   (async () => {
     while (alive()) {
-      rambleFill(cur);
-      const it = RMB.ready[0];
+      rambleFill(cur, id);
+      const it = P.ready[0];
       if (!it) { await sleep(400); continue; }
       const buf = await it.buf;
       if (!alive()) return; // 流さなかった分は次に回す
       if (actx && actx.state !== 'running') { await sleep(500); continue; } // 音が止まっているあいだは進めない
-      RMB.ready.shift(); rambleFill(cur);
+      P.ready.shift(); rambleFill(cur, id);
       if (!buf) continue;
-      gcRambleSub(cur, it.text);
-      await rambleBuf(cur, buf);
+      gcRambleSub(cur, id, it.text);
+      await rambleBuf(cur, id, buf);
     }
   })();
 }
-function rambleBuf(cur, buf) {
+function rambleBuf(cur, id, buf) {
   return new Promise((res) => {
-    const c = ac(), g = vGain(); if (!c || !g || c.state !== 'running') return res();
+    const c = ac(), g = vGain(), P = rmbP(id); if (!c || !g || c.state !== 'running') return res();
     const s = c.createBufferSource(); s.buffer = buf;
-    const cg = c.createGain(); cg.gain.value = charVol(cur.rambler); s.connect(cg); cg.connect(g);
+    const cg = c.createGain(); cg.gain.value = charVol(id); s.connect(cg); cg.connect(g);
+    const el = $('cvMembers').querySelector(`.cvM[data-cvm="${CSS.escape(id)}"]`);
     let done = false, gd = 0;
-    const fin = () => { if (done) return; done = true; clearTimeout(gd); if (RMB.src && RMB.src.s === s) RMB.src = null; $('cvMembers').querySelectorAll('.cvM.ramb').forEach((el) => el.classList.remove('ramb')); res(); };
+    const fin = () => { if (done) return; done = true; clearTimeout(gd); if (P.src && P.src.s === s) P.src = null; if (el) el.classList.remove('ramb'); res(); };
     s.onended = () => { try { cg.disconnect(); } catch (_) {} fin(); };
     gd = setTimeout(fin, buf.duration * 1000 + 2500);
-    RMB.src = { s, cg, fin };
-    const el = $('cvMembers').querySelector(`.cvM[data-cvm="${CSS.escape(cur.rambler)}"]`); if (el) el.classList.add('ramb');
+    P.src = { s, cg, fin };
+    if (el) el.classList.add('ramb');
     s.start();
   });
 }
-function rambleStop() { // すぐに小さくして止める
-  RMB.on = false; RMB.tok++;
-  const x = RMB.src; if (!x) return; RMB.src = null;
+function rambleStopOne(id) { // すぐに小さくして止める
+  const P = RMB.p[id]; if (!P) return;
+  P.on = false; P.tok++;
+  const x = P.src; if (!x) return; P.src = null;
   try { const t = x.cg.context.currentTime; x.cg.gain.setTargetAtTime(0, t, 0.05); x.s.stop(t + 0.25); } catch (_) { try { x.s.stop(); } catch (_) {} }
   x.fin();
 }
-function gcRambleSub(cur, text) {
-  const box = $('cvSub'), c = charById(cur.rambler);
+function rambleStop() { for (const id of Object.keys(RMB.p)) rambleStopOne(id); }
+const rambling = () => Object.values(RMB.p).filter((P) => P.src).length; // いま鳴っているひとり話の数
+function gcRambleSub(cur, id, text) {
+  const box = $('cvSub'), c = charById(id);
   box.insertAdjacentHTML('beforeend', `<div class="ramb"><b>${esc(c ? gcCharName(c, cur.ura) : '？')}：</b>${esc(text)}</div>`);
   while (box.children.length > 400) box.firstChild.remove();
   box.scrollTop = box.scrollHeight;
@@ -4697,7 +4710,7 @@ async function gcPlay0(lines, wait) {
     if (!CALL.cur || CALL.cur.speakTok !== tok) return;
     cur.started = i + 1;
     gcSub(lines[i].id, lines[i].text); gcTalking(lines[i].id); setStat('通話中');
-    if (cur.rambler) { if (lines[i].id === cur.rambler) rambleStop(); else rambleStart(cur); } // ほかの子が話しているあいだは、しゃべり続ける子が後ろで話す（本人があなたに返事をするあいだは止める）
+    if (rmbIds(cur).length) rambleStart(cur, lines[i].id); // ほかの子が話しているあいだは、しゃべり続ける子たちが後ろで話す（本人があなたに返事をするあいだは、その子だけ止める）
     if (buf) await playBuf(buf, lines[i].id); else await sleep(Math.min(6000, 600 + lines[i].text.length * 110));
   }
   rambleStop();

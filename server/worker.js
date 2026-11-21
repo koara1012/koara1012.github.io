@@ -14,7 +14,7 @@
 //    ・Cron トリガー  * * * * *  （毎分。実際に動くのは13分おき）
 // =====================================================================
 
-const VERSION = '第81版（2026-11-21 17:00:00 更新・通話中の［📝状況］（すべての通話）・裏のグループ通話の「しゃべり続ける子」）';
+const VERSION = '第82版（2026-11-21 17:50:00 更新・裏のグループ通話の「しゃべり続ける子」を何人でも（全員同時・一人ずつ話す内容））';
 const DEFAULT_MODEL = 'gemini-flash-latest';
 const DEFAULT_GROK_MODEL = 'grok-4.7';                 // X（Twitter）の Grok と同じ最新世代
 const FALLBACK_GROK_MODEL = 'grok-4-fast-non-reasoning'; // 上が使えないときの予備
@@ -289,8 +289,7 @@ function normGroup(g) {
     narration: g.narration !== false,                          // ナレーションを入れるか
     length: ['short', 'normal', 'long'].includes(g.length) ? g.length : 'normal',
     maxSplit: clamp(Math.round(num(g.maxSplit, 6)), 2, 12),   // 1回の返事の吹き出しの最大数
-    rambler: typeof g.rambler === 'string' ? g.rambler.slice(0, 80) : '', // グループ通話で、ほかの子の後ろでしゃべり続ける子（第81版）
-    rambleTopic: String(g.rambleTopic || '').trim().slice(0, 300),        // その子が何を話し続けるか（空欄ならキャラ設定から）
+    ramblers: groupRamblers(g), // グループ通話で、ほかの子の後ろでしゃべり続ける子たち [{ id, topic（空欄ならキャラ設定から） }]（第81版・第82版で何人でも）
   };
 }
 async function loadGroups(env) { // 裏のグループだけ（表の通話グループ ogp- は loadOGroups）
@@ -742,8 +741,9 @@ async function route(key, url, body, env, ctx, req) {
       const test = !!body.test;
       const d = test || body.sleep || (!g.ura && !g.lateJoin) ? null : g.ura ? await decideUraGroupAnswer(env, g, ms, Date.now(), chars) : await decideGroupAnswer(env, g, ms, Date.now()); // 裏も「ふつう」なら出る子を決める（第62版。test＝必ず全員出る。第78版：寝落ち通話も全員出る）
       const joined = d ? ms.filter((c) => d[c.id] && d[c.id].answer).map((c) => c.id) : ms.map((c) => c.id);
-      const rambler = g.ura && g.rambler && joined.includes(g.rambler) && joined.length >= 2 ? g.rambler : ''; // しゃべり続ける子（第81版・裏だけ。ほかに話す子がいるときだけ）
-      const cl = { id: newCallId(), group: g.id, ...(g.ura ? { ura: true } : {}), ...(rambler ? { rambler } : {}), ...(body.sleep ? { sleep: true, ...(body.keep === false ? { nokeep: true } : {}) } : {}), charId: g.id, members: joined, invited: ms.map((c) => c.id), dir: 'out', status: 'dialing', created: Date.now(), transcript: [], batch: 0, test };
+      const rmb = g.ura ? groupRamblers(g).map((x) => x.id).filter((id) => joined.includes(id)) : []; // しゃべり続ける子（第81版・裏だけ。第82版で何人でも）
+      const ramblers = rmb.length >= joined.length ? rmb.slice(0, joined.length - 1) : rmb; // 出た子が全員しゃべり続ける子なら、最後の1人はふつうに話す（会話の土台を残す）
+      const cl = { id: newCallId(), group: g.id, ...(g.ura ? { ura: true } : {}), ...(ramblers.length ? { ramblers } : {}), ...(body.sleep ? { sleep: true, ...(body.keep === false ? { nokeep: true } : {}) } : {}), charId: g.id, members: joined, invited: ms.map((c) => c.id), dir: 'out', status: 'dialing', created: Date.now(), transcript: [], batch: 0, test };
       if (body.from) { // 前の通話の最後の流れを、そのまま覚えてかけ直す（言ったことにはしない＝old）
         const prev = await kvGet(env, gclogKey(g.id, body.from), null);
         if (!prev) throw new HttpError(404, 'この通話の会話は残っていません');
@@ -803,10 +803,11 @@ async function route(key, url, body, env, ctx, req) {
     }
     case 'POST /gcall/ramble': { // しゃべり続ける子のひとり話の続き（第81版・裏のグループ通話）。アプリは、ほかの子が話している間に足りなくなったら頼む
       const cl = await getCall(env, body.id);
-      if (!cl.group || !cl.rambler || cl.status !== 'active') return json({ ramble: [] });
+      const who = String(body.who || '');
+      if (!cl.group || !callRamblers(cl).includes(who) || cl.status !== 'active') return json({ ramble: {} });
       const g = await getCallGroup(env, cl.group);
-      if (gcStopped(await getSettings(env), g)) return json({ ramble: [] });
-      return json({ ramble: await keep(ctx, rambleMore(env, cl, g)) });
+      if (gcStopped(await getSettings(env), g)) return json({ ramble: {} });
+      return json({ ramble: { [who]: await keep(ctx, rambleMore(env, cl, g, who)) } }); // 第82版：一人ずつ（who）
     }
     case 'POST /gcall/end': { // 切った。グループの記憶にまとめ・グループのトークに記録（1対1には残さない）
       const cl = await kvGet(env, 'call:' + String(body.id || ''), null);
@@ -839,7 +840,7 @@ async function route(key, url, body, env, ctx, req) {
       const chars = await loadChars(env);
       g.members = g.members.filter((id) => chars.some((c) => c.id === id));
       g.roles = Object.fromEntries(Object.entries(g.roles).filter(([id]) => g.members.includes(id))); // メンバーでない子の立場は捨てる
-      if (!g.members.includes(g.rambler)) g.rambler = '';
+      g.ramblers = g.ramblers.filter((x) => g.members.includes(x.id));
       if (!g.members.length) throw new HttpError(400, 'メンバーを1人以上選んでください');
       const { id, ...data } = g;
       await env.DB.prepare('INSERT INTO groups (id,data,created) VALUES (?,?,?) ON CONFLICT(id) DO UPDATE SET data=excluded.data').bind(id, JSON.stringify(data), old ? old.created : Date.now()).run();
@@ -2644,7 +2645,7 @@ async function getCall(env, id) {
 }
 const putCall = (env, cl) => kvSet(env, 'call:' + cl.id, cl);
 const delCall = (env, id) => env.DB.prepare('DELETE FROM kv WHERE k IN (?,?)').bind('call:' + id, 'gramble:' + id).run(); // gramble：しゃべり続ける子のひとり話（第81版）
-const callPublic = (cl) => ({ id: cl.id, charId: cl.charId, ...(cl.group ? { group: cl.group, invited: cl.invited || [] } : {}), ...(cl.morning ? { morning: true, ...(cl.nokeep ? { nokeep: true } : {}), ...(cl.test ? { test: true } : {}) } : {}), ...(cl.ura && !cl.group ? { ura: true } : {}), ...(cl.test && !cl.group && !cl.morning ? { test: true, nokeep: !!cl.nokeep, testInfo: cl.testInfo || null } : {}), ...(cl.remind ? { remind: cl.remind.map((x) => ({ at: x.at, what: x.what })), ...(cl.nokeep ? { nokeep: true } : {}) } : {}), ...(cl.scene ? { scene: cl.scene } : {}), ...(cl.rambler ? { rambler: cl.rambler } : {}), members: cl.members, dir: cl.dir, status: cl.status, created: cl.created, ringAt: cl.ringAt || 0, answeredAt: cl.answeredAt || 0, ringUntil: cl.ringAt ? cl.ringAt + CALL_RING_MS + CALL_GRACE_MS : 0 });
+const callPublic = (cl) => ({ id: cl.id, charId: cl.charId, ...(cl.group ? { group: cl.group, invited: cl.invited || [] } : {}), ...(cl.morning ? { morning: true, ...(cl.nokeep ? { nokeep: true } : {}), ...(cl.test ? { test: true } : {}) } : {}), ...(cl.ura && !cl.group ? { ura: true } : {}), ...(cl.test && !cl.group && !cl.morning ? { test: true, nokeep: !!cl.nokeep, testInfo: cl.testInfo || null } : {}), ...(cl.remind ? { remind: cl.remind.map((x) => ({ at: x.at, what: x.what })), ...(cl.nokeep ? { nokeep: true } : {}) } : {}), ...(cl.scene ? { scene: cl.scene } : {}), ...(callRamblers(cl).length ? { ramblers: callRamblers(cl) } : {}), members: cl.members, dir: cl.dir, status: cl.status, created: cl.created, ringAt: cl.ringAt || 0, answeredAt: cl.answeredAt || 0, ringUntil: cl.ringAt ? cl.ringAt + CALL_RING_MS + CALL_GRACE_MS : 0 });
 // アプリが「今は通話していない」と言ったときに、残っている通話（画面が固まった・アプリを閉じたなどで切れなかったもの）を片付ける。
 // 話していた通話は、ふつうに切ったときと同じく記録とまとめを残す（第54版）
 async function clearStaleCalls(env) {
@@ -3519,8 +3520,8 @@ ${activityText(state, now, c.id)}${mem ? `\n### ${c.name}が覚えているユ�
   const gmem = await kvGet(env, 'gmem:' + g.id, []);
   const wb = await worldBlock(env, (g.prompt || '') + '\n' + (g.ura ? (g.synopsis || '') + '\n' + ms.map((c) => c.prompt).join('\n') + '\n' : '') + cl.transcript.slice(-20).map((m) => m.text).join('\n'));
   const sys = g.ura ? buildUraGroupCallSystem(g, ms, info, gmem, cl, now, cont, st, await uraGroupTalk(env, g, chars)) : buildGroupCallSystem(g, ms, info, gmem, cl, now, cont);
-  const rb = rambleChar(cl, g, ms), rlog = rb ? await kvGet(env, 'gramble:' + cl.id, []) : [];
-  const r = await callAIObj(env, g.ura ? 'ura' : 'omote', wb + sys + (rb ? rambleRules(g, rb, rlog) : '') + sleepRules(cl, check, true), turns, rb ? GCALL_RAMBLE_SCHEMA : GCALL_SCHEMA, 'group_call_reply');
+  const rbs = rambleChars(cl, g, ms), rlog = rbs.length ? await rambleLog(env, cl.id) : {};
+  const r = await callAIObj(env, g.ura ? 'ura' : 'omote', wb + sys + (rbs.length ? rambleRules(g, rbs, rlog) : '') + sleepRules(cl, check, true), turns, rbs.length ? GCALL_RAMBLE_SCHEMA : GCALL_SCHEMA, 'group_call_reply');
   let lines = [];
   for (const x of (r && Array.isArray(r.lines) ? r.lines : [])) {
     const c = findSpeaker(ms, x && x.speaker);
@@ -3528,66 +3529,87 @@ ${activityText(state, now, c.id)}${mem ? `\n### ${c.name}が覚えているユ�
     if (c && text) lines.push({ id: c.id, text: text.slice(0, 600) });
   }
   let ramble = null;
-  if (rb) { // しゃべり続ける子（第81版）：ふだんの返事には出さない（あなたが話した直後だけ、その子に向けた話なら返事をしてよい）。ひとり話は ramble で別に返す
-    const last = cl.transcript[cl.transcript.length - 1];
-    if (!(last && last.who === 'me' && !last.scene && !last.old)) lines = lines.filter((x) => x.id !== rb.id);
-    ramble = rambleClean(r && r.ramble);
-    if (ramble.length) await kvSet(env, 'gramble:' + cl.id, [...rlog, ...ramble].slice(-RAMBLE_LOG));
-    if (!lines.length && ramble.length) return { lines: [], wait: !!(r && r.wait_user), ramble };
+  if (rbs.length) { // しゃべり続ける子（第81版・第82版で何人でも）：ふだんの返事には出さない（あなたが話した直後だけ、その子に向けた話なら返事をしてよい）。ひとり話は ramble で別に返す（{ キャラid: [話…] }）
+    const last = cl.transcript[cl.transcript.length - 1], ids = rbs.map((c) => c.id);
+    if (!(last && last.who === 'me' && !last.scene && !last.old)) lines = lines.filter((x) => !ids.includes(x.id));
+    ramble = {};
+    for (const x of (r && Array.isArray(r.ramble) ? r.ramble : [])) {
+      const c = findSpeaker(rbs, x && x.speaker), t = rambleClean([x && x.text])[0];
+      if (c && t && (ramble[c.id] || []).length < 8) (ramble[c.id] = ramble[c.id] || []).push(t);
+    }
+    await rambleSave(env, cl.id, rlog, ramble);
+    if (!Object.keys(ramble).length) ramble = null;
+    if (!lines.length && ramble) return { lines: [], wait: !!(r && r.wait_user), ramble };
   }
   if (!lines.length) throw new Error('返答が空でした');
   if (looksRefused(lines.map((x) => x.text))) throw new AiRefused();
   return { lines: check === 'ask' ? lines.slice(0, 1) : lines.slice(0, check === 'bye' ? 3 : 8), wait: !!(r && r.wait_user), ...(ramble ? { ramble } : {}) };
 }
-// ---- しゃべり続ける子（第81版・裏のグループ通話だけ）
-// グループの設定で選んだ子（g.rambler）は、ほかの子が話している間、後ろで自分の話をずっと続ける（アプリが声を重ねて流す。誰も話していない間は黙る）。
-// ほかの子は一切触れない。あなたがその子に向けて話したときだけ、ふつうに返事をする。ひとり話は記録・まとめに入れない（kv gramble:<通話id> に最近の分だけ。通話が終わったら消す）
-const RAMBLE_LOG = 16;
-const GCALL_RAMBLE_SCHEMA = { type: 'object', properties: { ...GCALL_SCHEMA.properties, ramble: { type: 'array', items: { type: 'string' } } }, required: ['lines', 'wait_user', 'ramble'], additionalProperties: false };
+// ---- しゃべり続ける子（第81版・裏のグループ通話だけ。第82版で何人でも選べるように・一人ずつ話す内容）
+// グループの設定で選んだ子（g.ramblers＝[{ id, topic }]。第81版の g.rambler・rambleTopic も読む）は、ほかの子が話している間、後ろで自分の話をずっと続ける（アプリが声を重ねて流す。全員同時。誰も話していない間は黙る）。
+// ほかの子も、しゃべり続ける子どうしも一切触れない。あなたがその子に向けて話したときだけ、ふつうに返事をする。ひとり話は記録・まとめに入れない（kv gramble:<通話id> = { キャラid: [最近の話] }。通話が終わったら消す）
+const RAMBLE_LOG = 16, RAMBLE_MAX = 9;
+const GCALL_RAMBLE_SCHEMA = { type: 'object', properties: { ...GCALL_SCHEMA.properties, ramble: GCALL_SCHEMA.properties.lines }, required: ['lines', 'wait_user', 'ramble'], additionalProperties: false };
 const RAMBLE_SCHEMA = { type: 'object', properties: { ramble: { type: 'array', items: { type: 'string' } } }, required: ['ramble'], additionalProperties: false };
-const rambleChar = (cl, g, ms) => (g.ura && cl.rambler && cl.members.includes(cl.rambler) ? ms.find((c) => c.id === cl.rambler) || null : null);
+function groupRamblers(g) { // [{ id, topic }]
+  const raw = Array.isArray(g && g.ramblers) ? g.ramblers : g && g.rambler ? [{ id: g.rambler, topic: g.rambleTopic }] : [];
+  const out = [];
+  for (const x of raw) { const id = String((x && x.id) || '').slice(0, 80); if (id && !out.some((y) => y.id === id)) out.push({ id, topic: String((x && x.topic) || '').trim().slice(0, 300) }); }
+  return out.slice(0, RAMBLE_MAX);
+}
+const callRamblers = (cl) => (Array.isArray(cl.ramblers) ? cl.ramblers : cl.rambler ? [cl.rambler] : []);
+const rambleChars = (cl, g, ms) => (g.ura ? callRamblers(cl).filter((id) => cl.members.includes(id)).map((id) => ms.find((c) => c.id === id)).filter(Boolean) : []);
+async function rambleLog(env, id) { const v = await kvGet(env, 'gramble:' + id, {}); return v && typeof v === 'object' && !Array.isArray(v) ? v : {}; }
+async function rambleSave(env, id, rlog, add) {
+  const keys = Object.keys(add || {}).filter((k) => add[k].length); if (!keys.length) return;
+  const now = await rambleLog(env, id); // 頼みが重なったときに消し合わないよう、今のを読み直して足す
+  for (const k of keys) now[k] = [...(now[k] || rlog[k] || []), ...add[k]].slice(-RAMBLE_LOG);
+  await kvSet(env, 'gramble:' + id, now);
+}
 const rambleClean = (a) => (Array.isArray(a) ? a : []).map((t) => String(t || '').replace(/^\s*[＊*].*$/gm, '').replace(/^「([\s\S]*)」$/, '$1').replace(/[（(][^）)]*[）)]/g, '').trim()).filter(Boolean).slice(0, 8).map((t) => t.slice(0, 300));
-function rambleWhat(g, nm) { return g.rambleTopic ? `話す内容：${g.rambleTopic}` : `話す内容は、${nm}の性格・好きなこと・癖らしいもの（キャラクター設定から、${nm}らしい話を選ぶ）`; }
-function rambleRules(g, rb, rlog) {
-  const nm = gcName(rb, g);
+const rambleTopicOf = (g, id) => (groupRamblers(g).find((x) => x.id === id) || {}).topic || '';
+function rambleWhat(g, c) { const nm = gcName(c, g), tp = rambleTopicOf(g, c.id); return tp ? `話す内容：${tp}` : `話す内容は、${nm}の性格・好きなこと・癖らしいもの（キャラクター設定から、${nm}らしい話を選ぶ）`; }
+function rambleRules(g, rbs, rlog) {
+  const nms = rbs.map((c) => gcName(c, g)), all = nms.join('・'), many = rbs.length > 1;
   return `
-# しゃべり続ける子：${nm}（最優先）
-- ${nm}には、ひとりで延々と話し続ける癖がある。この通話のあいだ、${nm}は、ほかの子が話している後ろで、自分の話をひとりでずっと話し続けている。${rambleWhat(g, nm)}。
-- ほかの子は、${nm}のひとり話には一切触れない・反応しない・ツッコまない・話題にもしない（いつものことなので、みんな気にせず自分たちの会話を続ける）。
-- ${nm}のひとり話は lines には書かず、ramble に書く。ramble：${nm}のひとり話の続き（4〜6個。1個は1〜2文の話し言葉。前の続きから自然につなげる。同じ話をくり返さない。話題が尽きたら、関係のある別の話に移ってよい。だれかに話しかけない、ひとり語りの調子）。
-- lines に${nm}を出すのは、ユーザーが${nm}に向けて話しかけたとき（呼びかけ・質問など。言い回しではなく意味で判断）だけ。そのときだけ、${nm}はユーザーにふつうに返事をする（1〜2セリフ）。返事のあとは、またひとり話に戻る（ramble で続ける）。
-- ${nm}がユーザーに返事をしても、ほかの子は${nm}の話には乗らない。
-## ${nm}のひとり話（最近。古い順。この続きから）
-${rlog.length ? rlog.slice(-10).map((t) => '- ' + t).join('\n') : '（まだ。これから話し始める）'}
+# しゃべり続ける子：${all}（最優先）
+- ${many ? `${all}には、それぞれ` : `${all}には、`}ひとりで延々と話し続ける癖がある。この通話のあいだ、${many ? 'それぞれが同時に、' : ''}ほかの子が話している後ろで、自分の話をひとりでずっと話し続けている。
+${rbs.map((c) => `  - ${gcName(c, g)}：${rambleWhat(g, c)}`).join('\n')}
+- ほかの子は、ひとり話には一切触れない・反応しない・ツッコまない・話題にもしない（いつものことなので、みんな気にせず自分たちの会話を続ける）。${many ? 'しゃべり続ける子どうしも、お互いのひとり話には一切触れない（それぞれ勝手に自分の話を続ける）。' : ''}
+- ひとり話は lines には書かず、ramble に書く（speaker に話す子の名前、text に話）。ramble：${many ? '一人につき' : ''}ひとり話の続きを4〜6個（1個は1〜2文の話し言葉。前の続きから自然につなげる。同じ話をくり返さない。話題が尽きたら、関係のある別の話に移ってよい。だれかに話しかけない、ひとり語りの調子）。
+- lines に${all}を出すのは、ユーザーがその子に向けて話しかけたとき（呼びかけ・質問など。言い回しではなく意味で判断）だけ。そのときだけ、その子はユーザーにふつうに返事をする（1〜2セリフ）。返事のあとは、またひとり話に戻る（ramble で続ける）。${many ? 'ほかのしゃべり続ける子は、そのままひとり話を続ける。' : ''}
+- その子がユーザーに返事をしても、ほかの子はその子の話には乗らない。
+## ひとり話（最近。古い順。この続きから）
+${rbs.map((c) => `### ${gcName(c, g)}\n${(rlog[c.id] || []).length ? rlog[c.id].slice(-8).map((t) => '- ' + t).join('\n') : '（まだ。これから話し始める）'}`).join('\n')}
 `;
 }
-async function rambleMore(env, cl, g) { // ひとり話の続きだけを作る（ほかの子が長く話していて、足りなくなったとき）
+async function rambleMore(env, cl, g, who) { // 一人分のひとり話の続きだけを作る（ほかの子が長く話していて、足りなくなったとき）
   const chars = await loadChars(env);
   const ms = cl.members.map((id) => chars.find((c) => c.id === id)).filter(Boolean);
-  const rb = rambleChar(cl, g, ms); if (!rb) return [];
-  const nm = gcName(rb, g), rlog = await kvGet(env, 'gramble:' + cl.id, []);
+  const rb = rambleChars(cl, g, ms).find((c) => c.id === who); if (!rb) return [];
+  const nm = gcName(rb, g), rlog = await rambleLog(env, cl.id), mine = rlog[rb.id] || [];
   const nameOf = (id) => { const c = chars.find((x) => x.id === id); return c ? gcName(c, g) : '（いなくなった人）'; };
   const around = cl.transcript.filter((m) => !m.old).slice(-8).map((m) => (m.scene ? '（状況）' + sceneOf(m) : (m.who === 'me' ? 'ユーザー' : nameOf(m.who)) + ': ' + trunc(m.text, 120))).join('\n');
   const sys = `あなたは${nm}になりきって、グループ通話（声だけ）のあいだ、ほかの子の会話の後ろで、ひとりで延々と話し続けているひとり話の続きを書きます。
 # キャラクター: ${nm}
 ${charPersona(rb, 'ura', 2000)}${(g.roles || {})[rb.id] ? `\n# このグループでの${nm}の立場（優先）\n${g.roles[rb.id]}` : ''}
 # ひとり話
-- ${rambleWhat(g, nm)}。
-- まわりの会話には反応しない（だれも${nm}の話を聞いていないが、気にせず話し続ける）。だれかに話しかけない、ひとり語りの調子。
+- ${rambleWhat(g, rb)}。
+- まわりの会話にも、ほかの子のひとり話にも反応しない（だれも${nm}の話を聞いていないが、気にせず話し続ける）。だれかに話しかけない、ひとり語りの調子。
 - 4〜6個。1個は1〜2文の話し言葉。前の続きから自然につなげる。同じ話をくり返さない。話題が尽きたら、関係のある別の話に移ってよい。
 - 声で読み上げるので、ナレーション・（ ）書き・絵文字・記号での演出は使わない。
 - 自分がAIであることには触れない。未成年の設定なら、性的な内容は一切話さない。
 ${cl.sleep ? '- 寝落ち通話なので、小さめの声のつもりで穏やかに。\n' : ''}${cl.scene ? `# いまの状況（ユーザーが書いたもの）\n${cl.scene}\n` : ''}# まわりの会話（最近。参考。反応はしない）
 ${around || '（まだない）'}
 # これまでのひとり話（古い順。この続きから）
-${rlog.length ? rlog.slice(-10).map((t) => '- ' + t).join('\n') : '（まだ）'}
+${mine.length ? mine.slice(-10).map((t) => '- ' + t).join('\n') : '（まだ）'}
 出力は {"ramble": ["話1", "話2"]} の形のJSONのみ。`;
   try {
     const r = await aiJson(env, 'ura', sys, '（続きを話す）', RAMBLE_SCHEMA, 'group_call_ramble');
     const out = rambleClean(r && r.ramble);
-    if (out.length) await kvSet(env, 'gramble:' + cl.id, [...rlog, ...out].slice(-RAMBLE_LOG));
+    await rambleSave(env, cl.id, rlog, { [rb.id]: out });
     return out;
-  } catch (e) { await log(env, `しゃべり続ける子（${g.name}）: ${e.message}`); return []; }
+  } catch (e) { await log(env, `しゃべり続ける子（${g.name}・${nm}）: ${e.message}`); return []; }
 }
 async function finishGroupCall(env, cl, { by = 'me', est = null } = {}) {
   await delCall(env, cl.id);

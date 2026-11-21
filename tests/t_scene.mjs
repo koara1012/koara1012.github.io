@@ -8,7 +8,7 @@ const waits = []; const ctx = { waitUntil: (p) => waits.push(p) };
 const flush = async () => { while (waits.length) await waits.shift(); };
 const call = async (m, p, b) => { const r = await W.fetch(new Request('https://w' + p, { method: m, headers: { 'X-App-Token': 'pw' }, body: b ? JSON.stringify(b) : undefined }), env, ctx); const d = await r.json(); await flush(); if (!r.ok) throw Object.assign(new Error(p + ' ' + JSON.stringify(d)), { status: r.status }); return d; };
 let fails = 0; const ok = (c, m) => { if (!c) fails++; console.log(c ? 'ok' : 'FAIL', m); };
-const ai = []; const G = { lines: [{ speaker: 'アカリ', text: 'ねえ、聞いてる？' }, { speaker: 'ウラ', text: 'うん、聞いてるよ。' }], ramble: ['ところでカタツムリの歯は一万本以上あるらしくて', 'しかも生え変わるんだって'] };
+const ai = []; const G = { lines: [{ speaker: 'アカリ', text: 'ねえ、聞いてる？' }, { speaker: 'ウラ', text: 'うん、聞いてるよ。' }], ramble: [{ speaker: 'トリビア', text: 'ところでカタツムリの歯は一万本以上あるらしくて' }, { speaker: 'トリビア', text: 'しかも生え変わるんだって' }] };
 globalThis.fetch = async (u, i) => {
   u = String(u);
   if (!u.includes('googleapis') && !u.includes('x.ai')) return new Response('{}');
@@ -106,17 +106,17 @@ ok(lg.transcript.some((x) => x.scene && x.text.includes('お花見')), 'group lo
 
 // ================= しゃべり続ける子（裏のグループ）
 let g = (await call('POST', '/group', { group: { name: '屋上組', members: [a.id, u.id, t.id], rambler: t.id, rambleTopic: '生き物の豆知識' } })).group;
-ok(g.rambler === t.id && g.rambleTopic === '生き物の豆知識', 'group stores the rambler');
-ok((await call('POST', '/group', { group: { ...g, members: [a.id, u.id] } })).group.rambler === '', 'not a member → no rambler');
-g = (await call('POST', '/group', { group: { ...g, members: [a.id, u.id, t.id], rambler: t.id } })).group;
+ok(g.ramblers.length === 1 && g.ramblers[0].id === t.id && g.ramblers[0].topic === '生き物の豆知識' && !('rambler' in g), 'old shape (rambler) is read');
+ok((await call('POST', '/group', { group: { ...g, members: [a.id, u.id] } })).group.ramblers.length === 0, 'not a member → no rambler');
+g = (await call('POST', '/group', { group: { ...g, members: [a.id, u.id, t.id], ramblers: [{ id: t.id, topic: '生き物の豆知識' }] } })).group;
 r = await call('POST', '/gcall/start', { groupId: g.id, all: true });
-ok(r.call.rambler === t.id, 'call has the rambler');
+ok(r.call.ramblers.join() === t.id, 'call has the rambler');
 G.lines = [{ speaker: 'アカリ', text: 'もしもし' }, { speaker: 'トリビア', text: '知ってる？' }, { speaker: 'ウラ', text: 'やっほー' }];
 ai.length = 0;
 d = await call('POST', '/gcall/connect', { id: r.call.id });
 q = ai.find((x) => x.sch.includes('wait_user'));
 ok(q.grok && q.sch.includes('ramble') && q.sys.includes('しゃべり続ける子：トリビア') && q.sys.includes('生き物の豆知識') && q.sys.includes('一切触れない'), 'prompt: rambler rules');
-ok(d.lines.length === 2 && !d.lines.some((x) => x.id === t.id) && d.ramble.length === 2, 'rambler kept out of the lines; ramble returned');
+ok(d.lines.length === 2 && !d.lines.some((x) => x.id === t.id) && d.ramble[t.id].length === 2, 'rambler kept out of the lines; ramble returned');
 const gid = r.call.id;
 // あなたが話しかけた → 返事をしてよい
 G.lines = [{ speaker: 'トリビア', text: 'あ、うん。呼んだ？' }];
@@ -124,21 +124,22 @@ d = await call('POST', '/gcall/say', { id: gid, text: 'トリビアちゃん、�
 ok(d.lines.length === 1 && d.lines[0].id === t.id, 'addressed by you → the rambler answers');
 // 黙っているとき：出てきても外す。lines が rambler だけなら空で、ひとり話は返す
 d = await call('POST', '/gcall/say', { id: gid, text: '', heard: 1 });
-ok(d.lines.length === 0 && d.ramble.length === 2, 'silent turn: rambler lines dropped, ramble still returned');
+ok(d.lines.length === 0 && d.ramble[t.id].length === 2, 'silent turn: rambler lines dropped, ramble still returned');
 q = ai.filter((x) => x.sch.includes('wait_user')).at(-1);
 ok(q.sys.includes('カタツムリの歯'), 'ramble history fed back so it continues');
 // 足りなくなったら続きだけ
 ai.length = 0;
-d = await call('POST', '/gcall/ramble', { id: gid });
+d = await call('POST', '/gcall/ramble', { id: gid, who: t.id });
 q = ai[0];
-ok(d.ramble.length === 2 && q.grok && q.sys.includes('ひとり話') && q.sys.includes('生き物の豆知識') && q.sys.includes('カタツムリ'), 'more ramble on request');
+ok(d.ramble[t.id].length === 2 && q.grok && q.sys.includes('ひとり話') && q.sys.includes('生き物の豆知識') && q.sys.includes('カタツムリ'), 'more ramble on request');
 // 状況も
 G.lines = [{ speaker: 'アカリ', text: '寒いね' }];
 await call('POST', '/gcall/say', { id: gid, scene: '雪が降っている', heard: 0 });
 ok(ai.filter((x) => x.sch.includes('wait_user')).at(-1).sys.includes('雪が降っている'), 'ura group: scene');
 ai.length = 0;
-await call('POST', '/gcall/ramble', { id: gid });
+await call('POST', '/gcall/ramble', { id: gid, who: t.id });
 ok(ai[0].sys.includes('雪が降っている'), 'ramble knows the scene');
+ok((await call('POST', '/gcall/ramble', { id: gid, who: a.id })).ramble[a.id] === undefined, 'ramble only for the chosen');
 ai.length = 0;
 m = (await call('POST', '/gcall/end', { id: gid })).message;
 q = ai.find((x) => x.sch.includes('"summary"'));
@@ -148,18 +149,43 @@ ok(!JSON.stringify(lg2).includes('カタツムリ') && JSON.stringify(lg2).inclu
 ok(!DB.raw.prepare("SELECT 1 FROM kv WHERE k LIKE 'gramble:%'").get(), 'ramble log removed after the call');
 // 寝落ち通話でも
 r = await call('POST', '/gcall/start', { groupId: g.id, sleep: true, keep: true });
-ok(r.call.rambler === t.id, 'ura group sleep call: rambler too');
+ok(r.call.ramblers.join() === t.id, 'ura group sleep call: rambler too');
 G.lines = [{ speaker: 'アカリ', text: 'おやすみ前だね' }];
 d = await call('POST', '/gcall/connect', { id: r.call.id });
-ok(d.ramble && d.ramble.length, 'sleep call ramble');
+ok(d.ramble && d.ramble[t.id].length, 'sleep call ramble');
 await call('POST', '/gcall/end', { id: r.call.id });
 // 表のグループには付かない
 r = await call('POST', '/gcall/start', { groupId: og.id, test: true });
-ok(!r.call.rambler, 'omote group: no rambler');
+ok(!r.call.ramblers, 'omote group: no rambler');
 await call('POST', '/gcall/end', { id: r.call.id });
 // 選んだ子だけしか出ないときは付けない（ほかに話す子がいない）
-const g1 = (await call('POST', '/group', { group: { name: 'ひとり', members: [t.id], rambler: t.id } })).group;
+const g1 = (await call('POST', '/group', { group: { name: 'ひとり', members: [t.id], ramblers: [{ id: t.id }] } })).group;
 r = await call('POST', '/gcall/start', { groupId: g1.id, all: true });
-ok(!r.call.rambler, 'alone → no rambler');
+ok(!r.call.ramblers, 'alone → no rambler');
+await call('POST', '/gcall/end', { id: r.call.id });
+
+// ================= 第82版：何人でも（全員同時・一人ずつ話す内容・お互いにも触れない）
+const g2 = (await call('POST', '/group', { group: { name: '三人', members: [a.id, u.id, t.id], ramblers: [{ id: t.id, topic: '生き物の豆知識' }, { id: u.id, topic: '昔のゲームの話' }] } })).group;
+ok(g2.ramblers.length === 2 && g2.ramblers[1].topic === '昔のゲームの話', 'two ramblers with their own topics');
+r = await call('POST', '/gcall/start', { groupId: g2.id, all: true });
+ok(r.call.ramblers.length === 2, 'call has both');
+G.lines = [{ speaker: 'アカリ', text: 'もしもし' }, { speaker: 'ウラ', text: 'ねえ' }];
+G.ramble = [{ speaker: 'トリビア', text: 'カタツムリはね' }, { speaker: 'ウラ', text: '昔のゲーム機はね' }, { speaker: 'アカリ', text: 'これは混ざってはいけない' }];
+ai.length = 0;
+d = await call('POST', '/gcall/connect', { id: r.call.id });
+q = ai.find((x) => x.sch.includes('wait_user'));
+ok(q.sys.includes('トリビア・ウラ') && q.sys.includes('生き物の豆知識') && q.sys.includes('昔のゲームの話') && q.sys.includes('お互いのひとり話には一切触れない'), 'prompt: both ramblers, topics, ignore each other');
+ok(d.lines.length === 1 && d.lines[0].id === a.id, 'both kept out of the lines');
+ok(d.ramble[t.id][0] === 'カタツムリはね' && d.ramble[u.id][0] === '昔のゲーム機はね' && !d.ramble[a.id], 'ramble per rambler (others ignored)');
+ai.length = 0;
+d = await call('POST', '/gcall/ramble', { id: r.call.id, who: u.id });
+ok(ai[0].sys.includes('昔のゲームの話') && ai[0].sys.includes('昔のゲーム機はね') && !ai[0].sys.includes('カタツムリはね') && d.ramble[u.id].length, 'more ramble: one at a time, own history');
+const lg3 = JSON.parse(DB.raw.prepare("SELECT v FROM kv WHERE k LIKE 'gramble:%'").get().v);
+ok(lg3[t.id].length === 1 && lg3[u.id].length === 3, 'ramble logs kept per rambler');
+await call('POST', '/gcall/end', { id: r.call.id });
+// 全員しゃべり続ける子：一人はふつうに話す
+const g3 = (await call('POST', '/group', { group: { name: '二人', members: [u.id, t.id], ramblers: [{ id: u.id }, { id: t.id }] } })).group;
+r = await call('POST', '/gcall/start', { groupId: g3.id, all: true });
+ok(r.call.ramblers.length === 1, 'everyone chosen → one still talks normally');
 await call('POST', '/gcall/end', { id: r.call.id });
 console.log(fails ? fails + ' FAILED' : 'ALL PASSED');

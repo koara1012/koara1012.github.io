@@ -1173,7 +1173,7 @@ body.ura #list.tlMode{background:#efe9f0}
 // 置き場所で切り替える：/lab/（試作）と /chat/（本番）で同じファイルを使う
 // 試作は本番と同じサイトなので、保存の名前に「lab.」を付けて本番の chat.* には書き込まない。通知も登録しない
 const IS_LAB = /\/lab\//.test(location.pathname);
-const APP_VERSION = '第84版（2026-11-23 03:40:00 更新・トーク画面の上に［⏸］（この子を止める・再開）・ビデオ通話の写真が届かないことがあったのを直す）' + (IS_LAB ? '【試作】' : '');
+const APP_VERSION = '第85版（2026-11-23 04:20:00 更新・ビデオ通話：写真を小さく・通信が切れても返事をあとで受け取る）' + (IS_LAB ? '【試作】' : '');
 if (IS_LAB) { document.title = '【試作】トーク（統合）'; const mt = document.querySelector('meta[name=apple-mobile-web-app-title]'); if (mt) mt.content = 'トーク試作'; }
 const $ = (id) => document.getElementById(id);
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
@@ -4533,7 +4533,7 @@ async function shoot() {
     camStop(); try { await camStart(); for (let i = 0; i < 20 && !v.videoWidth; i++) await sleep(100); await sleep(400); shot = grabFrame(v); } catch (_) {}
     if (shot.dark) toast('写真がほとんど真っ暗です（そのまま見せます）');
   }
-  const photo = shot.url;
+  const photo = shot.url, pid = 'p' + Date.now().toString(36) + Math.random().toString(36).slice(2, 6); // 写真の番号（返事を受け取れなかったとき、あとで取りに行く）
   logDiag(`ビデオ通話：写真 ${shot.w}×${shot.h}・約${Math.round(photo.length * 0.75 / 1024)}KB・明るさ ${shot.mean}`);
   const fl = $('cvFlash'); fl.classList.add('on'); setTimeout(() => fl.classList.remove('on'), 60);
   vGlow(false);
@@ -4544,22 +4544,38 @@ async function shoot() {
   for (let i = 0; cur.busy && i < 200 && CALL.cur === cur; i++) await sleep(300); // 返事を待っている途中なら、届いてから
   if (CALL.cur !== cur || cur.ending) return;
   stopVoice();
-  if (cur.group) { gcTalking(''); gcAsk('', undefined, photo); return; } // 届かなかったときは gcAsk の中で字幕に出す
+  if (cur.group) { gcTalking(''); gcAsk('', undefined, photo, pid); return; } // 届かなかったときは gcAsk の中で字幕に出す
   cur.busy = true; setStat('…');
-  try { await callAfterSay(cur, await api('POST', '/call/say', { id: cur.id, photo, video: true })); }
-  catch (e) { cur.busy = false; setStat('通話中'); photoFailNote(e); hfSoon(500); }
+  let d;
+  try { d = await api('POST', '/call/say', { id: cur.id, photo, pid, video: true }); }
+  catch (e) { d = await photoRecover(cur, pid, e); if (!d) { cur.busy = false; setStat('通話中'); photoFailNote(e); hfSoon(500); return; } }
+  try { await callAfterSay(cur, d); } catch (e) { cur.busy = false; setStat('通話中'); toast(e.message); hfSoon(500); }
+}
+async function photoRecover(cur, pid, e) { // 第85版：通信が切れて返事を受け取れなかった：サーバーは最後まで作るので、できあがるまで取りに行く（40秒まで）
+  if (!/つながりません/.test(e.message)) return null; // サーバーがはっきり断った（形がちがう・AI の失敗）ときは取りに行かない
+  logDiag('ビデオ通話：写真の返事を受け取れなかった（' + e.message + '）→ サーバーに取りに行く');
+  setStat('写真の返事を待っています…');
+  for (let i = 0; i < 20 && CALL.cur === cur && !cur.ending; i++) {
+    await sleep(2000);
+    try {
+      const r = await api('GET', `/call/photo?id=${encodeURIComponent(cur.id)}&pid=${encodeURIComponent(pid)}`);
+      if (r.state === 'done') { logDiag('ビデオ通話：写真の返事を、あとで受け取れた'); return r; }
+      if (r.state === 'failed') return null;
+    } catch (_) {}
+  }
+  return null;
 }
 function photoFailNote(e) { // 第84版：届かなかったことを字幕にも出す（サーバーは見せたことを取り消すので、もう一度押せばよい）
   toast('写真を見せられませんでした：' + e.message, 5000);
   subLine('scene', '📸 写真は届きませんでした（もう一度シャッターを押してください）');
 }
-function grabFrame(v) { // 長い辺1024px・JPEG 0.8。明るさも測る（真っ黒＝カメラが止まっているかも）
-  const k = Math.min(1, 1024 / Math.max(v.videoWidth, v.videoHeight)), cv = document.createElement('canvas');
+function grabFrame(v) { // 長い辺768px・JPEG 0.72（第85版で小さく：送る時間とサーバーの計算を減らす）。明るさも測る（真っ黒＝カメラが止まっているかも）
+  const k = Math.min(1, 768 / Math.max(v.videoWidth, v.videoHeight)), cv = document.createElement('canvas');
   cv.width = Math.round(v.videoWidth * k); cv.height = Math.round(v.videoHeight * k);
   const g = cv.getContext('2d'); g.drawImage(v, 0, 0, cv.width, cv.height);
   let mean = 128, max = 255;
   try { const sm = document.createElement('canvas'); sm.width = sm.height = 24; const sg = sm.getContext('2d'); sg.drawImage(cv, 0, 0, 24, 24); const d = sg.getImageData(0, 0, 24, 24).data; let sum = 0; max = 0; for (let i = 0; i < d.length; i += 4) { const l = (d[i] + d[i + 1] + d[i + 2]) / 3; sum += l; if (l > max) max = l; } mean = Math.round(sum / (d.length / 4)); } catch (_) {}
-  return { url: cv.toDataURL('image/jpeg', 0.8), w: cv.width, h: cv.height, mean, dark: max < 10 };
+  return { url: cv.toDataURL('image/jpeg', 0.72), w: cv.width, h: cv.height, mean, dark: max < 10 };
 }
 // ---- ［📝状況］（第81版・すべての通話）：台詞ではなく、今の状況を書く。通話が終わるまでずっと効く（書き直すと入れ替わる・［消す］で消える）。
 // サーバーは【状況・指示】付きでキャラに伝え、キャラはその場で反応する。字幕・記録・まとめにも入る（記憶に残さない通話には残らない）
@@ -4932,14 +4948,16 @@ function groupResume() { // 🎤をやめた（何も言わなかった）：待
   if (cur.pending) { const p = cur.pending; cur.pending = null; gcPlay(p.lines, p.wait); }
   else if (!cur.busy && gcAuto()) gcNext(1500); // ［勝手に話す］オン：続きを頼む（途中で止めていたら、聞いたところまで）
 }
-async function gcAsk(text, scene, photo) { // scene：［📝状況］を書いた（第81版。'' は消した）・photo：写真を見せた（第83版）
+async function gcAsk(text, scene, photo, pid) { // scene：［📝状況］を書いた（第81版。'' は消した）・photo：写真を見せた（第83版）
   const cur = CALL.cur; if (!cur || cur.ending) return;
   clearTimeout(cur.contTimer);
   const heard = cur.pending ? 0 : cur.batchDone ? null : cur.started; // さえぎったら、聞いたところまで
   cur.pending = null; cur.batchDone = true;
   cur.busy = true; if (text || scene || photo) setStat('…');
   try {
-    const d = await api('POST', '/gcall/say', { id: cur.id, text, heard, auto: !text && gcAuto(), video: !!cur.video, ...(scene != null ? { scene } : {}), ...(photo ? { photo } : {}) });
+    let d;
+    try { d = await api('POST', '/gcall/say', { id: cur.id, text, heard, auto: !text && gcAuto(), video: !!cur.video, ...(scene != null ? { scene } : {}), ...(photo ? { photo, pid } : {}) }); }
+    catch (e) { d = photo ? await photoRecover(cur, pid, e) : null; if (!d) throw e; } // 第85版：写真の返事をあとで受け取る
     cur.busy = false;
     if (CALL.cur !== cur) return;
     if (d.ended) { endGroupCall(); return; }

@@ -14,7 +14,7 @@
 //    ・Cron トリガー  * * * * *  （毎分。実際に動くのは13分おき）
 // =====================================================================
 
-const VERSION = '第84版（2026-11-23 03:40:00 更新・トーク画面の上に［⏸］（この子を止める・再開）・ビデオ通話の写真が届かないことがあったのを直す）';
+const VERSION = '第85版（2026-11-23 04:20:00 更新・ビデオ通話：写真を小さく・通信が切れても返事をあとで受け取る）';
 const DEFAULT_MODEL = 'gemini-flash-latest';
 const DEFAULT_GROK_MODEL = 'grok-4.7';                 // X（Twitter）の Grok と同じ最新世代
 const FALLBACK_GROK_MODEL = 'grok-4-fast-non-reasoning'; // 上が使えないときの予備
@@ -575,16 +575,29 @@ async function route(key, url, body, env, ctx, req) {
       await putCall(env, cl);
       if (sc === 'clear') return json({ lines: [], scene: '' });
       if (callStop(await getSettings(env), cl)) return json({ lines: [], paused: true }); // モーニングコールは止めている子でも話す
-      let r;
-      try { r = await keep(ctx, callReply(env, cl, c, text || sc || ph ? '' : sleepCheck(cl, body.check), ph)); }
-      catch (e) { if (ph) await photoFailed(env, cl.id, `${PHOTO_KB(ph)}KB・${e.message}`); throw e; }
-      const now2 = await kvGet(env, 'call:' + cl.id, null);
-      if (!now2) return json({ lines: [], ended: true });
-      if (ph) { photoDescIn(now2, r.photoDesc); if (!r.photoDesc) await log(env, `ビデオ通話の写真（${c.name}・${PHOTO_KB(ph)}KB）：AI が写真の中身を書きませんでした（暗い・ぼやけた写真かもしれません）`); }
-      now2.transcript.push(...r.lines.map((t) => ({ who: 'char', text: t, at: Date.now() })));
-      now2.lastAt = Date.now();
-      await putCall(env, now2);
+      // 第85版：返事を作って保存するところまでを丸ごと keep（アプリとの通信が途中で切れても、最後まで保存する。写真なら、アプリがあとで /call/photo で受け取れる）
+      const out = await keep(ctx, (async () => {
+        let r;
+        try { r = await callReply(env, cl, c, text || sc || ph ? '' : sleepCheck(cl, body.check), ph); }
+        catch (e) { if (ph) await photoFailed(env, cl.id, `${PHOTO_KB(ph)}KB・${e.message}`); throw e; }
+        const now2 = await kvGet(env, 'call:' + cl.id, null);
+        if (!now2) return { ended: true };
+        if (ph) { photoDescIn(now2, r.photoDesc); if (!r.photoDesc) await log(env, `ビデオ通話の写真（${c.name}・${PHOTO_KB(ph)}KB）：AI が写真の中身を書きませんでした（暗い・ぼやけた写真かもしれません）`); }
+        now2.transcript.push(...r.lines.map((t) => ({ who: 'char', text: t, at: Date.now() })));
+        if (ph && ph.pid) now2.photoAns = { pid: ph.pid, lines: r.lines, ...(r.faces ? { faces: r.faces } : {}), ...(r.askPhoto ? { askPhoto: true } : {}) };
+        now2.lastAt = Date.now();
+        await putCall(env, now2);
+        return { r, now2 };
+      })());
+      if (out.ended) return json({ lines: [], ended: true });
+      const { r, now2 } = out;
       return json({ lines: r.lines, hangup: r.hangup, ...(r.faces ? { faces: r.faces } : {}), ...(r.askPhoto ? { askPhoto: true } : {}), ...(sc ? { scene: now2.scene || '' } : {}), ...(r.promise ? { promise: r.promise } : {}), ...(r.rems ? { rems: r.rems } : {}) });
+    }
+    case 'GET /call/photo': { // 第85版：写真を見せたのに返事を受け取れなかった（通信が切れた）とき、アプリがあとで取りに来る。state：done（返事あり）・pending（作っている）・failed（届かなかった）
+      const cl = await kvGet(env, 'call:' + String(url.searchParams.get('id') || ''), null), pid = String(url.searchParams.get('pid') || '');
+      if (!cl || !pid) return json({ state: 'failed' });
+      if (cl.photoAns && cl.photoAns.pid === pid) return json({ state: 'done', ...cl.photoAns });
+      return json({ state: cl.transcript.some((m) => m.photo && m.pid === pid) && cl.status === 'active' ? 'pending' : 'failed' });
     }
     case 'POST /call/ping': { // 通話中：まだつながっている（放置で切れないように）
       const cl = await getCall(env, body.id);
@@ -797,16 +810,22 @@ async function route(key, url, body, env, ctx, req) {
       await putCall(env, cl);
       if (sc === 'clear') return json({ lines: [], scene: '' });
       if (gcStopped(await getSettings(env), g)) return json({ lines: [], paused: true });
-      let r;
-      try { r = await keep(ctx, gcallReply(env, cl, g, text || sc || ph ? false : body.auto ? 'auto' : true, text || sc || ph ? '' : sleepCheck(cl, body.check), ph)); } // auto：［勝手に話す］がオン（第56版）・check：寝落ち通話の確認（第66版）
-      catch (e) { if (ph) await photoFailed(env, cl.id, `${g.name}・${PHOTO_KB(ph)}KB・${e.message}`); else await log(env, `グループ通話（${g.name}）の返事: ${e.message}`); throw e; }
-      const now2 = await kvGet(env, 'call:' + cl.id, null);
-      if (!now2) return json({ lines: [], ended: true });
-      if (ph) { photoDescIn(now2, r.photoDesc); if (!r.photoDesc) await log(env, `ビデオ通話の写真（${g.name}・${PHOTO_KB(ph)}KB）：AI が写真の中身を書きませんでした（暗い・ぼやけた写真かもしれません）`); }
-      now2.batch = (now2.batch || 0) + 1;
-      now2.transcript.push(...r.lines.map((x) => ({ who: x.id, text: x.text, at: Date.now(), b: now2.batch })));
-      now2.lastAt = Date.now();
-      await putCall(env, now2);
+      const out = await keep(ctx, (async () => { // 第85版：保存まで丸ごと keep（1対1と同じ）
+        let r;
+        try { r = await gcallReply(env, cl, g, text || sc || ph ? false : body.auto ? 'auto' : true, text || sc || ph ? '' : sleepCheck(cl, body.check), ph); }
+        catch (e) { if (ph) await photoFailed(env, cl.id, `${g.name}・${PHOTO_KB(ph)}KB・${e.message}`); else await log(env, `グループ通話（${g.name}）の返事: ${e.message}`); throw e; }
+        const now2 = await kvGet(env, 'call:' + cl.id, null);
+        if (!now2) return { ended: true };
+        if (ph) { photoDescIn(now2, r.photoDesc); if (!r.photoDesc) await log(env, `ビデオ通話の写真（${g.name}・${PHOTO_KB(ph)}KB）：AI が写真の中身を書きませんでした（暗い・ぼやけた写真かもしれません）`); }
+        now2.batch = (now2.batch || 0) + 1;
+        now2.transcript.push(...r.lines.map((x) => ({ who: x.id, text: x.text, at: Date.now(), b: now2.batch })));
+        if (ph && ph.pid) now2.photoAns = { pid: ph.pid, lines: r.lines, wait: r.wait, ...(r.askPhoto ? { askPhoto: true } : {}) };
+        now2.lastAt = Date.now();
+        await putCall(env, now2);
+        return { r, now2 };
+      })());
+      if (out.ended) return json({ lines: [], ended: true });
+      const { r, now2 } = out;
       return json({ lines: r.lines, wait: r.wait, ...(r.askPhoto ? { askPhoto: true } : {}), ...(sc ? { scene: now2.scene || '' } : {}), ...(r.ramble ? { ramble: r.ramble } : {}) });
     }
     case 'POST /gcall/ramble': { // しゃべり続ける子のひとり話の続き（第81版・裏のグループ通話）。アプリは、ほかの子が話している間に足りなくなったら頼む
@@ -2928,11 +2947,13 @@ const PHOTO_TXT = '（カメラで、今いるところの写真を撮って見�
 function callVideoIn(cl, body) { if (!cl.ura && body.video != null) cl.video = !!body.video; }
 function callPhotoIn(cl, body) { // → Gemini に渡す画像 { mimeType, data } か null
   if (cl.ura || !body.photo) return null;
-  const m = String(body.photo).match(/^data:(image\/(?:jpeg|png|webp));base64,([A-Za-z0-9+/=]+)$/);
-  if (!m || m[2].length > PHOTO_MAX) throw new HttpError(400, '写真を読み取れませんでした（大きすぎるか、形がちがいます）');
+  const s = String(body.photo), k = s.indexOf(';base64,'); // 第85版：大きな文字列を正規表現で調べない（サーバーの計算時間を食うので、頭と長さだけ見る）
+  const mime = k > 0 && k < 40 ? s.slice(5, k) : '', data = k > 0 ? s.slice(k + 8) : '';
+  if (!s.startsWith('data:') || !/^image\/(jpeg|png|webp)$/.test(mime) || !data || data.length > PHOTO_MAX || data.length % 4 || !/^[A-Za-z0-9+/]+=*$/.test(data.slice(-64))) throw new HttpError(400, '写真を読み取れませんでした（大きすぎるか、形がちがいます）');
   cl.video = true; cl.photos = (cl.photos || 0) + 1;
-  cl.transcript.push({ who: 'me', photo: true, text: PHOTO_TXT, at: Date.now(), ...(cl.group ? { seen: [...cl.members] } : {}) });
-  return { mimeType: m[1], data: m[2] };
+  const pid = String(body.pid || '').slice(0, 40); // アプリが付けた写真の番号（返事を受け取れなかったとき、あとで取りに来る）
+  cl.transcript.push({ who: 'me', photo: true, text: PHOTO_TXT, at: Date.now(), ...(pid ? { pid } : {}), ...(cl.group ? { seen: [...cl.members] } : {}) });
+  return { mimeType: mime, data, pid };
 }
 function photoDescIn(cl, desc) { // 写真に写っていたもの（記録・まとめ用。画像は残さない）
   const d = String(desc || '').replace(/\s+/g, ' ').trim().slice(0, 80);
@@ -2941,7 +2962,7 @@ function photoDescIn(cl, desc) { // 写真に写っていたもの（記録・�
 }
 function addPhotoPart(turns, photo) { // 第84版：画像の前に「添付した」と書いて、AI が画像を見落とさないように
   const t = turns[turns.length - 1];
-  if (photo && t && t.role === 'user') t.parts.push({ text: '（↓これが、ユーザーがいまカメラで撮って見せた写真）' }, { inlineData: photo });
+  if (photo && t && t.role === 'user') t.parts.push({ text: '（↓これが、ユーザーがいまカメラで撮って見せた写真）' }, { inlineData: { mimeType: photo.mimeType, data: photo.data } });
 }
 async function photoFailed(env, id, why) { // 第84版：写真の番の返事を作れなかった：写真を見せたことを取り消す（あとの番で「写真を見せたのに届いていない」と思わせない）
   const now = await kvGet(env, 'call:' + id, null);

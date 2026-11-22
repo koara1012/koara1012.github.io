@@ -94,6 +94,16 @@ await call('POST', '/call/say', { id: r.call.id, photo: PHOTO, video: true });
 ok(JSON.parse(DB.raw.prepare("SELECT v FROM kv WHERE k='log'").get().v).some((x) => x.msg.includes('AI が写真の中身を書きませんでした')), 'empty description logged');
 O.desc = '湯気の立つラーメン';
 await call('POST', '/call/end', { id: r.call.id });
+// 第85版：写真の番号（pid）で、返事をあとから受け取れる
+r = await call('POST', '/call/start', { charId: a.id, test: true }); r = await call('POST', '/call/connect', { id: r.call.id });
+ok((await call('GET', `/call/photo?id=${r.call.id}&pid=px1`)).state === 'failed', 'unknown photo → failed');
+O.msgs = ['《笑顔》見えたよ'];
+d = await call('POST', '/call/say', { id: r.call.id, photo: PHOTO, pid: 'px1', video: true });
+let pr = await call('GET', `/call/photo?id=${r.call.id}&pid=px1`);
+ok(pr.state === 'done' && pr.lines[0] === '見えたよ' && pr.faces[0] === '笑顔', 'photo answer can be fetched later');
+let e1 = 0; try { await call('POST', '/call/say', { id: r.call.id, photo: 'data:image/jpeg;base64,abc', pid: 'px2' }); } catch (x) { e1 = x.status; }
+ok(e1 === 400 && (await call('GET', `/call/photo?id=${r.call.id}&pid=px2`)).state === 'failed', 'broken base64 refused');
+await call('POST', '/call/end', { id: r.call.id });
 // 写真の形がおかしい
 r = await call('POST', '/call/start', { charId: a.id, test: true }); r = await call('POST', '/call/connect', { id: r.call.id });
 let e = 0; try { await call('POST', '/call/say', { id: r.call.id, photo: 'data:text/html;base64,AAAA' }); } catch (x) { e = x.status; }
@@ -114,13 +124,15 @@ O.lines = [{ speaker: '朱里', text: 'もしもし' }];
 await call('POST', '/gcall/connect', { id: r.call.id });
 const gid = r.call.id;
 O.lines = null; ai.length = 0;
-d = await call('POST', '/gcall/say', { id: gid, photo: PHOTO, video: true, heard: 1 });
+d = await call('POST', '/gcall/say', { id: gid, photo: PHOTO, pid: 'g1', video: true, heard: 1 });
 q = ai.find((x) => x.sch.includes('wait_user'));
 ok(q.imgs === 1 && q.sys.includes('いま通話に出ている子だけ') && q.sys.includes('朱里：通常、笑顔（にこにこ）、照れ') && q.sys.includes('花：通常、驚き') && !q.sys.includes('雪：'), 'group: photo + faces of those who have them');
 ok(d.lines[0].face === '笑顔' && d.lines[0].text === 'わあ、おいしそう' && d.lines[1].face === '驚き', 'group lines carry faces');
 let gr = JSON.parse(DB.raw.prepare('SELECT v FROM kv WHERE k=?').get('call:' + gid).v);
 const pe = gr.transcript.find((x) => x.photo);
 ok(pe && pe.seen.length === 3 && pe.text.includes('湯気の立つラーメン'), 'group photo: seen by those in the call');
+pr = await call('GET', `/call/photo?id=${gid}&pid=g1`);
+ok(pr.state === 'done' && pr.lines.length === 2 && pr.lines[0].face === '笑顔', 'group photo answer can be fetched later');
 ai.length = 0;
 await call('POST', '/gcall/say', { id: gid, text: 'どう？', video: true, heard: 2 });
 q = ai.find((x) => x.sch.includes('wait_user'));
@@ -128,6 +140,7 @@ ok(q.imgs === 0 && q.user.includes('この写真を見たのは、そのとき�
 m = (await call('POST', '/gcall/end', { id: gid })).message;
 const lg = (await call('GET', `/gcall/log?group=${og.id}&id=${m.id}`)).log;
 ok(lg.transcript.some((x) => x.photo && x.seen.length === 3), 'group log keeps who saw it (not the photo)');
+
 // 続きから：前回いなかった子は見ていない
 const og2 = (await call('POST', '/ogroup', { group: { ...og, members: [a.id, h.id, n.id] } })).group;
 r = await call('POST', '/gcall/start', { groupId: og.id, test: true, from: m.id });

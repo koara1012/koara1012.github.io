@@ -409,6 +409,7 @@ body.ura #list.tlMode{background:#efe9f0}
 #cvShutter{position:absolute;right:calc(14% - 21px);bottom:10px;z-index:4;width:50px;height:50px;border-radius:50%;border:4px solid rgba(255,255,255,.95);background:rgba(255,255,255,.55);box-shadow:0 2px 10px rgba(0,0,0,.3);padding:0}
 #cvShutter:active{background:#fff;transform:scale(.94)}
 #cvFlash{position:absolute;inset:0;background:#fff;opacity:0;pointer-events:none;z-index:5;transition:opacity .35s}#cvFlash.on{opacity:.85;transition:none}
+#btnPauseChar.pausedNow{color:#ffb3b3}
 #cvSub .photo img{display:block;width:72px;height:54px;object-fit:cover;border-radius:6px;margin-top:3px}
 .cvModes button.glow,#cvShutter.glow{animation:vGlow 1s ease-in-out infinite}
 @keyframes vGlow{0%,100%{box-shadow:0 0 0 0 rgba(255,200,60,.0)}50%{box-shadow:0 0 0 6px rgba(255,200,60,.75)}}
@@ -491,6 +492,7 @@ body.ura #list.tlMode{background:#efe9f0}
     <h1 id="chatTitle"></h1>
     <button class="ib" id="btnGrpReset" aria-label="会話をリセット" style="font-size:14px;font-weight:700;padding:0 8px;display:none">リセット</button>
     <button class="ib" id="btnSelect" aria-label="メッセージを選んで消す" style="font-size:14px;font-weight:700;padding:0 8px">選択</button>
+    <button class="ib" id="btnPauseChar" aria-label="この子を止める・再開する" style="font-size:15px;padding:0 4px;display:none">⏸</button>
     <button class="ib" id="btnCall" aria-label="電話をかける" style="font-size:18px;padding:0 6px;display:none">📞</button>
     <button class="ib" id="btnSleep" aria-label="寝落ち通話" style="font-size:17px;padding:0 5px;display:none">🌙</button>
     <button class="ib" id="btnNovel" aria-label="ノベル画面で開く" style="font-size:14px;font-weight:700;padding:0 8px">立ち絵</button>
@@ -1171,7 +1173,7 @@ body.ura #list.tlMode{background:#efe9f0}
 // 置き場所で切り替える：/lab/（試作）と /chat/（本番）で同じファイルを使う
 // 試作は本番と同じサイトなので、保存の名前に「lab.」を付けて本番の chat.* には書き込まない。通知も登録しない
 const IS_LAB = /\/lab\//.test(location.pathname);
-const APP_VERSION = '第83版（2026-11-22 14:00:00 更新・表のすべての通話にビデオ通話（📹 カメラ・シャッターで写真を見せる・立ち絵と表情））' + (IS_LAB ? '【試作】' : '');
+const APP_VERSION = '第84版（2026-11-23 03:40:00 更新・トーク画面の上に［⏸］（この子を止める・再開）・ビデオ通話の写真が届かないことがあったのを直す）' + (IS_LAB ? '【試作】' : '');
 if (IS_LAB) { document.title = '【試作】トーク（統合）'; const mt = document.querySelector('meta[name=apple-mobile-web-app-title]'); if (mt) mt.content = 'トーク試作'; }
 const $ = (id) => document.getElementById(id);
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
@@ -1759,7 +1761,10 @@ function renderCharPauseBar() {
   const on = !!(c && !c.uraOnly && charPaused(c.id));
   bar.style.display = on ? '' : 'none';
   if (on) $('charPauseText').textContent = `${c.name}は停止中（返事・話しかけ・TL・電話などを止めています）`;
+  const b = $('btnPauseChar'); // 第84版：トーク画面の上から、この子だけ止める・再開する（もう一度押すと再開）
+  if (b) { const can = !!(c && !c.uraOnly && S.world !== 'ura'); b.style.display = can ? '' : 'none'; b.textContent = on ? '▶' : '⏸'; b.title = on ? `${c && c.name}を再開する` : `${c && c.name}を止める`; b.setAttribute('aria-label', b.title); b.classList.toggle('pausedNow', on); }
 }
+$('btnPauseChar').onclick = () => { const c = !groupById(S.current) && S.world !== 'ura' && charById(S.current); if (!c || c.uraOnly) return; const on = charPaused(c.id); $('btnPauseChar').disabled = true; setCharPaused(c.id, !on).finally(() => { $('btnPauseChar').disabled = false; }); };
 async function setCharPaused(id, on) {
   const c = charById(id); if (!c) return;
   try {
@@ -4514,11 +4519,22 @@ $('cvShutter').onclick = () => shoot();
 async function shoot() {
   const cur = CALL.cur, v = $('cvCam');
   if (!cur || !cur.video || cur.ending || !cur.answeredAt) return;
-  if (!v.videoWidth) { toast('カメラの準備中です'); return; }
-  const k = Math.min(1, 1024 / Math.max(v.videoWidth, v.videoHeight)), cv = document.createElement('canvas');
-  cv.width = Math.round(v.videoWidth * k); cv.height = Math.round(v.videoHeight * k);
-  cv.getContext('2d').drawImage(v, 0, 0, cv.width, cv.height);
-  const photo = cv.toDataURL('image/jpeg', 0.8);
+  const tr = VID.stream && VID.stream.getVideoTracks()[0];
+  if (!tr || tr.readyState !== 'live' || tr.muted || !v.videoWidth) { // 第84版：カメラが止まっていた（別のアプリ・🎤 などで iPhone が止めることがある）→ 付け直してから撮る
+    logDiag('ビデオ通話：シャッターのときカメラが止まっていた（' + (tr ? tr.readyState + (tr.muted ? '・muted' : '') : 'なし') + '）→ 付け直し');
+    camStop(); try { await camStart(); } catch (e) { toast('カメラを付け直せませんでした：' + e.message); return; }
+    for (let i = 0; i < 20 && !v.videoWidth; i++) await sleep(100);
+    await sleep(300);
+    if (!v.videoWidth) { toast('カメラの準備中です。少し待ってからもう一度押してください'); return; }
+  }
+  let shot = grabFrame(v);
+  if (shot.dark) { // 真っ黒：古い映像のまま止まっていることがある。付け直して撮り直す
+    logDiag(`ビデオ通話：写真が真っ黒（明るさ ${shot.mean}）→ カメラを付け直して撮り直し`);
+    camStop(); try { await camStart(); for (let i = 0; i < 20 && !v.videoWidth; i++) await sleep(100); await sleep(400); shot = grabFrame(v); } catch (_) {}
+    if (shot.dark) toast('写真がほとんど真っ暗です（そのまま見せます）');
+  }
+  const photo = shot.url;
+  logDiag(`ビデオ通話：写真 ${shot.w}×${shot.h}・約${Math.round(photo.length * 0.75 / 1024)}KB・明るさ ${shot.mean}`);
   const fl = $('cvFlash'); fl.classList.add('on'); setTimeout(() => fl.classList.remove('on'), 60);
   vGlow(false);
   const box = $('cvSub');
@@ -4528,10 +4544,22 @@ async function shoot() {
   for (let i = 0; cur.busy && i < 200 && CALL.cur === cur; i++) await sleep(300); // 返事を待っている途中なら、届いてから
   if (CALL.cur !== cur || cur.ending) return;
   stopVoice();
-  if (cur.group) { gcTalking(''); gcAsk('', undefined, photo); return; }
+  if (cur.group) { gcTalking(''); gcAsk('', undefined, photo); return; } // 届かなかったときは gcAsk の中で字幕に出す
   cur.busy = true; setStat('…');
   try { await callAfterSay(cur, await api('POST', '/call/say', { id: cur.id, photo, video: true })); }
-  catch (e) { cur.busy = false; setStat('通話中'); toast(e.message); hfSoon(500); }
+  catch (e) { cur.busy = false; setStat('通話中'); photoFailNote(e); hfSoon(500); }
+}
+function photoFailNote(e) { // 第84版：届かなかったことを字幕にも出す（サーバーは見せたことを取り消すので、もう一度押せばよい）
+  toast('写真を見せられませんでした：' + e.message, 5000);
+  subLine('scene', '📸 写真は届きませんでした（もう一度シャッターを押してください）');
+}
+function grabFrame(v) { // 長い辺1024px・JPEG 0.8。明るさも測る（真っ黒＝カメラが止まっているかも）
+  const k = Math.min(1, 1024 / Math.max(v.videoWidth, v.videoHeight)), cv = document.createElement('canvas');
+  cv.width = Math.round(v.videoWidth * k); cv.height = Math.round(v.videoHeight * k);
+  const g = cv.getContext('2d'); g.drawImage(v, 0, 0, cv.width, cv.height);
+  let mean = 128, max = 255;
+  try { const sm = document.createElement('canvas'); sm.width = sm.height = 24; const sg = sm.getContext('2d'); sg.drawImage(cv, 0, 0, 24, 24); const d = sg.getImageData(0, 0, 24, 24).data; let sum = 0; max = 0; for (let i = 0; i < d.length; i += 4) { const l = (d[i] + d[i + 1] + d[i + 2]) / 3; sum += l; if (l > max) max = l; } mean = Math.round(sum / (d.length / 4)); } catch (_) {}
+  return { url: cv.toDataURL('image/jpeg', 0.8), w: cv.width, h: cv.height, mean, dark: max < 10 };
 }
 // ---- ［📝状況］（第81版・すべての通話）：台詞ではなく、今の状況を書く。通話が終わるまでずっと効く（書き直すと入れ替わる・［消す］で消える）。
 // サーバーは【状況・指示】付きでキャラに伝え、キャラはその場で反応する。字幕・記録・まとめにも入る（記憶に残さない通話には残らない）
@@ -4921,7 +4949,7 @@ async function gcAsk(text, scene, photo) { // scene：［📝状況］を書い�
     if (cur.queued.length) { cur.pending = { lines: d.lines || [], wait: d.wait }; const t = cur.queued.splice(0).join('\n'); gcAsk(t); return; } // 待っている間にあなたが話した：届いたセリフは聞かずに、あなたの言葉を先に
     if (d.paused) { setStat('止めています'); return; }
     gcPlay(d.lines || [], d.wait);
-  } catch (e) { cur.busy = false; setStat('通話中'); toast(e.message); if (gcAuto()) gcNext(8000); }
+  } catch (e) { cur.busy = false; setStat('通話中'); if (photo) photoFailNote(e); else toast(e.message); if (gcAuto()) gcNext(8000); }
 }
 function sayInGroupCall(text) {
   const cur = CALL.cur; if (!cur || !cur.answeredAt) return;

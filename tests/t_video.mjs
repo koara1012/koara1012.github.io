@@ -77,6 +77,23 @@ m = (await call('POST', '/call/end', { id: r.call.id })).message;
 q = ai.find((x) => x.sch.includes('"summary"'));
 ok(q && q.user.includes('カメラで写真を撮って見せた：湯気の立つラーメン') && q.sys.includes('見せてくれた写真'), 'summary sees what was shown');
 ok(m.meta.photos === 1 && m.meta.sum, 'record: photo count + summary');
+// 第84版：写真の番の返事が作れなかった → 見せたことを取り消す（あとで「届いていない」と思わせない）
+r = await call('POST', '/call/start', { charId: a.id, test: true }); r = await call('POST', '/call/connect', { id: r.call.id });
+const F0 = globalThis.fetch; globalThis.fetch = async (u, i) => (String(u).includes('googleapis') ? new Response('{"error":{"message":"bad"}}', { status: 400 }) : F0(u, i));
+let e0 = 0; try { await call('POST', '/call/say', { id: r.call.id, photo: PHOTO, video: true }); } catch (x) { e0 = x.status; }
+globalThis.fetch = F0;
+let raw2 = JSON.parse(DB.raw.prepare('SELECT v FROM kv WHERE k=?').get('call:' + r.call.id).v);
+ok(e0 >= 400 && !raw2.transcript.some((x) => x.photo) && !raw2.photos, 'failed photo turn: the photo is taken back');
+ok(JSON.parse(DB.raw.prepare("SELECT v FROM kv WHERE k='log'").get().v).some((x) => x.msg.includes('ビデオ通話の写真：返事を作れませんでした')), 'failure logged');
+ai.length = 0; O.msgs = ['《笑顔》見えた！'];
+await call('POST', '/call/say', { id: r.call.id, photo: PHOTO, video: true });
+q = ai.find((x) => x.sch.includes('"hangup"'));
+ok(q.imgs === 1 && q.user.includes('これが、ユーザーがいまカメラで撮って見せた写真') && q.sys.includes('「届いていない」「見えない」とは言わない') && q.sys.includes('暗くてよく見えない'), 'photo turn: image announced; never say it did not arrive');
+O.desc = ''; O.msgs = ['うーん'];
+await call('POST', '/call/say', { id: r.call.id, photo: PHOTO, video: true });
+ok(JSON.parse(DB.raw.prepare("SELECT v FROM kv WHERE k='log'").get().v).some((x) => x.msg.includes('AI が写真の中身を書きませんでした')), 'empty description logged');
+O.desc = '湯気の立つラーメン';
+await call('POST', '/call/end', { id: r.call.id });
 // 写真の形がおかしい
 r = await call('POST', '/call/start', { charId: a.id, test: true }); r = await call('POST', '/call/connect', { id: r.call.id });
 let e = 0; try { await call('POST', '/call/say', { id: r.call.id, photo: 'data:text/html;base64,AAAA' }); } catch (x) { e = x.status; }

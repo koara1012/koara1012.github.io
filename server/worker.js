@@ -14,7 +14,7 @@
 //    ・Cron トリガー  * * * * *  （毎分。実際に動くのは13分おき）
 // =====================================================================
 
-const VERSION = '第83版（2026-11-22 14:00:00 更新・表のすべての通話にビデオ通話（📹 カメラ・シャッターで写真を見せる・立ち絵と表情））';
+const VERSION = '第84版（2026-11-23 03:40:00 更新・トーク画面の上に［⏸］（この子を止める・再開）・ビデオ通話の写真が届かないことがあったのを直す）';
 const DEFAULT_MODEL = 'gemini-flash-latest';
 const DEFAULT_GROK_MODEL = 'grok-4.7';                 // X（Twitter）の Grok と同じ最新世代
 const FALLBACK_GROK_MODEL = 'grok-4-fast-non-reasoning'; // 上が使えないときの予備
@@ -575,10 +575,12 @@ async function route(key, url, body, env, ctx, req) {
       await putCall(env, cl);
       if (sc === 'clear') return json({ lines: [], scene: '' });
       if (callStop(await getSettings(env), cl)) return json({ lines: [], paused: true }); // モーニングコールは止めている子でも話す
-      const r = await keep(ctx, callReply(env, cl, c, text || sc || ph ? '' : sleepCheck(cl, body.check), ph));
+      let r;
+      try { r = await keep(ctx, callReply(env, cl, c, text || sc || ph ? '' : sleepCheck(cl, body.check), ph)); }
+      catch (e) { if (ph) await photoFailed(env, cl.id, `${PHOTO_KB(ph)}KB・${e.message}`); throw e; }
       const now2 = await kvGet(env, 'call:' + cl.id, null);
       if (!now2) return json({ lines: [], ended: true });
-      if (ph) photoDescIn(now2, r.photoDesc);
+      if (ph) { photoDescIn(now2, r.photoDesc); if (!r.photoDesc) await log(env, `ビデオ通話の写真（${c.name}・${PHOTO_KB(ph)}KB）：AI が写真の中身を書きませんでした（暗い・ぼやけた写真かもしれません）`); }
       now2.transcript.push(...r.lines.map((t) => ({ who: 'char', text: t, at: Date.now() })));
       now2.lastAt = Date.now();
       await putCall(env, now2);
@@ -797,10 +799,10 @@ async function route(key, url, body, env, ctx, req) {
       if (gcStopped(await getSettings(env), g)) return json({ lines: [], paused: true });
       let r;
       try { r = await keep(ctx, gcallReply(env, cl, g, text || sc || ph ? false : body.auto ? 'auto' : true, text || sc || ph ? '' : sleepCheck(cl, body.check), ph)); } // auto：［勝手に話す］がオン（第56版）・check：寝落ち通話の確認（第66版）
-      catch (e) { await log(env, `グループ通話（${g.name}）の返事: ${e.message}`); throw e; }
+      catch (e) { if (ph) await photoFailed(env, cl.id, `${g.name}・${PHOTO_KB(ph)}KB・${e.message}`); else await log(env, `グループ通話（${g.name}）の返事: ${e.message}`); throw e; }
       const now2 = await kvGet(env, 'call:' + cl.id, null);
       if (!now2) return json({ lines: [], ended: true });
-      if (ph) photoDescIn(now2, r.photoDesc);
+      if (ph) { photoDescIn(now2, r.photoDesc); if (!r.photoDesc) await log(env, `ビデオ通話の写真（${g.name}・${PHOTO_KB(ph)}KB）：AI が写真の中身を書きませんでした（暗い・ぼやけた写真かもしれません）`); }
       now2.batch = (now2.batch || 0) + 1;
       now2.transcript.push(...r.lines.map((x) => ({ who: x.id, text: x.text, at: Date.now(), b: now2.batch })));
       now2.lastAt = Date.now();
@@ -2937,7 +2939,16 @@ function photoDescIn(cl, desc) { // 写真に写っていたもの（記録・�
   const e = [...cl.transcript].reverse().find((m) => m.photo && m.text === PHOTO_TXT);
   if (e) e.text = '（カメラで写真を撮って見せた' + (d ? '：' + d : '') + '）';
 }
-function addPhotoPart(turns, photo) { const t = turns[turns.length - 1]; if (photo && t && t.role === 'user') t.parts.push({ inlineData: photo }); }
+function addPhotoPart(turns, photo) { // 第84版：画像の前に「添付した」と書いて、AI が画像を見落とさないように
+  const t = turns[turns.length - 1];
+  if (photo && t && t.role === 'user') t.parts.push({ text: '（↓これが、ユーザーがいまカメラで撮って見せた写真）' }, { inlineData: photo });
+}
+async function photoFailed(env, id, why) { // 第84版：写真の番の返事を作れなかった：写真を見せたことを取り消す（あとの番で「写真を見せたのに届いていない」と思わせない）
+  const now = await kvGet(env, 'call:' + id, null);
+  if (now) { const i = now.transcript.map((m) => !!(m.photo && m.text === PHOTO_TXT)).lastIndexOf(true); if (i >= 0) { now.transcript.splice(i, 1); now.photos = Math.max(0, (now.photos || 1) - 1); await putCall(env, now); } }
+  await log(env, `ビデオ通話の写真：返事を作れませんでした（${String(why || '').slice(0, 160)}）`);
+}
+const PHOTO_KB = (photo) => Math.round(((photo && photo.data) || '').length * 0.75 / 1024);
 function videoRule(cl, photo, faceRule) {
   if (cl.ura) return '';
   const g = !!cl.group;
@@ -2946,7 +2957,7 @@ function videoRule(cl, photo, faceRule) {
 - 写真が届いた番では、写っているものをよく見て、自然に反応して話題にする（見えたものを具体的に。写っていないものは言わない。よく分からないところは、たずねてよい）。写真が届いていない番は、新しい映像は見えていないものとして話す（前に見た写真のことは覚えている）。
 - もっと見たいもの・別のところを見たくなったら「それ撮って見せて」と頼んでよい（しつこくしない）。頼んだら ask_photo を true にする。\n`;
   else s += `- いまユーザーのカメラはオフ（声だけ）。ユーザーがご飯・外出・景色・買った物・部屋など、見てみたくなる話をしたら、「ビデオにして見せて」と頼んでよい（話の流れで自然なときだけ。しつこくしない）。頼んだら ask_photo を true にする。それ以外は false。\n`;
-  if (photo) s += `- いま写真が届いた。${g ? 'この写真を見られるのは、いま通話に出ている子だけ。' : ''}photo_desc に、写っているものを20〜40字で書く（記録用。見たままを短く）。\n`;
+  if (photo) s += `- いま写真が届いた（最後のユーザーの発言に、画像として付いている）。${g ? 'この写真を見られるのは、いま通話に出ている子だけ。' : ''}写真は必ず届いているので、「届いていない」「見えない」とは言わない。暗い・ぼやけている・何が写っているか分かりにくいときは、「暗くてよく見えないけど、〜かな？」のように、見えたままを正直に言う。photo_desc に、写っているものを20〜40字で書く（記録用。見たままを短く。暗くて分からなければ「暗くてよく分からない写真」）。\n`;
   return s + (cl.video && faceRule ? faceRule : '');
 }
 function callFaceRule(faces) {

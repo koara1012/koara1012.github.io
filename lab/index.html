@@ -394,6 +394,24 @@ body.ura #list.tlMode{background:#efe9f0}
 #glogBody .glsum{background:#f1f3f7;border-radius:10px;padding:10px 12px;margin-bottom:14px;font-size:14px}
 .glbar{flex:none;padding:10px 14px calc(env(safe-area-inset-bottom) + 10px);border-top:1px solid var(--line);background:var(--bg)}
 #cvSub .old{opacity:.55}
+/* ビデオ通話（第83版・表の通話）：キャラの立ち絵（ノベル画面の「表」の素材）・あなたのカメラ（外カメラ）・シャッター */
+#cvStage{position:relative;z-index:2;width:100%;max-width:440px;height:31vh;min-height:170px;flex:none;margin:4px 0;border-radius:16px;overflow:hidden;background:rgba(255,255,255,.22)}
+#callView.vid .cvAvWrap,#callView.vid #cvMembers{display:none!important}
+#callView.vid.hasTest #cvStage{height:24vh;min-height:140px}#callView.vid.hasTest .cvTime{font-size:20px;min-height:24px}
+#cvSprs{position:absolute;top:0;bottom:0;left:0;right:calc(28% + 10px);display:flex;align-items:stretch;justify-content:center;gap:2px}
+.vSpr{position:relative;flex:1 1 0;min-width:0;max-width:100%;height:100%;overflow:hidden;transition:filter .2s}
+.vSpr img{position:absolute;left:50%;top:0;height:180%;width:auto;max-width:none;transform:translateX(-50%);pointer-events:none;display:none}
+#cvSprs.many .vSpr{filter:brightness(.72) saturate(.9)}#cvSprs.many .vSpr.talk{filter:none}
+.vSpr .vNm{position:absolute;left:0;right:0;bottom:3px;text-align:center;font-size:11px;color:#fff;text-shadow:0 1px 3px rgba(0,0,0,.7);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.vSpr.ic{display:flex;align-items:center;justify-content:center}.vSpr.ic .av{width:60px;height:60px;font-size:24px;border:3px solid rgba(255,255,255,.85)}.vSpr.ic.talk .av{border-color:#ffe066}
+#cvCamBox{position:absolute;right:8px;top:8px;width:28%;aspect-ratio:3/4;border-radius:10px;overflow:hidden;background:#111;box-shadow:0 2px 10px rgba(0,0,0,.35);z-index:3}
+#cvCam{width:100%;height:100%;object-fit:cover;display:block}
+#cvShutter{position:absolute;right:calc(14% - 21px);bottom:10px;z-index:4;width:50px;height:50px;border-radius:50%;border:4px solid rgba(255,255,255,.95);background:rgba(255,255,255,.55);box-shadow:0 2px 10px rgba(0,0,0,.3);padding:0}
+#cvShutter:active{background:#fff;transform:scale(.94)}
+#cvFlash{position:absolute;inset:0;background:#fff;opacity:0;pointer-events:none;z-index:5;transition:opacity .35s}#cvFlash.on{opacity:.85;transition:none}
+#cvSub .photo img{display:block;width:72px;height:54px;object-fit:cover;border-radius:6px;margin-top:3px}
+.cvModes button.glow,#cvShutter.glow{animation:vGlow 1s ease-in-out infinite}
+@keyframes vGlow{0%,100%{box-shadow:0 0 0 0 rgba(255,200,60,.0)}50%{box-shadow:0 0 0 6px rgba(255,200,60,.75)}}
 /* 第81版：［📝状況］としゃべり続ける子 */
 .cvModes{flex-wrap:wrap}.cvModes button{padding:5px 11px}
 #cvSub .scene{color:#9a5d0c;font-size:13px}#callView.grp #cvSub .scene b{color:#9a5d0c}
@@ -1132,10 +1150,11 @@ body.ura #list.tlMode{background:#efe9f0}
   <div class="cvTime" id="cvTime"></div>
   <div class="cvAvWrap"><i></i><i class="r2"></i><div class="cvAv" id="cvAv"></div></div>
   <div id="cvMembers"></div>
+  <div id="cvStage" hidden><div id="cvSprs"></div><div id="cvCamBox"><video id="cvCam" playsinline muted autoplay></video></div><button id="cvShutter" aria-label="写真を撮って見せる" title="写真を撮って見せる"></button><div id="cvFlash"></div></div>
   <div id="cvScene" hidden title="押すと書き直せます"></div>
   <div id="cvSub"></div>
   <div id="cvInput" hidden>
-    <div class="cvModes"><button id="cvModeText">⌨ 文字</button><button id="cvModeMic">🎤 声</button><button id="cvHfBtn">🎧 オート OFF</button><button id="cvSceneBtn">📝 状況</button><button id="cvAuto" hidden>💬 勝手に話す</button></div>
+    <div class="cvModes"><button id="cvModeText">⌨ 文字</button><button id="cvModeMic">🎤 声</button><button id="cvHfBtn">🎧 オート OFF</button><button id="cvSceneBtn">📝 状況</button><button id="cvCamBtn" hidden>📹 カメラ OFF</button><button id="cvAuto" hidden>💬 勝手に話す</button></div>
     <div id="cvSceneRow" hidden><textarea id="cvSceneText" maxlength="400" placeholder="今の状況（例：急に雨が降ってきた／二人とも布団の中）。通話が終わるまでずっと効きます"></textarea><div class="cvSceneBtns"><button id="cvSceneX">閉じる</button><button id="cvSceneClear">消す</button><button id="cvSceneSend">決める</button></div></div>
     <div id="cvTextRow"><input type="text" id="cvText" placeholder="話しかける" autocomplete="off"><button id="cvSend">送る</button></div>
     <div id="cvMicRow" hidden><button id="cvMic">🎤 話す</button><button id="cvMicX" class="off">✕ やめる</button><div id="cvHeard"></div></div>
@@ -1152,7 +1171,7 @@ body.ura #list.tlMode{background:#efe9f0}
 // 置き場所で切り替える：/lab/（試作）と /chat/（本番）で同じファイルを使う
 // 試作は本番と同じサイトなので、保存の名前に「lab.」を付けて本番の chat.* には書き込まない。通知も登録しない
 const IS_LAB = /\/lab\//.test(location.pathname);
-const APP_VERSION = '第82版（2026-11-21 17:50:00 更新・裏のグループ通話の「しゃべり続ける子」を何人でも（全員同時・一人ずつ話す内容））' + (IS_LAB ? '【試作】' : '');
+const APP_VERSION = '第83版（2026-11-22 14:00:00 更新・表のすべての通話にビデオ通話（📹 カメラ・シャッターで写真を見せる・立ち絵と表情））' + (IS_LAB ? '【試作】' : '');
 if (IS_LAB) { document.title = '【試作】トーク（統合）'; const mt = document.querySelector('meta[name=apple-mobile-web-app-title]'); if (mt) mt.content = 'トーク試作'; }
 const $ = (id) => document.getElementById(id);
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
@@ -3760,7 +3779,7 @@ function callScreen(c, mode) { // mode: dial / incoming / active / vm
       ? '<button class="cvBtn gray" id="cvVmPlay">▶ 再生</button><button class="cvBtn" id="cvVmClose">閉じる</button>'
       : `<button class="cvBtn gray" id="cvMute">🔊 スピーカー</button><button class="cvBtn" id="cvEnd">📞 終了</button>`;
   $('cvInput').hidden = mode !== 'active';
-  renderCvTest(mode); renderCvScene();
+  renderCvTest(mode); renderCvScene(); vidScreen(mode); // ビデオ通話（第83版）
   $('cvSub').innerHTML = ''; $('cvSub').hidden = mode === 'vm' ? !vmSubsOn() : !callSubsOn();
   $('cvSubToggle').textContent = (mode === 'vm' ? vmSubsOn() : callSubsOn()) ? '字幕 ON' : '字幕 OFF';
   const on = (id, f) => { const b = $(id); if (b) b.onclick = f; };
@@ -3796,7 +3815,7 @@ function closeCallScreen() {
   keepAwake(false);
   fxNoiseSync(); // 雑音を止める
   if (CALL.cur) clearTimeout(CALL.cur.contTimer);
-  stopTones(); stopVoice(); micStop(true);
+  stopTones(); stopVoice(); micStop(true); camOff(); vidReset(); // 第83版
   clearInterval(CALL.clock); clearInterval(CALL.hb); clearTimeout(CALL.ringTo);
   CALL.cur = null; CALL.vm = null;
   RMB.p = {}; // 第81版
@@ -3815,21 +3834,23 @@ $('cvSubToggle').onclick = () => {
   store.set(k, v); $('cvSub').hidden = !v; $('cvSubToggle').textContent = v ? '字幕 ON' : '字幕 OFF';
 };
 // --- 話す（キャラの声）。話している途中にあなたが話し始めたら止める
-async function speakLines(lines) {
+async function speakLines(lines, faces) { // faces：言葉ごとの表情（ビデオ通話・第83版）
   const cur = CALL.cur; if (!cur) return;
   cur.speaking = true;
-  try { await speakLines0(cur, lines); } finally { cur.speaking = false; hfSoon(700); }
+  try { await speakLines0(cur, lines, faces); } finally { cur.speaking = false; vTalk(''); hfSoon(700); }
 }
-async function speakLines0(cur, lines) {
+async function speakLines0(cur, lines, faces) {
   const tok = cur.speakTok = (cur.speakTok || 0) + 1;
   const voice = (charById(cur.charId) || {}).voice;
   const jobs = lines.map((t) => { const s = speakText(t); return s ? ttsBuf(voice, s).catch((e) => { logDiag('電話の声: ' + e.message); return null; }) : Promise.resolve(null); });
   for (let i = 0; i < lines.length; i++) {
     if (!CALL.cur || CALL.cur.speakTok !== tok) return;
+    if (faces && faces[i]) vFace(cur.charId, faces[i]);
     subLine('them', lines[i]);
     setStat('通話中');
     const buf = await jobs[i];
     if (!CALL.cur || CALL.cur.speakTok !== tok) return;
+    vTalk(cur.charId);
     if (buf) await playBuf(buf, cur.charId); else await sleep(Math.min(6000, 600 + lines[i].length * 110)); // 声が作れなかったときは字幕を読む時間
   }
 }
@@ -3916,7 +3937,7 @@ async function sayInCall(text) {
   stopVoice(); // 話している途中なら止めて、あなたの言葉を優先
   subLine('me', text); cur.busy = true; setStat('…');
   try {
-    const d = await api('POST', '/call/say', { id: cur.id, text });
+    const d = await api('POST', '/call/say', { id: cur.id, text, video: !!cur.video });
     await callAfterSay(cur, d);
   } catch (e) { cur.busy = false; setStat('通話中'); toast(e.message); hfSoon(500); }
 }
@@ -3926,7 +3947,8 @@ async function callAfterSay(cur, d) { // 話した・状況を書いたあとの
     if (d.promise) { mcPromiseToast(d.promise); sync(); } // モーニングコールの約束（第70版）
     if (d.rems) { d.rems.forEach((o) => remSeen.add(o.op === 'cancel' ? 'x' + o.id : o.op === 'change' ? o.id + o.at + o.what : o.id)); remToast(d.rems, CALL.cur && CALL.cur.charId); sync(); } // 予定のお知らせ（第72版）
     if (CALL.cur === cur) setStat('通話中');
-    await speakLines(d.lines || []);
+    if (d.askPhoto) vAsk(); // 「見せて」（第83版）
+    await speakLines(d.lines || [], d.faces);
     if (d.hangup && CALL.cur === cur && !cur.sleep) endCall('char');
     hfSoon(500);
 }
@@ -4374,6 +4396,143 @@ $('cvHfBtn').onclick = () => { // さわったときに始める（iPhone はタ
 };
 $('cvText').addEventListener('focus', () => { if (CALL.cur) { CALL.cur.typing = true; hfStop(); } }); // 文字を打っているあいだは聞き取りを止める
 $('cvText').addEventListener('blur', () => { if (CALL.cur) { CALL.cur.typing = false; hfSoon(600); } });
+// ---- ビデオ通話（第83版・表の通話だけ）：［📹 カメラ］で外カメラをオン（最初はオフ）。オンのあいだだけ、キャラの立ち絵（ノベル画面の「表」の部屋の素材）を出し、
+// シャッター（#cvShutter）を押した瞬間の写真を、小さくしてキャラに見せる（写真はどこにも残さない。字幕に小さく出すだけ）。話すたびに video を送る（サーバーはオンのあいだ表情を選ぶ）。
+// 立ち絵は、ノベル画面と同じ場所に保存された素材（IndexedDB の chars・img:<id>）を読む。立ち絵がない子はアイコン。グループは通話に出ている子を並べ、話している子を明るく
+const VID = { stream: null, db: null, sp: {}, st: {}, talk: '', glowT: 0, urls: [] };
+const NOVEL_IDB = IS_LAB ? 'akariLab' : 'charaNovel';
+const camOK = () => !!(navigator.mediaDevices && navigator.mediaDevices.getUserMedia);
+function novelDB() {
+  return new Promise((res) => {
+    let r; try { r = indexedDB.open(NOVEL_IDB); } catch (_) { return res(null); }
+    r.onupgradeneeded = () => { try { r.result.createObjectStore('kv'); } catch (_) {} }; // まだノベル画面を開いたことがない：ノベル画面と同じ形で作っておく
+    r.onsuccess = () => res(r.result); r.onerror = () => res(null); r.onblocked = () => res(null);
+  });
+}
+function novelGet(db, k) { return new Promise((res) => { try { const q = db.transaction('kv', 'readonly').objectStore('kv').get(k); q.onsuccess = () => res(q.result); q.onerror = () => res(null); } catch (_) { res(null); } }); }
+function novelSprite(charId) { // → { c, url: { 画像id: blob URL } } か null（ノベル画面で、このキャラにつないだ立ち絵）
+  if (VID.sp[charId]) return VID.sp[charId];
+  return (VID.sp[charId] = (async () => {
+    const db = VID.db || (VID.db = await novelDB()); if (!db) return null;
+    const chars = (await novelGet(db, 'chars')) || [];
+    const c = chars.find((x) => x && x.lineId === charId && x.base); if (!c) return null;
+    const ids = new Set([c.base]);
+    for (const f of c.faces || []) for (const part of [f.eye, f.mouth]) for (const v of Object.values(part || {})) if (v) ids.add(v);
+    const url = {};
+    for (const id of ids) {
+      const r = await novelGet(db, 'img:' + id); if (!r || !r.buf) continue;
+      const type = r.type && r.type.startsWith('image/') ? r.type : /\.jpe?g$/i.test(r.name) ? 'image/jpeg' : /\.webp$/i.test(r.name) ? 'image/webp' : 'image/png';
+      url[id] = URL.createObjectURL(new Blob([r.buf], { type })); VID.urls.push(url[id]);
+    }
+    return url[c.base] ? { c, url } : null;
+  })().catch((e) => { logDiag('ビデオ通話の立ち絵: ' + e.message); return null; }));
+}
+const vFaceCore = (n) => String(n || '').trim().replace(/^[0-9０-９]+[\s._\-・:：、)）]*/, '').trim() || String(n || '').trim();
+function vDefFace(c) { const f = (c.faces || []).find((x) => x.name === '通常') || (c.faces || [])[0]; return f ? f.name : ''; }
+function vIds(cur) { return !cur ? [] : cur.group ? (cur.members || []).slice() : [cur.charId]; }
+async function renderStage(cur) {
+  const ids = vIds(cur), box = $('cvSprs');
+  box.classList.toggle('many', ids.length > 1);
+  for (const el of [...box.children]) if (!ids.includes(el.dataset.vs)) { el.remove(); delete VID.st[el.dataset.vs]; } // 抜けた子は外す
+  for (const id of ids) {
+    if (VID.st[id]) continue;
+    const c = charById(id); if (!c) continue;
+    const el = document.createElement('div'); el.className = 'vSpr'; el.dataset.vs = id;
+    el.innerHTML = `<img class="b" alt=""><img class="e" alt=""><img class="m" alt=""><span class="vNm">${esc(c.name)}</span>`;
+    box.appendChild(el);
+    const st = VID.st[id] = { el, sp: null, face: '', es: 'open', ms: 'close', blinkAt: Date.now() + 1500 + Math.random() * 3000 };
+    const sp = await novelSprite(id);
+    if (VID.st[id] !== st) continue;
+    if (!sp) { el.classList.add('ic'); el.insertAdjacentHTML('afterbegin', avatarHTML(c, '', 'omote')); continue; } // 立ち絵がない子はアイコン
+    st.sp = sp; st.face = st.face || vDefFace(sp.c); vRender(id);
+  }
+  vTalk(VID.talk);
+}
+function vSetImg(img, u) { if (img.dataset.u !== u) { img.dataset.u = u; if (u) img.src = u; } img.style.display = u ? 'block' : 'none'; }
+function vRender(id) {
+  const st = VID.st[id]; if (!st || !st.sp) return;
+  const { c, url } = st.sp, f = (c.faces || []).find((x) => x.name === st.face), U = (k) => (k && url[k]) || '';
+  vSetImg(st.el.querySelector('.b'), U(c.base));
+  vSetImg(st.el.querySelector('.e'), f && f.eye ? U(f.eye[st.es] || (st.es !== 'open' ? f.eye.open : '')) : '');
+  vSetImg(st.el.querySelector('.m'), f && f.mouth ? U(f.mouth[st.ms]) : '');
+}
+function vFace(id, name) { // サーバーが選んだ表情（番号の有無は気にしない）
+  const st = VID.st[id]; if (!st || !st.sp || !name) return;
+  const fs = (st.sp.c.faces || []).map((x) => x.name), hit = fs.find((n) => n === name) || fs.find((n) => vFaceCore(n) === vFaceCore(name));
+  if (hit) { st.face = hit; st.es = 'open'; vRender(id); }
+}
+function vTalk(id) { VID.talk = id || ''; for (const [k, st] of Object.entries(VID.st)) st.el.classList.toggle('talk', k === VID.talk); }
+setInterval(() => { // 口パク（話している子の声が鳴っているあいだ）・まばたき
+  if (!$('callView').classList.contains('vid')) return;
+  const now = Date.now();
+  for (const [id, st] of Object.entries(VID.st)) {
+    if (!st.sp) continue;
+    const f = (st.sp.c.faces || []).find((x) => x.name === st.face), m = (f && f.mouth) || {}, e = (f && f.eye) || {};
+    let ms = 'close';
+    if (id === VID.talk && voiceSrc && (m.open || m.half)) ms = st.ms === 'close' ? (m.half && (!m.open || Math.random() < 0.4) ? 'half' : 'open') : 'close';
+    let es = st.es;
+    if (e.close) { if (st.es === 'open' && now >= st.blinkAt) { es = 'close'; st.blinkEnd = now + 110; } else if (st.es === 'close' && now >= (st.blinkEnd || 0)) { es = 'open'; st.blinkAt = now + 2000 + Math.random() * 4000; } }
+    if (ms !== st.ms || es !== st.es) { st.ms = ms; st.es = es; vRender(id); }
+  }
+}, 110);
+function renderCamBtn() {
+  const cur = CALL.cur, b = $('cvCamBtn');
+  b.hidden = !(cur && !cur.ura && camOK() && CALL.screenMode === 'active');
+  b.textContent = cur && cur.video ? '📹 カメラ ON' : '📹 カメラ OFF';
+  b.classList.toggle('on', !!(cur && cur.video));
+}
+function vidScreen(mode) { // callScreen のたびに（画面の作り直しで vid が外れないように）
+  const cur = CALL.cur, on = !!(cur && cur.video && mode === 'active');
+  $('callView').classList.toggle('vid', on); $('cvStage').hidden = !on;
+  renderCamBtn();
+}
+async function camStart() {
+  VID.stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: { ideal: 'environment' }, width: { ideal: 1280 }, height: { ideal: 960 } }, audio: false }); // 外カメラだけ
+  const v = $('cvCam'); v.srcObject = VID.stream; v.play().catch(() => {});
+}
+function camStop() { if (VID.stream) VID.stream.getTracks().forEach((t) => { try { t.stop(); } catch (_) {} }); VID.stream = null; $('cvCam').srcObject = null; }
+async function camOn() {
+  const cur = CALL.cur; if (!cur || cur.ura || !cur.answeredAt || cur.ending) return;
+  if (!camOK()) { toast('この画面ではカメラを使えません'); return; }
+  try { await camStart(); }
+  catch (e) { logDiag('カメラ: ' + e.name + ' ' + e.message); toast(e.name === 'NotAllowedError' ? 'カメラが許可されていません（iPhone の設定でカメラを許可してください）' : 'カメラを使えませんでした：' + e.message); return; }
+  if (CALL.cur !== cur || cur.ending) { camStop(); return; }
+  cur.video = true; vGlow(false);
+  vidScreen('active'); renderStage(cur);
+}
+function camOff() { const cur = CALL.cur; camStop(); if (cur) cur.video = false; $('callView').classList.remove('vid'); $('cvStage').hidden = true; renderCamBtn(); }
+function vidReset() { vTalk(''); VID.st = {}; $('cvSprs').innerHTML = ''; for (const u of VID.urls) try { URL.revokeObjectURL(u); } catch (_) {} VID.urls = []; VID.sp = {}; vGlow(false); } // 通話のたびに読み直す（ノベル画面で素材を変えたとき用）
+function vGlow(on) { clearTimeout(VID.glowT); $('cvCamBtn').classList.toggle('glow', !!on); $('cvShutter').classList.toggle('glow', !!on); if (on) VID.glowT = setTimeout(() => vGlow(false), 20000); }
+function vAsk() { const cur = CALL.cur; if (!cur || cur.ura) return; vGlow(true); } // キャラが「見せて」と言った：カメラ（オンならシャッター）を光らせる
+$('cvCamBtn').onclick = () => { const cur = CALL.cur; if (!cur) return; if (cur.video) camOff(); else camOn(); };
+document.addEventListener('visibilitychange', () => { // 別のアプリへ行くとカメラは止まる。戻ったら付け直す
+  const cur = CALL.cur; if (!cur || !cur.video) return;
+  if (document.visibilityState === 'hidden') camStop();
+  else if (!VID.stream) camStart().catch((e) => { logDiag('カメラ（戻ったとき）: ' + e.message); camOff(); });
+});
+$('cvShutter').onclick = () => shoot();
+async function shoot() {
+  const cur = CALL.cur, v = $('cvCam');
+  if (!cur || !cur.video || cur.ending || !cur.answeredAt) return;
+  if (!v.videoWidth) { toast('カメラの準備中です'); return; }
+  const k = Math.min(1, 1024 / Math.max(v.videoWidth, v.videoHeight)), cv = document.createElement('canvas');
+  cv.width = Math.round(v.videoWidth * k); cv.height = Math.round(v.videoHeight * k);
+  cv.getContext('2d').drawImage(v, 0, 0, cv.width, cv.height);
+  const photo = cv.toDataURL('image/jpeg', 0.8);
+  const fl = $('cvFlash'); fl.classList.add('on'); setTimeout(() => fl.classList.remove('on'), 60);
+  vGlow(false);
+  const box = $('cvSub');
+  box.insertAdjacentHTML('beforeend', `<div class="me photo"><b>あなた：</b>📸 写真を見せました<img src="${photo}" alt=""></div>`); // 字幕にだけ小さく（残さない）
+  box.scrollTop = box.scrollHeight;
+  sleepUser(cur); hfStop();
+  for (let i = 0; cur.busy && i < 200 && CALL.cur === cur; i++) await sleep(300); // 返事を待っている途中なら、届いてから
+  if (CALL.cur !== cur || cur.ending) return;
+  stopVoice();
+  if (cur.group) { gcTalking(''); gcAsk('', undefined, photo); return; }
+  cur.busy = true; setStat('…');
+  try { await callAfterSay(cur, await api('POST', '/call/say', { id: cur.id, photo, video: true })); }
+  catch (e) { cur.busy = false; setStat('通話中'); toast(e.message); hfSoon(500); }
+}
 // ---- ［📝状況］（第81版・すべての通話）：台詞ではなく、今の状況を書く。通話が終わるまでずっと効く（書き直すと入れ替わる・［消す］で消える）。
 // サーバーは【状況・指示】付きでキャラに伝え、キャラはその場で反応する。字幕・記録・まとめにも入る（記憶に残さない通話には残らない）
 const SCENE_PFX = '【状況・指示】';
@@ -4406,7 +4565,7 @@ async function sendScene(v) {
   subLine('scene', v ? '📝 状況：' + v : '📝 状況を消しました');
   if (cur.group) { gcAsk('', v); return; }
   cur.busy = true; if (v) setStat('…');
-  try { await callAfterSay(cur, await api('POST', '/call/say', { id: cur.id, scene: v })); }
+  try { await callAfterSay(cur, await api('POST', '/call/say', { id: cur.id, scene: v, video: !!cur.video })); }
   catch (e) { cur.busy = false; setStat('通話中'); toast(e.message); hfSoon(500); }
 }
 function sleepUser(cur) { if (cur && cur.sleep && cur.sleepStage !== 'final') { cur.lastUser = Date.now(); cur.sleepStage = null; cur.sleepDue = false; } } // あなたが返事をした（おやすみを言い始めたあとは戻さない）
@@ -4428,14 +4587,14 @@ async function sleepCheckRun(kind) { // 'ask'：まだ聞いてますか？／'b
   const cur = CALL.cur; if (!cur || !cur.sleep || cur.ending) return;
   cur.sleepDue = false; cur.sleepStage = kind; clearTimeout(cur.contTimer);
   try {
-    const d = await api('POST', cur.group ? '/gcall/say' : '/call/say', { id: cur.id, text: '', check: kind });
+    const d = await api('POST', cur.group ? '/gcall/say' : '/call/say', { id: cur.id, text: '', check: kind, video: !!cur.video });
     if (CALL.cur !== cur || cur.sleepStage !== kind) return; // そのあいだに返事をした
     if (kind === 'bye') { // 第67版：おやすみが届いたら、もう切ると決める。マイクを止め、声が流れ終わらなくても必ず切る
       cur.sleepStage = 'final'; hfStop();
       const len = (d.lines || []).reduce((a, x) => a + String(x.text || x || '').length, 0);
       cur.sleepHard = setTimeout(() => { if (CALL.cur === cur) endCall('sleep'); }, Math.min(60000, 15000 + len * 400));
     }
-    if (cur.group) await gcPlay(d.lines || [], false); else await speakLines(d.lines || []);
+    if (cur.group) await gcPlay(d.lines || [], false); else await speakLines(d.lines || [], d.faces);
   } catch (e) { logDiag('寝落ち通話の確認: ' + e.message); if (kind === 'bye' && CALL.cur === cur) cur.sleepStage = 'final'; }
   if (CALL.cur !== cur) return;
   if (kind === 'ask') { if (cur.sleepStage !== 'ask') return; cur.sleepStage = 'asked'; cur.askedAt = Date.now(); hfSoon(300); return; }
@@ -4536,7 +4695,7 @@ $('grMemClear').onclick = () => deleteOGroupMemory('all');
 function gcMembersHTML(cur) { // 薄くするのは、つながったあと通話に入っていない子だけ（第58版：つながる前に全員薄く出ていて「出ていない」ように見えた）
   return cur.invited.map((id) => { const c = charById(id); if (!c) return ''; return `<div class="cvM ${cur.answeredAt && !cur.members.includes(id) ? 'off' : ''}" data-cvm="${esc(id)}">${avatarHTML(c, '', cur.ura ? 'ura' : 'omote')}<span>${esc(gcCharName(c, cur.ura))}</span></div>`; }).join('');
 }
-function gcTalking(id) { $('cvMembers').querySelectorAll('.cvM').forEach((el) => el.classList.toggle('talk', el.dataset.cvm === id)); }
+function gcTalking(id) { $('cvMembers').querySelectorAll('.cvM').forEach((el) => el.classList.toggle('talk', el.dataset.cvm === id)); vTalk(id); }
 function gcScreen(g, mode) {
   callScreen({ id: g.id, name: g.name }, mode);
   $('callView').classList.add('grp');
@@ -4709,6 +4868,7 @@ async function gcPlay0(lines, wait) {
     const buf = await jobs[i];
     if (!CALL.cur || CALL.cur.speakTok !== tok) return;
     cur.started = i + 1;
+    if (lines[i].face) vFace(lines[i].id, lines[i].face); // ビデオ通話の立ち絵の表情（第83版）
     gcSub(lines[i].id, lines[i].text); gcTalking(lines[i].id); setStat('通話中');
     if (rmbIds(cur).length) rambleStart(cur, lines[i].id); // ほかの子が話しているあいだは、しゃべり続ける子たちが後ろで話す（本人があなたに返事をするあいだは、その子だけ止める）
     if (buf) await playBuf(buf, lines[i].id); else await sleep(Math.min(6000, 600 + lines[i].text.length * 110));
@@ -4744,18 +4904,19 @@ function groupResume() { // 🎤をやめた（何も言わなかった）：待
   if (cur.pending) { const p = cur.pending; cur.pending = null; gcPlay(p.lines, p.wait); }
   else if (!cur.busy && gcAuto()) gcNext(1500); // ［勝手に話す］オン：続きを頼む（途中で止めていたら、聞いたところまで）
 }
-async function gcAsk(text, scene) { // scene：［📝状況］を書いた（第81版。'' は消した）
+async function gcAsk(text, scene, photo) { // scene：［📝状況］を書いた（第81版。'' は消した）・photo：写真を見せた（第83版）
   const cur = CALL.cur; if (!cur || cur.ending) return;
   clearTimeout(cur.contTimer);
   const heard = cur.pending ? 0 : cur.batchDone ? null : cur.started; // さえぎったら、聞いたところまで
   cur.pending = null; cur.batchDone = true;
-  cur.busy = true; if (text || scene) setStat('…');
+  cur.busy = true; if (text || scene || photo) setStat('…');
   try {
-    const d = await api('POST', '/gcall/say', { id: cur.id, text, heard, auto: !text && gcAuto(), ...(scene != null ? { scene } : {}) });
+    const d = await api('POST', '/gcall/say', { id: cur.id, text, heard, auto: !text && gcAuto(), video: !!cur.video, ...(scene != null ? { scene } : {}), ...(photo ? { photo } : {}) });
     cur.busy = false;
     if (CALL.cur !== cur) return;
     if (d.ended) { endGroupCall(); return; }
     rambleAdd(cur, d.ramble);
+    if (d.askPhoto) vAsk(); // 「見せて」（第83版）
     if (scene === '') { setStat('通話中'); if (gcAuto()) gcNext(1500); return; } // 消しただけ（返事なし）
     if (cur.queued.length) { cur.pending = { lines: d.lines || [], wait: d.wait }; const t = cur.queued.splice(0).join('\n'); gcAsk(t); return; } // 待っている間にあなたが話した：届いたセリフは聞かずに、あなたの言葉を先に
     if (d.paused) { setStat('止めています'); return; }

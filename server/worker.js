@@ -14,7 +14,7 @@
 //    ・Cron トリガー  * * * * *  （毎分。実際に動くのは13分おき）
 // =====================================================================
 
-const VERSION = '第82版（2026-11-21 17:50:00 更新・裏のグループ通話の「しゃべり続ける子」を何人でも（全員同時・一人ずつ話す内容））';
+const VERSION = '第83版（2026-11-22 14:00:00 更新・表のすべての通話にビデオ通話（📹 カメラ・シャッターで写真を見せる・立ち絵と表情））';
 const DEFAULT_MODEL = 'gemini-flash-latest';
 const DEFAULT_GROK_MODEL = 'grok-4.7';                 // X（Twitter）の Grok と同じ最新世代
 const FALLBACK_GROK_MODEL = 'grok-4-fast-non-reasoning'; // 上が使えないときの予備
@@ -566,20 +566,23 @@ async function route(key, url, body, env, ctx, req) {
       const cl = await getCall(env, body.id);
       const c = await callCharOf(env, cl);
       if (cl.status !== 'active') throw new HttpError(409, 'この電話はもう切れています');
+      callVideoIn(cl, body); // ビデオ通話（第83版）
       const sc = callSceneIn(cl, body); // ［📝状況］（第81版）
-      const text = sc ? '' : String(body.text || '').trim().slice(0, 2000);
+      const ph = sc ? null : callPhotoIn(cl, body); // 写真（第83版）
+      const text = sc || ph ? '' : String(body.text || '').trim().slice(0, 2000);
       if (text) cl.transcript.push({ who: 'me', text, at: Date.now() });
       cl.lastAt = Date.now();
       await putCall(env, cl);
       if (sc === 'clear') return json({ lines: [], scene: '' });
       if (callStop(await getSettings(env), cl)) return json({ lines: [], paused: true }); // モーニングコールは止めている子でも話す
-      const r = await keep(ctx, callReply(env, cl, c, text || sc ? '' : sleepCheck(cl, body.check)));
+      const r = await keep(ctx, callReply(env, cl, c, text || sc || ph ? '' : sleepCheck(cl, body.check), ph));
       const now2 = await kvGet(env, 'call:' + cl.id, null);
       if (!now2) return json({ lines: [], ended: true });
+      if (ph) photoDescIn(now2, r.photoDesc);
       now2.transcript.push(...r.lines.map((t) => ({ who: 'char', text: t, at: Date.now() })));
       now2.lastAt = Date.now();
       await putCall(env, now2);
-      return json({ lines: r.lines, hangup: r.hangup, ...(sc ? { scene: now2.scene || '' } : {}), ...(r.promise ? { promise: r.promise } : {}), ...(r.rems ? { rems: r.rems } : {}) });
+      return json({ lines: r.lines, hangup: r.hangup, ...(r.faces ? { faces: r.faces } : {}), ...(r.askPhoto ? { askPhoto: true } : {}), ...(sc ? { scene: now2.scene || '' } : {}), ...(r.promise ? { promise: r.promise } : {}), ...(r.rems ? { rems: r.rems } : {}) });
     }
     case 'POST /call/ping': { // 通話中：まだつながっている（放置で切れないように）
       const cl = await getCall(env, body.id);
@@ -748,7 +751,7 @@ async function route(key, url, body, env, ctx, req) {
         const prev = await kvGet(env, gclogKey(g.id, body.from), null);
         if (!prev) throw new HttpError(404, 'この通話の会話は残っていません');
         cl.from = num(body.from, 0); cl.fromAt = prev.at;
-        cl.transcript = (prev.transcript || []).slice(-GCLOG_CARRY).map((m) => ({ who: m.who, text: m.text, at: m.at, old: true, ...(m.scene ? { scene: true } : {}) }));
+        cl.transcript = (prev.transcript || []).slice(-GCLOG_CARRY).map((m) => ({ who: m.who, text: m.text, at: m.at, old: true, ...(m.scene ? { scene: true } : {}), ...(m.photo ? { photo: true, seen: m.seen || [] } : {}) }));
       }
       await putCall(env, cl);
       const out = { call: callPublic(cl), ringMs: test ? 3000 : joined.length ? Math.round(4000 + Math.random() * 5000) : CALL_RING_MS };
@@ -782,8 +785,10 @@ async function route(key, url, body, env, ctx, req) {
       if (cl.status !== 'active') throw new HttpError(409, 'この通話はもう切れています');
       const g = await getCallGroup(env, cl.group);
       gcallCut(cl, body.heard);
+      callVideoIn(cl, body); // ビデオ通話（第83版・表だけ）
       const sc = callSceneIn(cl, body); // ［📝状況］（第81版）
-      const text = sc ? '' : String(body.text || '').trim().slice(0, 2000);
+      const ph = sc ? null : callPhotoIn(cl, body); // 写真（第83版）
+      const text = sc || ph ? '' : String(body.text || '').trim().slice(0, 2000);
       if (text) cl.transcript.push({ who: 'me', text, at: Date.now() });
       cl.lastAt = Date.now();
       if (cl.transcript.length > 400) cl.transcript = cl.transcript.slice(-300);
@@ -791,15 +796,16 @@ async function route(key, url, body, env, ctx, req) {
       if (sc === 'clear') return json({ lines: [], scene: '' });
       if (gcStopped(await getSettings(env), g)) return json({ lines: [], paused: true });
       let r;
-      try { r = await keep(ctx, gcallReply(env, cl, g, text || sc ? false : body.auto ? 'auto' : true, text || sc ? '' : sleepCheck(cl, body.check))); } // auto：［勝手に話す］がオン（第56版）・check：寝落ち通話の確認（第66版）
+      try { r = await keep(ctx, gcallReply(env, cl, g, text || sc || ph ? false : body.auto ? 'auto' : true, text || sc || ph ? '' : sleepCheck(cl, body.check), ph)); } // auto：［勝手に話す］がオン（第56版）・check：寝落ち通話の確認（第66版）
       catch (e) { await log(env, `グループ通話（${g.name}）の返事: ${e.message}`); throw e; }
       const now2 = await kvGet(env, 'call:' + cl.id, null);
       if (!now2) return json({ lines: [], ended: true });
+      if (ph) photoDescIn(now2, r.photoDesc);
       now2.batch = (now2.batch || 0) + 1;
       now2.transcript.push(...r.lines.map((x) => ({ who: x.id, text: x.text, at: Date.now(), b: now2.batch })));
       now2.lastAt = Date.now();
       await putCall(env, now2);
-      return json({ lines: r.lines, wait: r.wait, ...(sc ? { scene: now2.scene || '' } : {}), ...(r.ramble ? { ramble: r.ramble } : {}) });
+      return json({ lines: r.lines, wait: r.wait, ...(r.askPhoto ? { askPhoto: true } : {}), ...(sc ? { scene: now2.scene || '' } : {}), ...(r.ramble ? { ramble: r.ramble } : {}) });
     }
     case 'POST /gcall/ramble': { // しゃべり続ける子のひとり話の続き（第81版・裏のグループ通話）。アプリは、ほかの子が話している間に足りなくなったら頼む
       const cl = await getCall(env, body.id);
@@ -2910,7 +2916,46 @@ function callSceneIn(cl, body) { // 返り値：'set'（書いた）・'clear'�
 const sceneRule = (cl) => (cl.scene ? `\n# いまの状況（ユーザーが書いた、この通話のあいだずっと続く状況の説明。台詞ではない）\n${cl.scene}\n- 通話が終わるまで、この状況のとおりに話す（状況に合った話し方・話題・反応にする）。状況の文をそのまま読み上げたり、何度も説明したりはしない。ユーザーが書き直したら、新しい状況に合わせる。\n` : '');
 const sceneOf = (m) => String(m.text || '').slice(SCENE_PFX.length); // 状況の行の中身
 const SUM_SCENE_NOTE = '「（状況）」の行は、ユーザーが書いた場面の状況の説明（台詞ではない）。どんな状況で話したかも、まとめに入れる。';
+const SUM_PHOTO_NOTE = '「（カメラで写真を撮って見せた：…）」は、ビデオ通話でユーザーが見せてくれた写真。何を見せてもらったかも、まとめに入れる。'; // 第83版
 const sceneMeta = (cl) => (!cl.nokeep && cl.scenes && cl.scenes.length ? { scenes: cl.scenes.slice(-5).map((x) => trunc(x, 100)) } : {}); // 記憶に残さない通話（テスト・引き継がない寝落ち通話）は残さない
+// ---- ビデオ通話（第83版・表の通話だけ。1対1・グループ・寝落ち・テスト・モーニングコール・予定のお知らせ）
+// アプリがカメラをオンにしているあいだ、話すたびに video:true を送る（cl.video）。シャッターを押すと photo（data URL の JPEG）を送り、その番の AI にだけ画像を見せる。
+// 写真そのものはどこにも残さない（transcript には「写真を見せた：〜」と文字だけ。〜は AI が書く photo_desc）。グループでは、そのとき通話に出ていた子（seen）だけが見たことにする。
+// カメラがオンのあいだは、表（会う場面）の表情（facesO）があれば、言葉ごとに《表情》を選ばせてアプリへ返す（立ち絵の表情）。ask_photo：キャラが「見せて」と頼んだ
+const PHOTO_TXT = '（カメラで、今いるところの写真を撮って見せた）', PHOTO_MAX = 2000000;
+function callVideoIn(cl, body) { if (!cl.ura && body.video != null) cl.video = !!body.video; }
+function callPhotoIn(cl, body) { // → Gemini に渡す画像 { mimeType, data } か null
+  if (cl.ura || !body.photo) return null;
+  const m = String(body.photo).match(/^data:(image\/(?:jpeg|png|webp));base64,([A-Za-z0-9+/=]+)$/);
+  if (!m || m[2].length > PHOTO_MAX) throw new HttpError(400, '写真を読み取れませんでした（大きすぎるか、形がちがいます）');
+  cl.video = true; cl.photos = (cl.photos || 0) + 1;
+  cl.transcript.push({ who: 'me', photo: true, text: PHOTO_TXT, at: Date.now(), ...(cl.group ? { seen: [...cl.members] } : {}) });
+  return { mimeType: m[1], data: m[2] };
+}
+function photoDescIn(cl, desc) { // 写真に写っていたもの（記録・まとめ用。画像は残さない）
+  const d = String(desc || '').replace(/\s+/g, ' ').trim().slice(0, 80);
+  const e = [...cl.transcript].reverse().find((m) => m.photo && m.text === PHOTO_TXT);
+  if (e) e.text = '（カメラで写真を撮って見せた' + (d ? '：' + d : '') + '）';
+}
+function addPhotoPart(turns, photo) { const t = turns[turns.length - 1]; if (photo && t && t.role === 'user') t.parts.push({ inlineData: photo }); }
+function videoRule(cl, photo, faceRule) {
+  if (cl.ura) return '';
+  const g = !!cl.group;
+  let s = '\n# ビデオ通話（ユーザーのカメラ）\n';
+  if (cl.video) s += `- いまユーザーはカメラをオンにしている（ビデオ通話）。ユーザーは外カメラで自分のまわりを映していて、${g ? 'みんなの' : 'あなたの'}姿はユーザーの画面に映っている。ユーザーがシャッターを押したときだけ、その瞬間の写真が届く。
+- 写真が届いた番では、写っているものをよく見て、自然に反応して話題にする（見えたものを具体的に。写っていないものは言わない。よく分からないところは、たずねてよい）。写真が届いていない番は、新しい映像は見えていないものとして話す（前に見た写真のことは覚えている）。
+- もっと見たいもの・別のところを見たくなったら「それ撮って見せて」と頼んでよい（しつこくしない）。頼んだら ask_photo を true にする。\n`;
+  else s += `- いまユーザーのカメラはオフ（声だけ）。ユーザーがご飯・外出・景色・買った物・部屋など、見てみたくなる話をしたら、「ビデオにして見せて」と頼んでよい（話の流れで自然なときだけ。しつこくしない）。頼んだら ask_photo を true にする。それ以外は false。\n`;
+  if (photo) s += `- いま写真が届いた。${g ? 'この写真を見られるのは、いま通話に出ている子だけ。' : ''}photo_desc に、写っているものを20〜40字で書く（記録用。見たままを短く）。\n`;
+  return s + (cl.video && faceRule ? faceRule : '');
+}
+function callFaceRule(faces) {
+  return `- ビデオ通話で顔が見えているので、言葉ごとに、先頭にそのときの表情を《表情名》の形で1つ付ける（例：《${faces[0].name}》もしもし）。表情名は次の中から、言葉の気持ちに一番合うものを選ぶ：${faceList(faces)}。《》は言葉には含めない（読み上げない）。\n`;
+}
+function videoSchema(base, photo) { // 表の通話：ask_photo（いつも）・photo_desc（写真が届いた番）
+  const props = { ...base.properties, ask_photo: { type: 'boolean' }, ...(photo ? { photo_desc: { type: 'string' } } : {}) };
+  return { type: 'object', properties: props, required: Object.keys(props), additionalProperties: false };
+}
 // --- 通話中の返事
 const CALL_SCHEMA = { type: 'object', properties: { messages: { type: 'array', items: { type: 'string' } }, hangup: { type: 'boolean' } }, required: ['messages', 'hangup'], additionalProperties: false };
 function buildCallSystem(c, cl, lifeInfo, talk, state, now, check = '', wake = false) {
@@ -2939,7 +2984,7 @@ ${cl.sleep ? '' : el >= CALL_MAX_MS ? '- もう1時間近く話している。�
 ${cl.transcript.length ? '' : cl.dir === 'in' ? '\n# 今回\nユーザーが電話に出たところ。かけた側として「もしもし」から話し始める。\n' : '\n# 今回\n電話に出たところ。「もしもし」など、出たときの第一声から。\n'}${sceneRule(cl)}${sleepRules(cl, check)}${morningRules(cl, now)}${remindRules(cl, now)}${wake ? WAKE_RULE : ''}
 出力は {"messages": ["言葉1", "言葉2"], "hangup": false${wake ? ', "wake": ""' : ''}} の形のJSON（予定の欄があれば "reminders" も）のみ。`;
 }
-async function callReply(env, cl, c, check = '') {
+async function callReply(env, cl, c, check = '', photo = null) {
   if (cl.ura) return uraCallReply(env, cl, c, check);
   const lastMe = [...cl.transcript].reverse().find((m) => m.who === 'me');
   const userTurn = !check && phoneChar(c) && lastMe && cl.transcript[cl.transcript.length - 1] === lastMe; // あなたが話した直後の返事（第74版：合図の言葉で絞らず、毎回 AI が意味で判断する）
@@ -2956,9 +3001,12 @@ async function callReply(env, cl, c, check = '') {
     if (t && t.role === role) t.parts[0].text += '\n' + m.text; else turns.push({ role, parts: [{ text: m.text }] });
   }
   if (!turns.length || turns[turns.length - 1].role !== 'user') turns.push({ role: 'user', parts: [{ text: check ? '（ユーザーは何も言わない）' : cl.transcript.length ? '（少し黙っている）' : cl.dir === 'in' ? '（電話に出た）' : '（着信）' }] });
+  addPhotoPart(turns, photo); // 写真はこの番だけ見せる（第83版）
+  const faces = cl.video ? await facesOf(env, c.id, 'omote') : null; // カメラがオン：立ち絵の表情を選ぶ
   const wb = await worldBlock(env, c.prompt + '\n' + cl.transcript.slice(-20).map((m) => m.text).join('\n'));
-  const r = await callAIObj(env, 'omote', wb + buildCallSystem(c, cl, lifeInfo, talk, state, now, check, wake) + (rem ? remRule(rem, now) : ''), turns, callSchema(wake, !!rem), 'call_reply');
-  const lines = (Array.isArray(r && r.messages) ? r.messages : []).map((t) => String(t || '').replace(/^「([\s\S]*)」$/, '$1').trim()).filter(Boolean).slice(0, 3);
+  const r = await callAIObj(env, 'omote', wb + buildCallSystem(c, cl, lifeInfo, talk, state, now, check, wake) + videoRule(cl, photo, faces ? callFaceRule(faces) : '') + (rem ? remRule(rem, now) : ''), turns, videoSchema(callSchema(wake, !!rem), !!photo), 'call_reply');
+  const fl = (Array.isArray(r && r.messages) ? r.messages : []).map((t) => takeFace(String(t || '').replace(/^「([\s\S]*)」$/, '$1').trim(), faces)).map((x) => ({ text: String(x.text).replace(/^「([\s\S]*)」$/, '$1').trim(), face: x.face })).filter((x) => x.text).slice(0, 3);
+  const lines = fl.map((x) => x.text);
   if (!lines.length) throw new Error('返答が空でした');
   if (looksRefused(lines)) throw new AiRefused();
   const hangup = !cl.sleep && (!!(r && r.hangup) || (cl.answeredAt && now - cl.answeredAt > CALL_MAX_MS + 3 * MIN)); // 寝落ち通話はキャラから切らない（切るのはアプリ）
@@ -2966,7 +3014,8 @@ async function callReply(env, cl, c, check = '') {
   if (wake) promise = await mcFromAI(env, c, r && r.wake, { keep: !cl.nokeep, src: cl.sleep ? 'sleep' : 'call' }).catch((e) => { log(env, 'モーニングコールの約束: ' + e.message); return null; });
   let rems = null;
   if (rem) rems = await remFromAI(env, c, r && r.reminders, { keep: !cl.nokeep, src: cl.sleep ? 'sleep' : cl.morning ? 'morning' : cl.remind ? 'remind' : 'call' }).catch((e) => { log(env, '予定のお知らせ: ' + e.message); return null; });
-  return { lines: check === 'ask' ? lines.slice(0, 1) : lines, hangup, ...(promise ? { promise } : {}), ...(rems && rems.length ? { rems } : {}) };
+  const vid = { ...(faces ? { faces: fl.map((x) => x.face || '').slice(0, check === 'ask' ? 1 : 3) } : {}), ...(r && r.ask_photo ? { askPhoto: true } : {}), ...(photo ? { photoDesc: String((r && r.photo_desc) || '') } : {}) };
+  return { lines: check === 'ask' ? lines.slice(0, 1) : lines, hangup, ...vid, ...(promise ? { promise } : {}), ...(rems && rems.length ? { rems } : {}) };
 }
 function callTurns(cl, check) {
   const turns = [];
@@ -3327,14 +3376,14 @@ async function finishCall(env, cl, c, { by = 'me', est = null } = {}) {
   if (!cl.nokeep && cl.transcript.some((m) => m.who === 'me') && !callStop(await getSettings(env), cl)) { // 寝落ち通話で「引き継がない」なら、まとめも記憶も残さない
     const text = cl.transcript.slice(-80).map((m) => (m.scene ? '（状況）' + trunc(sceneOf(m), 200) : (m.who === 'me' ? 'ユーザー: ' : nm + ': ') + trunc(m.text, 200))).join('\n');
     try {
-      const r = await aiJson(env, cl.ura ? 'ura' : 'omote', `あなたは、${nm}とユーザーが電話で話した内容を、${nm}があとで${cl.ura ? '物語の中で' : 'トークで'}思い出せるように、短くまとめる係です。何の話をして、どんな雰囲気だったかを、1〜2文で具体的に書きます。${cl.scenes && cl.scenes.length ? SUM_SCENE_NOTE : ''}`, text, CALL_SUM_SCHEMA, 'call_summary');
+      const r = await aiJson(env, cl.ura ? 'ura' : 'omote', `あなたは、${nm}とユーザーが電話で話した内容を、${nm}があとで${cl.ura ? '物語の中で' : 'トークで'}思い出せるように、短くまとめる係です。何の話をして、どんな雰囲気だったかを、1〜2文で具体的に書きます。${cl.scenes && cl.scenes.length ? SUM_SCENE_NOTE : ''}${cl.photos ? SUM_PHOTO_NOTE : ''}`, text, CALL_SUM_SCHEMA, 'call_summary');
       sum = String((r && r.summary) || '').trim().slice(0, 200);
     } catch (e) { await log(env, `通話のまとめ（${c.name}）: ${e.message}`); }
   }
   if (sum && !cl.ura) await env.DB.prepare("INSERT INTO memories (char_id,kind,text,due,status,created,followed) VALUES (?, 'fact', ?, '', 'open', ?, 0)").bind(c.id, `${jstDay(now)}にユーザーと電話で話した：${sum}`.slice(0, 200), now).run(); // 裏は表の記憶に入れない（裏のトークの記録 meta.sum で覚えている）
   if (cl.morning) await kvDel(env, 'mc:run'); // 出た＝起こし終わり
   if (cl.remind) await kvDel(env, 'rem:run');
-  const meta = { dur, by, dir: cl.dir, ...(cl.sleep ? { sleep: true } : {}), ...(cl.morning ? { morning: true } : {}), ...(cl.remind ? { remind: cl.remind.map((x) => x.what).join('・').slice(0, 100) } : {}), ...(cl.test ? { test: true, ...(cl.testInfo ? { testInfo: cl.testInfo } : {}) } : {}), ...(cl.nokeep ? { nokeep: true } : {}), ...(sum ? { sum } : {}), ...sceneMeta(cl), ...(est && Number.isFinite(Number(est.usd)) ? { usd: Math.round(Number(est.usd) * 1e4) / 1e4, gpuMs: Math.round(num(est.gpuMs, 0)) } : {}) };
+  const meta = { dur, by, dir: cl.dir, ...(cl.sleep ? { sleep: true } : {}), ...(cl.morning ? { morning: true } : {}), ...(cl.remind ? { remind: cl.remind.map((x) => x.what).join('・').slice(0, 100) } : {}), ...(cl.test ? { test: true, ...(cl.testInfo ? { testInfo: cl.testInfo } : {}) } : {}), ...(cl.nokeep ? { nokeep: true } : {}), ...(sum ? { sum } : {}), ...sceneMeta(cl), ...(cl.photos && !cl.nokeep ? { photos: cl.photos } : {}), ...(est && Number.isFinite(Number(est.usd)) ? { usd: Math.round(Number(est.usd) * 1e4) / 1e4, gpuMs: Math.round(num(est.gpuMs, 0)) } : {}) };
   return callMsg(env, callKey(cl), cl.dir === 'in' ? 'char' : 'me', 'callog', '', meta);
 }
 
@@ -3489,7 +3538,7 @@ ${el >= 90 * MIN ? '- かなり長く話している。疲れや眠気を自然�
 ${fresh ? '' : cl.from ? `\n# 今回\n前回（${fmtTime(cl.fromAt || now)}）のグループ通話の続き。上の会話は、前回の最後のほう（もう話し終えたこと）。いま、またみんなが通話に入ったところ。前回の流れを覚えていて、自然に再開する。前回のセリフをそのままくり返さない。\n` : `\n# 今回\nいま、みんなが通話に入ったところ。通話に入ったときの言葉から。最初にだれが話すかは、性格と関係から自然に決める。\n`}${cont === 'auto' && fresh ? '\n# 今回\nユーザーは「みんなで話していて」と、聞き役にまわっている。キャラどうしで、どんどん会話を続ける（話題を広げる・掘り下げる・ときどき新しい話題に移る・掛け合う。同じことのくり返しにしない）。ユーザーの返事を待たない。ときどき（数回に1回くらい）ユーザーに話題を振ってもよい。振ったときだけ wait_user を true にする。\n' : cont && fresh ? '\n# 今回\nユーザーは黙って聞いている。キャラどうしで自然に会話を続ける（ユーザーに話を振ってもよい）。\n' : ''}${sceneRule(cl)}
 出力は {"lines": [{"speaker": "名前", "text": "セリフ"}], "wait_user": false} の形のJSONのみ。`;
 }
-async function gcallReply(env, cl, g, cont = false, check = '') {
+async function gcallReply(env, cl, g, cont = false, check = '', photo = null) {
   const st = await getSettings(env), now = Date.now(), today = jstDay(now);
   const chars = await loadChars(env);
   const ms = cl.members.map((id) => chars.find((c) => c.id === id)).filter(Boolean);
@@ -3510,7 +3559,7 @@ ${activityText(state, now, c.id)}${mem ? `\n### ${c.name}が覚えているユ�
   const turns = [];
   for (const m of cl.transcript.slice(-80)) {
     const role = m.who === 'me' ? 'user' : 'model';
-    const line = m.who === 'me' ? m.text : `${nameOf(m.who)}: ${m.text}${m.cut ? '（ここで、ユーザーにさえぎられた）' : ''}`;
+    const line = m.who === 'me' ? m.text + (m.photo && m.seen ? `（この写真を見たのは、そのとき通話にいた${m.seen.map(nameOf).join('・')}だけ。ほかの子は見ていない）` : '') : `${nameOf(m.who)}: ${m.text}${m.cut ? '（ここで、ユーザーにさえぎられた）' : ''}`;
     const t = turns[turns.length - 1];
     if (t && t.role === role) t.parts[0].text += '\n' + line; else turns.push({ role, parts: [{ text: line }] });
   }
@@ -3521,13 +3570,20 @@ ${activityText(state, now, c.id)}${mem ? `\n### ${c.name}が覚えているユ�
   const wb = await worldBlock(env, (g.prompt || '') + '\n' + (g.ura ? (g.synopsis || '') + '\n' + ms.map((c) => c.prompt).join('\n') + '\n' : '') + cl.transcript.slice(-20).map((m) => m.text).join('\n'));
   const sys = g.ura ? buildUraGroupCallSystem(g, ms, info, gmem, cl, now, cont, st, await uraGroupTalk(env, g, chars)) : buildGroupCallSystem(g, ms, info, gmem, cl, now, cont);
   const rbs = rambleChars(cl, g, ms), rlog = rbs.length ? await rambleLog(env, cl.id) : {};
-  const r = await callAIObj(env, g.ura ? 'ura' : 'omote', wb + sys + (rbs.length ? rambleRules(g, rbs, rlog) : '') + sleepRules(cl, check, true), turns, rbs.length ? GCALL_RAMBLE_SCHEMA : GCALL_SCHEMA, 'group_call_reply');
+  addPhotoPart(turns, photo); // 写真はこの番だけ見せる（第83版）
+  const faces = {}; // カメラがオン：立ち絵の表情（表の会う場面の表情）
+  if (!g.ura && cl.video) for (const c of ms) { const f = await facesOf(env, c.id, 'omote'); if (f) faces[c.id] = f; }
+  const fr = Object.keys(faces).length ? `- ビデオ通話でみんなの顔が見えているので、各セリフの text の先頭に、そのときの表情を《表情名》の形で1つ付ける（例：《通常》もしもし）。《》は言葉には含めない（読み上げない）。表情名は、その子の次の中から、セリフの気持ちに一番合うものを選ぶ：\n${ms.filter((c) => faces[c.id]).map((c) => `  - ${gcName(c, g)}：${faceList(faces[c.id])}`).join('\n')}\n` : '';
+  const base = rbs.length ? GCALL_RAMBLE_SCHEMA : GCALL_SCHEMA;
+  const r = await callAIObj(env, g.ura ? 'ura' : 'omote', wb + sys + (rbs.length ? rambleRules(g, rbs, rlog) : '') + videoRule(cl, photo, fr) + sleepRules(cl, check, true), turns, g.ura ? base : videoSchema(base, !!photo), 'group_call_reply');
   let lines = [];
   for (const x of (r && Array.isArray(r.lines) ? r.lines : [])) {
     const c = findSpeaker(ms, x && x.speaker);
-    const text = String((x && x.text) || '').replace(/^「([\s\S]*)」$/, '$1').trim();
-    if (c && text) lines.push({ id: c.id, text: text.slice(0, 600) });
+    const tf = takeFace(String((x && x.text) || '').replace(/^「([\s\S]*)」$/, '$1').trim(), c ? faces[c.id] || null : null);
+    const text = String(tf.text).replace(/^「([\s\S]*)」$/, '$1').trim();
+    if (c && text) lines.push({ id: c.id, text: text.slice(0, 600), ...(tf.face ? { face: tf.face } : {}) });
   }
+  const vid = { ...(r && r.ask_photo ? { askPhoto: true } : {}), ...(photo ? { photoDesc: String((r && r.photo_desc) || '') } : {}) };
   let ramble = null;
   if (rbs.length) { // しゃべり続ける子（第81版・第82版で何人でも）：ふだんの返事には出さない（あなたが話した直後だけ、その子に向けた話なら返事をしてよい）。ひとり話は ramble で別に返す（{ キャラid: [話…] }）
     const last = cl.transcript[cl.transcript.length - 1], ids = rbs.map((c) => c.id);
@@ -3539,11 +3595,11 @@ ${activityText(state, now, c.id)}${mem ? `\n### ${c.name}が覚えているユ�
     }
     await rambleSave(env, cl.id, rlog, ramble);
     if (!Object.keys(ramble).length) ramble = null;
-    if (!lines.length && ramble) return { lines: [], wait: !!(r && r.wait_user), ramble };
+    if (!lines.length && ramble) return { lines: [], wait: !!(r && r.wait_user), ramble, ...vid };
   }
   if (!lines.length) throw new Error('返答が空でした');
   if (looksRefused(lines.map((x) => x.text))) throw new AiRefused();
-  return { lines: check === 'ask' ? lines.slice(0, 1) : lines.slice(0, check === 'bye' ? 3 : 8), wait: !!(r && r.wait_user), ...(ramble ? { ramble } : {}) };
+  return { lines: check === 'ask' ? lines.slice(0, 1) : lines.slice(0, check === 'bye' ? 3 : 8), wait: !!(r && r.wait_user), ...vid, ...(ramble ? { ramble } : {}) };
 }
 // ---- しゃべり続ける子（第81版・裏のグループ通話だけ。第82版で何人でも選べるように・一人ずつ話す内容）
 // グループの設定で選んだ子（g.ramblers＝[{ id, topic }]。第81版の g.rambler・rambleTopic も読む）は、ほかの子が話している間、後ろで自分の話をずっと続ける（アプリが声を重ねて流す。全員同時。誰も話していない間は黙る）。
@@ -3624,7 +3680,7 @@ async function finishGroupCall(env, cl, { by = 'me', est = null } = {}) {
     const nameOf = (id) => { const c = chars.find((x) => x.id === id); return c ? gcName(c, g) : '（いなくなった人）'; };
     const text = said.slice(-120).map((m) => (m.scene ? '（状況）' + trunc(sceneOf(m), 200) : (m.who === 'me' ? 'ユーザー: ' : nameOf(m.who) + ': ') + trunc(m.text, 200))).join('\n');
     try {
-      const r = await aiJson(env, g.ura ? 'ura' : 'omote', `あなたは、グループ「${g.name}」のグループ通話で話した内容を、メンバーがあとで思い出せるように短くまとめる係です。だれが何の話をして、どんな雰囲気だったか、決まったこと・約束があればそれも、2〜3文で具体的に書きます。${cl.scenes && cl.scenes.length ? SUM_SCENE_NOTE : ''}`, text, CALL_SUM_SCHEMA, 'group_call_summary');
+      const r = await aiJson(env, g.ura ? 'ura' : 'omote', `あなたは、グループ「${g.name}」のグループ通話で話した内容を、メンバーがあとで思い出せるように短くまとめる係です。だれが何の話をして、どんな雰囲気だったか、決まったこと・約束があればそれも、2〜3文で具体的に書きます。${cl.scenes && cl.scenes.length ? SUM_SCENE_NOTE : ''}${cl.photos ? SUM_PHOTO_NOTE : ''}`, text, CALL_SUM_SCHEMA, 'group_call_summary');
       sum = String((r && r.summary) || '').trim().slice(0, 300);
     } catch (e) { await log(env, `グループ通話のまとめ（${g.name}）: ${e.message}`); }
   }
@@ -3633,10 +3689,10 @@ async function finishGroupCall(env, cl, { by = 'me', est = null } = {}) {
     list.push({ id: 'm' + now.toString(36) + randomAlnum(4), at: now, text: `${jstDay(now)}のグループ通話：${sum}` });
     await kvSet(env, 'gmem:' + g.id, list.slice(-GMEM_MAX));
   }
-  const meta = { dur, by, dir: cl.dir, group: true, members: cl.members, ...(cl.sleep ? { sleep: true } : {}), ...(cl.nokeep ? { nokeep: true } : {}), ...(said.length ? { log: true } : {}), ...(cl.from ? { from: cl.from } : {}), ...(sum ? { sum } : {}), ...sceneMeta(cl), ...(est && Number.isFinite(Number(est.usd)) ? { usd: Math.round(Number(est.usd) * 1e4) / 1e4, gpuMs: Math.round(num(est.gpuMs, 0)) } : {}) };
+  const meta = { dur, by, dir: cl.dir, group: true, members: cl.members, ...(cl.sleep ? { sleep: true } : {}), ...(cl.nokeep ? { nokeep: true } : {}), ...(said.length ? { log: true } : {}), ...(cl.from ? { from: cl.from } : {}), ...(sum ? { sum } : {}), ...sceneMeta(cl), ...(cl.photos && !cl.nokeep ? { photos: cl.photos } : {}), ...(est && Number.isFinite(Number(est.usd)) ? { usd: Math.round(Number(est.usd) * 1e4) / 1e4, gpuMs: Math.round(num(est.gpuMs, 0)) } : {}) };
   const msg = await callMsg(env, g.key, cl.dir === 'in' ? 'char' : 'me', 'callog', '', meta); // 裏は裏のグループトーク（grp-…#ura）に
   if (said.length) { // この通話で話したことを、全部文字で残す（第57版。続きから話したときは、前回の最後の流れも一緒に）
-    const all = cl.transcript.map((m) => ({ who: m.who, text: m.text, at: m.at, ...(m.old ? { old: true } : {}), ...(m.scene ? { scene: true } : {}) })).slice(-GCLOG_MAX);
+    const all = cl.transcript.map((m) => ({ who: m.who, text: m.text, at: m.at, ...(m.old ? { old: true } : {}), ...(m.scene ? { scene: true } : {}), ...(m.photo ? { photo: true, seen: m.seen || [] } : {}) })).slice(-GCLOG_MAX);
     await kvSet(env, gclogKey(g.id, msg.id), { at: now, dur, members: cl.members, from: cl.from || 0, transcript: all });
   }
   return msg;

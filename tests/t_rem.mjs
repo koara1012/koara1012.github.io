@@ -23,6 +23,7 @@ globalThis.fetch = async (u, i) => {
   if (sch.includes('voice_message')) out = A.leave;
   else if (sch.includes('"hangup"')) out = { messages: ['もしもし'], hangup: A.hang, ...(sch.includes('"wake"') ? { wake: A.wake } : {}), ...(sch.includes('"reminders"') ? { reminders: A.rem } : {}) };
   else if (sch.includes('"summary"')) out = { summary: '話した。' };
+  else if (sch.includes('"reminders"') && !sch.includes('"messages"')) out = { reminders: A.sweep || [] }; // 第86版：通話のあとの見直し
   else if (sch.includes('"after"')) out = { answer: true, reason: '', after: 'none', line: '' };
   else if (sch.includes('"messages"')) { out = { messages: ['わかりました'] }; for (const [k, v] of Object.entries(schO.properties || {})) if (!(k in out)) out[k] = k === 'reminders' ? A.rem : k === 'wake' ? A.wake : /integer/i.test(JSON.stringify(v)) ? -1 : /array/i.test(JSON.stringify(v)) ? [] : ''; }
   else out = {};
@@ -173,4 +174,36 @@ ok(!kv('rem:run') && msgs(a.id).filter((x) => x.kind === 'call' && x.meta.remind
 v = await call('POST', '/rem/add', { date: '2026-11-20', time: '10:00', what: 'テスト', who: 'pick', charId: a.id });
 await call('POST', '/rem/del', { id: v.rem.list[0].id });
 ok(!list().length, 'delete from the screen');
+
+// ---- 第86版：寝落ち通話で「今日の19時に電話するっす」と引き受けたのに入らなかった（2026-11-26）
+clock = jst(2026, 11, 26, 0, 55);
+const k = (await call('POST', '/char', { char: { name: '色葉', prompt: 'p', voice: 'iroha', perDay: 0 } })).char;
+r = await call('POST', '/call/start', { charId: k.id, sleep: true, keep: false }); await call('POST', '/call/connect', { id: r.call.id });
+// ①秒・タイムゾーン付き・「今日／明日」・「夜7時」でも読む
+for (const [w, want, label] of [['2026-11-26 19:00:00', jst(2026, 11, 26, 19), 'seconds'], ['2026-11-26T19:00:00+09:00', jst(2026, 11, 26, 19), 'ISO +09:00'], ['今日 19:00', jst(2026, 11, 26, 19), '今日 19:00'], ['明日 夜7時', jst(2026, 11, 27, 19), '明日 夜7時'], ['11月26日 午後7時半', jst(2026, 11, 26, 19, 30), '午後7時半'], ['2020-11-26 19:00', jst(2026, 11, 26, 19), 'wrong year 2020 (real case)']]) {
+  A.rem = [{ op: 'add', id: '', when: w, what: '生放送' }];
+  s = await call('POST', '/call/say', { id: r.call.id, text: '19時に生放送だから電話して' });
+  const x = list().find((y) => y.what === '生放送');
+  ok(x && x.at === want && s.rems, 'when "' + label + '" is read');
+  if (x) await call('POST', '/rem/del', { id: x.id });
+}
+// ②通話中の返事で AI が reminders を空で返した → 終わったあとの見直しで拾う（記憶に残さない通話でも予定は残す）
+A.rem = []; ai.length = 0;
+await call('POST', '/call/say', { id: r.call.id, text: '明日19時に生放送があるから電話して' });
+ok(!list().some((y) => y.charId === k.id), 'reply forgot the reminder (reminders [])');
+A.sweep = [{ op: 'add', id: '', when: '2026-11-26 19:00', what: '生放送' }];
+await call('POST', '/call/end', { id: r.call.id, by: 'sleep' });
+const sw = ai.find((x) => x.sch.includes('"reminders"') && !x.sch.includes('"messages"'));
+ok(sw && sw.sys.includes('2026-11-26(木) 00:55') && sw.user.includes('[11/26(木) 0:55]') && sw.user.includes('明日19時に生放送'), 'sweep reads the transcript with times');
+let lv = list().find((y) => y.what === '生放送');
+ok(lv && lv.at === jst(2026, 11, 26, 19) && lv.keep === false && lv.src === 'sleep' && lv.charId === k.id, 'sweep saved the missed reminder (keep false, sleep)');
+ok((kv('log') || []).some((x) => JSON.stringify(x).includes('通話のあとの見直しで拾いました')), 'sweep is logged');
+// ③もう入っている時刻は、言い方が違っても二重にしない
+r = await call('POST', '/call/start', { charId: k.id }); await call('POST', '/call/connect', { id: r.call.id });
+await call('POST', '/call/say', { id: r.call.id, text: '今日の夜の電話よろしくね' });
+A.sweep = [{ op: 'add', id: '', when: '2026-11-26 19:00', what: '生放送のお知らせ' }];
+await call('POST', '/call/end', { id: r.call.id });
+ok(list().filter((y) => y.charId === k.id && y.at === jst(2026, 11, 26, 19)).length === 1, 'same time, different wording → not doubled');
+// 後片付け
+A.sweep = []; await call('POST', '/rem/del', { id: lv.id });
 console.log(fails ? fails + ' FAILED' : 'ALL PASSED');

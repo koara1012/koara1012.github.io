@@ -14,7 +14,7 @@
 //    ・Cron トリガー  * * * * *  （毎分。実際に動くのは13分おき）
 // =====================================================================
 
-const VERSION = '第85版（2026-11-23 04:20:00 更新・ビデオ通話：写真を小さく・通信が切れても返事をあとで受け取る）';
+const VERSION = '第86版（2026-11-26 01:30:00 更新・予定のお知らせ：AI が年をまちがえても読む・通話のあとに書き漏らしを拾う）';
 const DEFAULT_MODEL = 'gemini-flash-latest';
 const DEFAULT_GROK_MODEL = 'grok-4.7';                 // X（Twitter）の Grok と同じ最新世代
 const FALLBACK_GROK_MODEL = 'grok-4-fast-non-reasoning'; // 上が使えないときの予備
@@ -3244,6 +3244,7 @@ function callSchema(wake, rem) {
 }
 const remSrcText = (src) => ({ talk: 'トーク', call: '電話', sleep: '寝落ち通話', morning: 'モーニングコールの電話', remind: '予定のお知らせの電話', set: '' }[src] || '');
 const remWhen = (t) => { const p = jstParts(t); return `${p.mo}/${p.d}(${p.w}) ${p.h}:${String(p.mi).padStart(2, '0')}`; };
+const remNowFull = (t) => { const p = jstParts(t); return `${p.y}-${String(p.mo).padStart(2, '0')}-${String(p.d).padStart(2, '0')}(${p.w}) ${String(p.h).padStart(2, '0')}:${String(p.mi).padStart(2, '0')}`; }; // 第86版：AI に年も見せる（年をまちがえて「2020-…」と書いたため）
 const remTitle = (items) => '📅 ' + items.map((x) => { const p = jstParts(x.at); return `${x.what}（${p.h}:${String(p.mi).padStart(2, '0')}）`; }).join('・');
 async function remList(env) { const l = await kvGet(env, 'rem:list', []); return Array.isArray(l) ? l : []; }
 const remSave = (env, list) => kvSet(env, 'rem:list', list.sort((a, b) => a.at - b.at).slice(0, REM_MAX));
@@ -3254,18 +3255,26 @@ async function remView(env) {
   return { list, run };
 }
 function remParseWhen(v, now) { // "YYYY-MM-DD HH:MM"・"MM-DD HH:MM"・"+分数" → 時刻（過ぎていれば 0、60日より先なら -1）
-  v = String(v || '').replace(/[０-９]/g, (d) => String.fromCharCode(d.charCodeAt(0) - 0xfee0)).replace(/：/g, ':').replace(/[＋]/g, '+').replace(/[年月\/]/g, '-').replace(/日/g, ' ').replace(/[\s　]+/g, ' ').trim(); // 空白は残す（日と時刻の区切り）
+  v = String(v || '').replace(/[０-９]/g, (d) => String.fromCharCode(d.charCodeAt(0) - 0xfee0)).replace(/：/g, ':').replace(/[＋]/g, '+');
+  // 第86版：AI が秒・タイムゾーン付き（"2026-11-26 19:00:00"・"2026-11-26T19:00:00+09:00"・"…JST"）や「今日／明日 19:00」「夜7時」で書いても読む
+  v = v.replace(/(\d{1,2}:\d{2}):\d{2}(?:\.\d+)?/, '$1').replace(/\s*(?:\(?JST\)?|Z|[+]09:?00)\s*$/i, '').replace(/(\d)T(\d)/, '$1 $2').trim();
+  const pm = /(午後|夜|夕方|晩)\s*(\d{1,2})(時|:)/.exec(v);
+  if (pm && +pm[2] < 12) v = v.replace(pm[0], `${+pm[2] + 12}${pm[3]}`);
+  v = v.replace(/(午前|朝)\s*(?=\d)/, '');
+  const rd = /^(今日|きょう|本日|明日|あした|あす|明後日|あさって)\s*/.exec(v);
+  if (rd) { const p = jstParts(now + ({ 今日: 0, きょう: 0, 本日: 0, 明日: 1, あした: 1, あす: 1 }[rd[1]] ?? 2) * 864e5); v = `${p.y}-${p.mo}-${p.d} ${v.slice(rd[0].length)}`; }
+  v = v.replace(/[年月\/]/g, '-').replace(/日/g, ' ').replace(/[\s　]+/g, ' ').trim(); // 空白は残す（日と時刻の区切り）
   let t = 0;
   const rel = /^\+(\d{1,6})(分)?$/.exec(v.replace(/\s/g, ''));
   if (rel) t = now + +rel[1] * MIN;
   else {
     const m2 = /^(?:(\d{4})-)?(\d{1,2})-(\d{1,2})(?:\s*|T)(\d{1,2})(?::(\d{2})|時(?:(半)|(\d{1,2})分)?)$/.exec(v);
     if (!m2) return 0;
-    const p = jstParts(now), y = m2[1] ? +m2[1] : p.y, mo = +m2[2], d = +m2[3], h = +m2[4], mi = m2[6] ? 30 : +(m2[5] || m2[7] || 0);
+    const p = jstParts(now), y = m2[1] && [p.y, p.y + 1].includes(+m2[1]) ? +m2[1] : p.y, mo = +m2[2], d = +m2[3], h = +m2[4], mi = m2[6] ? 30 : +(m2[5] || m2[7] || 0);
     if (mo < 1 || mo > 12 || d < 1 || d > 31 || h > 23 || mi > 59) return 0;
     const iso = (yy) => Date.parse(`${yy}-${String(mo).padStart(2, '0')}-${String(d).padStart(2, '0')}T${String(h).padStart(2, '0')}:${String(mi).padStart(2, '0')}:00+09:00`);
     t = iso(y);
-    if (!m2[1] && t < now - 60e3) t = iso(y + 1); // 年を書かずに、もう過ぎた日付 → 来年
+    if ((!m2[1] || +m2[1] !== y) && t < now - 60e3) t = iso(y + 1); // 年を書かずに、もう過ぎた日付 → 来年。第86版：AI が年をまちがえた（2026-11-26 に「2020-11-26 19:00」と書いた）ときも、年なしと同じに読む
   }
   if (!t || t < now - 60e3) return 0;
   if (t > now + REM_DAYS * 864e5) return -1;
@@ -3273,7 +3282,7 @@ function remParseWhen(v, now) { // "YYYY-MM-DD HH:MM"・"MM-DD HH:MM"・"+分数
 }
 function remRule(mine, now, talk = false) {
   const cur = mine.length ? mine.map((x) => `- [${x.id}] ${remWhen(x.at)} ${x.what}`).join('\n') : '（今はなし）';
-  return `${talk ? '\n- reminders：' : '\n# 予定のお知らせ（reminders）\n- '}言い回しは問わない（意味で判断する。「その時間になったら伝えて」「12時って覚えといて」「出かける前にひと声ちょうだい」なども同じ）。ユーザーが、予定の時刻に知らせてほしいと頼んできたら、引き受けて reminders に {"op":"add","id":"","when":"YYYY-MM-DD HH:MM"（日本時間・24時間。今は${remWhen(now)}）,"what":"何の予定か（短く。例：歯医者）"} を書く。「3時間後」のように今からの時間なら when は "+分数"（例 "+180"）。日付や時刻があいまい（「来週」だけ・「夕方」だけなど）なら言葉で聞き返し、決まるまでは書かない。少し前に頼まれて、日時がこの返事で決まったときもここで書く。${REM_DAYS}日より先の予定は「ちょっと先すぎます」と断って書かない。
+  return `${talk ? '\n- reminders：' : '\n# 予定のお知らせ（reminders）\n- '}言い回しは問わない（意味で判断する。「その時間になったら伝えて」「12時って覚えといて」「出かける前にひと声ちょうだい」なども同じ）。ユーザーが、予定の時刻に知らせてほしいと頼んできたら、引き受けて reminders に {"op":"add","id":"","when":"YYYY-MM-DD HH:MM"（日本時間・24時間。今は${remNowFull(now)}。年は必ず今年か来年）,"what":"何の予定か（短く。例：歯医者）"} を書く。「3時間後」のように今からの時間なら when は "+分数"（例 "+180"）。日付や時刻があいまい（「来週」だけ・「夕方」だけなど）なら言葉で聞き返し、決まるまでは書かない。少し前に頼まれて、日時がこの返事で決まったときもここで書く。${REM_DAYS}日より先の予定は「ちょっと先すぎます」と断って書かない。
   頼まれていた予定の日時や中身が変わったら {"op":"change","id":"下の一覧の id","when":"新しい日時（変わらなければ "")","what":"新しい中身（変わらなければ "")"}、なくなった・やめると言われたら {"op":"cancel","id":"下の一覧の id","when":"","what":""}。関係ないとき・もう書いたときは []。
   あなたが今頼まれている予定：
 ${cur}
@@ -3289,7 +3298,7 @@ async function remFromAI(env, c, ops, { keep, src }) { // AI の reminders を�
       const at = remParseWhen(o.when, now);
       if (at === -1) { await log(env, `予定のお知らせ：60日より先なので入れませんでした（${c.name}・${what}）`); continue; }
       if (!at || !what) { await log(env, `予定のお知らせ：日時か中身が読めませんでした（${c.name}・「${String(o.when || '').slice(0, 20)}」${what}）`); continue; }
-      if (list.some((x) => x.charId === c.id && x.at === at && x.what === what)) continue; // 同じものをもう一度書いただけ
+      if (list.some((x) => x.charId === c.id && x.at === at)) continue; // 同じものをもう一度書いただけ（第86版：同じ子・同じ時刻なら、言い方が違っても同じ予定とみなす）
       if (list.length >= REM_MAX) { await log(env, `予定のお知らせ：${REM_MAX}件をこえたので入れませんでした`); continue; }
       const r = { id: remNewId(), at, what, charId: c.id, who: 'pick', keep: !!keep, src, made: now };
       list.push(r); out.push({ op, ...r });
@@ -3307,6 +3316,26 @@ async function remFromAI(env, c, ops, { keep, src }) { // AI の reminders を�
     }
   }
   if (out.length) await remSave(env, list);
+  return out;
+}
+// 第86版：通話が終わったら、会話をもう一度読んで「頼まれて引き受けたのに一覧に入っていない予定」を拾う（2026-11-26 寝落ち通話で「今日の19時に電話するっす」と引き受けたのに入らなかった）。
+// 通話中の返事は話すことに気を取られて reminders を空で返すことがあるため、終わったあとに予定だけを見る係に頼む。記憶に残さない通話でも予定は残す（keep:false）
+const REM_SWEEP_SCHEMA = { type: 'object', properties: { reminders: REM_OPS_SCHEMA }, required: ['reminders'], additionalProperties: false };
+async function remSweep(env, c, cl) {
+  const now = Date.now(), mine = await remOf(env, c.id);
+  const text = cl.transcript.filter((m) => !m.scene && !m.photo).slice(-60).map((m) => `[${remWhen(m.at || now)}] ${m.who === 'me' ? 'ユーザー' : c.name}: ${trunc(m.text, 200)}`).join('\n');
+  const cur = mine.length ? mine.map((x) => `- [${x.id}] ${remWhen(x.at)} ${x.what}`).join('\n') : '（なし）';
+  const r = await aiJson(env, 'omote', `あなたは、${c.name}とユーザーの電話の会話を読んで、予定のお知らせの書き漏らしを見つける係です。
+ユーザーが「その時刻に知らせて・電話して・教えて」と頼み（言い回しは問わない）、${c.name}が引き受けた予定のうち、下の「登録ずみ」に入っていないものだけを {"op":"add","id":"","when":"YYYY-MM-DD HH:MM"（日本時間・24時間）,"what":"何の予定か（短く）"} で書く。
+- 「今日」「明日」は、その言葉を言った行の日時（[ ] の中）から数える。日付をまたいだ深夜（0〜4時ごろ）に「明日」と言ったときは、${c.name}が最後にどの日で引き受けたか（「今日の19時」など）に合わせる。
+- 時刻が決まらなかったもの・あとで取りやめたもの・すでに過ぎた時刻・モーニングコール（起こしてほしい）は書かない。
+- 登録ずみと同じ時刻のものは書かない。何もなければ []。今は${remNowFull(now)}（年は必ず今年か来年）。
+# 登録ずみ
+${cur}`, text, REM_SWEEP_SCHEMA, 'reminder_sweep');
+  const ops = (Array.isArray(r && r.reminders) ? r.reminders : []).filter((o) => o && o.op === 'add');
+  if (!ops.length) return [];
+  const out = await remFromAI(env, c, ops, { keep: !cl.nokeep, src: cl.sleep ? 'sleep' : cl.morning ? 'morning' : cl.remind ? 'remind' : 'call' });
+  if (out.length) await log(env, `予定のお知らせ：通話のあとの見直しで拾いました（${c.name}・${out.map((x) => `${remWhen(x.at)} ${x.what}`).join('・')}）`);
   return out;
 }
 function remindRules(cl, now) {
@@ -3412,6 +3441,7 @@ async function finishCall(env, cl, c, { by = 'me', est = null } = {}) {
       sum = String((r && r.summary) || '').trim().slice(0, 200);
     } catch (e) { await log(env, `通話のまとめ（${c.name}）: ${e.message}`); }
   }
+  if (!cl.ura && !cl.group && phoneChar(c) && cl.transcript.some((m) => m.who === 'me')) await remSweep(env, c, cl).catch((e) => log(env, `予定のお知らせの見直し（${c.name}）: ${e.message}`)); // 第86版：書き漏らした予定を拾う
   if (sum && !cl.ura) await env.DB.prepare("INSERT INTO memories (char_id,kind,text,due,status,created,followed) VALUES (?, 'fact', ?, '', 'open', ?, 0)").bind(c.id, `${jstDay(now)}にユーザーと電話で話した：${sum}`.slice(0, 200), now).run(); // 裏は表の記憶に入れない（裏のトークの記録 meta.sum で覚えている）
   if (cl.morning) await kvDel(env, 'mc:run'); // 出た＝起こし終わり
   if (cl.remind) await kvDel(env, 'rem:run');

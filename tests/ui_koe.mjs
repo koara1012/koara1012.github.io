@@ -1,0 +1,58 @@
+// 画面の確かめ（Playwright）。run-all には入らない。使い方：tests で node --no-warnings ui_koe
+// 声づくり（chat/koe.html）：トークアプリの設定（novel.settings）を借りて、声の一覧・作る・話し方（caption）・シード・履歴を確かめる。声のサーバーは偽物
+import { readFileSync } from 'node:fs';
+import { createRequire } from 'node:module';
+const REPO = new URL('..', import.meta.url).pathname.replace(/\/$/, '');
+const require = createRequire(REPO + '/tests/');
+const { chromium } = require('playwright');
+let fails = 0; const ok = (c, m) => { if (!c) fails++; console.log(c ? 'ok' : 'FAIL', m); };
+const html = readFileSync(REPO + '/chat/koe.html', 'utf8');
+const reqs = [];
+const b = await chromium.launch();
+const pg = await b.newPage({ viewport: { width: 390, height: 844 } });
+const errs = []; pg.on('pageerror', (e) => errs.push(e.message));
+await pg.route('https://koara1012.github.io/chat/**', (r) => r.fulfill({ contentType: 'text/html', body: html }));
+await pg.route('https://tts.test/**', async (r) => {
+  const q = r.request(), u = q.url();
+  if (q.headers().authorization !== 'Bearer kk') return r.fulfill({ status: 401, body: 'bad' });
+  if (u.endsWith('/v1/audio/voices')) return r.fulfill({ contentType: 'application/json', body: JSON.stringify({ data: [{ id: 'akari' }, { id: 'iroha' }] }) });
+  if (u.endsWith('/v1/audio/speech')) { reqs.push(JSON.parse(q.postData())); return r.fulfill({ contentType: 'audio/mpeg', body: Buffer.alloc(2000, 1) }); }
+  r.fulfill({ status: 404, body: '' });
+});
+await pg.goto('https://koara1012.github.io/chat/koe.html');
+await pg.evaluate(() => localStorage.setItem('novel.settings', JSON.stringify({ ttsUrl: 'https://tts.test/', ttsKey: 'kk' })));
+await pg.reload();
+await pg.waitForFunction(() => document.querySelectorAll('#voice option').length >= 3);
+ok((await pg.textContent('#verName')).includes('第1版'), 'version shown at the top');
+ok((await pg.$$eval('#voice option', (o) => o.map((x) => x.value))).join() === 'akari,iroha,none', 'voices from the app settings');
+ok((await pg.textContent('#srvSrc')).includes('トークアプリの設定'), 'uses the app settings');
+await pg.selectOption('#voice', 'iroha');
+await pg.fill('#text', '今日の19時に生放送だよー！');
+await pg.click('#make');
+await pg.waitForFunction(() => document.querySelector('#stat').textContent.includes('できました'));
+let q = reqs.at(-1);
+ok(q.input === '今日の19時に生放送だよー！' && q.voice === 'iroha' && q.model === 'irodori-tts' && q.response_format === 'mp3' && q.speed === 1, 'speech request: text as is');
+ok(q.irodori && Number.isInteger(q.irodori.seed) && !('caption' in q.irodori), 'no caption when empty, random seed');
+await pg.click('#capChips .chip:nth-child(2)');
+await pg.fill('#capScale', '4');
+await pg.click('#pin');
+const pinned = await pg.inputValue('#seed');
+await pg.click('#make');
+await pg.waitForFunction(() => document.querySelectorAll('#hist .item').length === 2);
+q = reqs.at(-1);
+ok(q.irodori.caption === '泣きそうな声で、小さく震えながら' && q.irodori.cfg_scale_caption === 4 && String(q.irodori.seed) === pinned, 'caption + scale + pinned seed');
+await pg.click('#again');
+await pg.waitForFunction(() => document.querySelectorAll('#hist .item').length === 3);
+ok(String(reqs.at(-1).irodori.seed) !== pinned, '↻ uses a new seed');
+await pg.fill('#text', ''); await pg.click('#hist .item:nth-child(3) button[data-a=load]');
+ok((await pg.inputValue('#text')) === '今日の19時に生放送だよー！' && (await pg.inputValue('#caption')) === '', 'load from history');
+await pg.reload();
+await pg.waitForFunction(() => document.querySelectorAll('#hist .item').length === 3);
+ok((await pg.inputValue('#voice')) === 'iroha' && (await pg.inputValue('#text')).includes('生放送'), 'remembers voice and form after reload');
+await pg.selectOption('#voice', 'none'); await pg.fill('#caption', ''); await pg.click('#make');
+ok((await pg.textContent('#stat')).includes('話し方の欄'), 'voice none needs a caption');
+await pg.screenshot({ path: '/tmp/koe.png', fullPage: true });
+ok(!errs.length, 'no page errors ' + errs.join(' | '));
+await b.close();
+console.log(fails ? fails + ' FAILED' : 'ALL PASSED');
+process.exit(fails ? 1 : 0);

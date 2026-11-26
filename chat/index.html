@@ -1123,6 +1123,12 @@ body.ura #list.tlMode{background:#efe9f0}
       <button class="btn sub" id="r2Scan" style="margin-top:6px">保存している量を数え直す</button>
     </div>
 
+    <div class="sec">🎙 声づくり（別のページ）</div>
+    <div class="field">
+      <a class="btn sub" href="../chat/koe.html" style="display:block;text-align:center;text-decoration:none">🎙 声づくりを開く</a>
+      <div class="hint">声を選んで、入れたセリフをそのまま話させるページです。「話し方」の欄で、どのように話すかも指示できます。トークとは別のページで、声のサーバーの住所と合言葉はノベル画面の「読み上げ」の設定をそのまま使います。左上の［‹］でトークに戻ります。</div>
+    </div>
+
     <div class="sec">この iPhone だけの設定</div>
     <div class="field">
       <div class="hint" style="margin-top:0">電話の音・キャラごとの音量・寝落ちの分数・勝手に話す・ホームのタブなど、この iPhone にだけ保存している設定を、変えるたびにサーバーへ預けます（自動バックアップにも入ります）。合言葉とサーバーのURLは預けません。</div>
@@ -1173,7 +1179,7 @@ body.ura #list.tlMode{background:#efe9f0}
 // 置き場所で切り替える：/lab/（試作）と /chat/（本番）で同じファイルを使う
 // 試作は本番と同じサイトなので、保存の名前に「lab.」を付けて本番の chat.* には書き込まない。通知も登録しない
 const IS_LAB = /\/lab\//.test(location.pathname);
-const APP_VERSION = '第86版（2026-11-26 01:30:00 更新・予定のお知らせ：AI が年をまちがえても読む・通話のあとに書き漏らしを拾う）' + (IS_LAB ? '【試作】' : '');
+const APP_VERSION = '第87版（2026-11-27 03:40:00 更新・声づくり（別のページ）を追加・設定に入口）' + (IS_LAB ? '【試作】' : '');
 if (IS_LAB) { document.title = '【試作】トーク（統合）'; const mt = document.querySelector('meta[name=apple-mobile-web-app-title]'); if (mt) mt.content = 'トーク試作'; }
 const $ = (id) => document.getElementById(id);
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));

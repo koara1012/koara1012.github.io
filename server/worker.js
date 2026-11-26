@@ -14,7 +14,7 @@
 //    ・Cron トリガー  * * * * *  （毎分。実際に動くのは13分おき）
 // =====================================================================
 
-const VERSION = '第86版（2026-11-26 01:30:00 更新・予定のお知らせ：AI が年をまちがえても読む・通話のあとに書き漏らしを拾う）';
+const VERSION = '第87版（2026-11-27 03:40:00 更新・声づくり（別のページ）を追加・設定に入口）';
 const DEFAULT_MODEL = 'gemini-flash-latest';
 const DEFAULT_GROK_MODEL = 'grok-4.7';                 // X（Twitter）の Grok と同じ最新世代
 const FALLBACK_GROK_MODEL = 'grok-4-fast-non-reasoning'; // 上が使えないときの予備

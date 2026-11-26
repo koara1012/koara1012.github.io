@@ -1,0 +1,316 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-title" content="声づくり">
+<meta name="theme-color" content="#24324a">
+<link rel="apple-touch-icon" href="icon-180.png">
+<title>声づくり</title>
+<style>
+:root{--bg:#f3f5f9;--card:#fff;--ink:#1d2433;--sub:#667085;--line:#d9dee8;--main:#3a6fd8;--warn:#d64545;--ok:#2f9e5b}
+*{box-sizing:border-box}
+html,body{margin:0;background:var(--bg);color:var(--ink);font-family:-apple-system,BlinkMacSystemFont,"Hiragino Sans",sans-serif;-webkit-text-size-adjust:100%}
+header{position:sticky;top:0;z-index:5;background:#24324a;color:#fff;padding:calc(env(safe-area-inset-top) + 8px) 12px 8px;display:flex;align-items:center;gap:8px}
+header a{color:#fff;text-decoration:none;font-size:22px;padding:0 6px}
+header h1{font-size:17px;margin:0;flex:1}
+.ver{background:#fff7e0;border-bottom:1px solid #ecd9a0;padding:8px 12px;font-size:12.5px;line-height:1.55}
+.ver b{font-size:13px}
+.ver details summary{cursor:pointer;color:#8a6a10}
+.ver ul{margin:4px 0 0;padding-left:18px}
+main{padding:12px 12px calc(env(safe-area-inset-bottom) + 30px);max-width:680px;margin:0 auto}
+.card{background:var(--card);border:1px solid var(--line);border-radius:14px;padding:12px;margin-bottom:12px}
+.t{font-weight:600;font-size:14px;margin:2px 0 6px}
+.hint{color:var(--sub);font-size:12.5px;line-height:1.55;margin-top:6px}
+select,textarea,input[type=text],input[type=password]{width:100%;font-size:16px;border:1px solid var(--line);border-radius:10px;padding:9px 10px;background:#fff;color:var(--ink);font-family:inherit}
+textarea{resize:vertical;min-height:84px;line-height:1.5}
+.chips{display:flex;flex-wrap:wrap;gap:6px;margin-top:8px}
+.chip{border:1px solid var(--line);background:#f7f9fc;border-radius:999px;padding:5px 10px;font-size:13px;color:var(--ink)}
+.row{display:flex;align-items:center;gap:10px;margin-top:8px}
+.row label{font-size:13.5px;min-width:6.5em}
+.row input[type=range]{flex:1}
+.row .v{min-width:3.6em;text-align:right;font-variant-numeric:tabular-nums;font-size:13.5px}
+.btns{display:flex;gap:8px;flex-wrap:wrap;margin-top:10px}
+button{font-family:inherit}
+.btn{flex:1;min-width:8em;border:0;border-radius:12px;padding:12px;font-size:15.5px;font-weight:600;background:var(--main);color:#fff}
+.btn.sub{background:#e8eefb;color:var(--main)}
+.btn:disabled{opacity:.45}
+.stat{font-size:13px;margin-top:8px;min-height:1.4em;color:var(--sub)}
+.stat.err{color:var(--warn)}
+audio{width:100%;margin-top:8px}
+.item{border-top:1px solid var(--line);padding:10px 0}
+.item:first-child{border-top:0}
+.item .txt{font-size:14.5px;line-height:1.5;white-space:pre-wrap;word-break:break-word}
+.item .meta{font-size:12px;color:var(--sub);margin-top:3px}
+.item .ib{display:flex;gap:6px;flex-wrap:wrap;margin-top:6px}
+.item .ib button{border:1px solid var(--line);background:#fff;border-radius:9px;padding:6px 9px;font-size:13px;color:var(--ink)}
+.item .ib button.del{color:var(--warn)}
+.inline{display:flex;gap:8px;align-items:center}
+.inline input{flex:1}
+.toast{position:fixed;left:50%;bottom:calc(env(safe-area-inset-bottom) + 20px);transform:translateX(-50%);background:rgba(30,36,50,.92);color:#fff;padding:9px 14px;border-radius:10px;font-size:13.5px;max-width:90vw;z-index:20;opacity:0;transition:opacity .2s;pointer-events:none}
+.toast.on{opacity:1}
+</style>
+</head>
+<body>
+<header><a href="./" id="back" aria-label="トークに戻る">‹</a><h1>🎙 声づくり</h1></header>
+<div class="ver">
+  <b id="verName"></b>
+  <details><summary>この版で変えたこと</summary><ul id="verLog"></ul></details>
+</div>
+<main>
+  <div class="card">
+    <div class="t">声</div>
+    <select id="voice"><option value="">（読み込み中…）</option></select>
+    <div class="hint" id="srvInfo"></div>
+  </div>
+
+  <div class="card">
+    <div class="t">セリフ（このとおりに話します）</div>
+    <textarea id="text" maxlength="500" placeholder="例：……あの、今日はありがとうございました。"></textarea>
+    <div class="hint"><span id="textLen">0</span>/500字。（ ）《 》の中も、そのまま読みます。</div>
+  </div>
+
+  <div class="card">
+    <div class="t">話し方（どのように話すか）</div>
+    <textarea id="caption" maxlength="200" placeholder="例：泣きそうな声で、小さく震えながら話す。"></textarea>
+    <div class="chips" id="capChips"></div>
+    <div class="row"><label>話し方の効き</label><input type="range" id="capScale" min="0" max="10" step="0.5" value="0"><span class="v" id="capScaleV"></span></div>
+    <div class="hint">空なら、お手本の声のふだんの話し方です。効きは「おまかせ」がサーバーの標準です。強くすると話し方に寄りますが、声がお手本から離れたり、不安定になったりすることがあります。説明書にも「効き方は文脈で変わり、いつも同じではない」とあります。</div>
+  </div>
+
+  <div class="card">
+    <div class="t">細かい設定</div>
+    <div class="row"><label>速さ</label><input type="range" id="speed" min="0.5" max="2" step="0.05" value="1"><span class="v" id="speedV"></span></div>
+    <div class="row"><label>形式</label>
+      <select id="fmt" style="flex:1"><option value="mp3">mp3（小さい）</option><option value="wav">wav（音がきれい・大きい）</option></select></div>
+    <div class="row"><label>シード</label>
+      <div class="inline" style="flex:1"><input type="text" id="seed" inputmode="numeric" placeholder="空なら毎回ちがう言い方"><button class="chip" id="seedClear">空に</button></div></div>
+    <div class="hint">空なら毎回ちがう言い方になります。気に入った声の［📌 この言い方を固定］でシードが入り、同じ言い方をもう一度作れます（声・セリフ・話し方・速さも同じとき）。［↻ 別の言い方で］は、シードの欄を使わずに作ります。</div>
+  </div>
+
+  <div class="btns">
+    <button class="btn" id="make">▶ 作る</button>
+    <button class="btn sub" id="again">↻ 別の言い方で</button>
+  </div>
+  <div class="stat" id="stat"></div>
+
+  <div class="card" id="outCard" style="display:none;margin-top:10px">
+    <div class="t">できた声</div>
+    <audio id="out" controls playsinline></audio>
+    <div class="meta hint" id="outMeta"></div>
+    <div class="btns"><button class="btn sub" id="save">💾 保存・共有</button><button class="btn sub" id="pin">📌 この言い方を固定</button></div>
+  </div>
+
+  <div class="card" style="margin-top:10px">
+    <div class="t">作った声の履歴（この iPhone に50件まで）</div>
+    <div id="hist"><div class="hint">まだありません</div></div>
+  </div>
+
+  <div class="card">
+    <div class="t">声のサーバー</div>
+    <div class="hint" style="margin-top:0" id="srvSrc"></div>
+    <details style="margin-top:6px"><summary class="hint" style="display:inline">自分で入れる（ふだんは不要）</summary>
+      <div style="margin-top:8px"><input type="text" id="mUrl" placeholder="https://〜--irodori-tts-serve.modal.run" autocapitalize="off" autocorrect="off"></div>
+      <div style="margin-top:6px"><input type="password" id="mKey" placeholder="合言葉" autocomplete="off"></div>
+      <div class="btns"><button class="btn sub" id="mSave">この内容を使う</button><button class="btn sub" id="mClear">消してアプリの設定に戻す</button></div>
+    </details>
+  </div>
+</main>
+<div class="toast" id="toast"></div>
+<script>
+'use strict';
+// ===== 版（画面の一番上に出す）。直したら VERSION を上げ、VER_LOG の先頭に足す
+const VERSION = '第1版（2026-11-27 03:40:00 作成）';
+const VER_LOG = [
+  '第1版：はじめて作りました。声を選んで、指定したセリフをそのまま話させます。',
+  '「話し方」の欄（Irodori の caption）で、どのように話すかを指示できます。例のボタンと「話し方の効き」つき。',
+  '速さ・形式（mp3/wav）・シード（同じ言い方をもう一度）を選べます。',
+  'できた声は、その場で聞いて、保存・共有できます。履歴はこの iPhone に50件まで残ります。',
+  '声のサーバーの住所と合言葉は、トークアプリ（ノベル画面の「読み上げ」）の設定をそのまま使います。',
+];
+const $ = (s) => document.querySelector(s);
+$('#verName').textContent = '声づくり ' + VERSION;
+$('#verLog').innerHTML = VER_LOG.map((x) => '<li>' + esc(x) + '</li>').join('');
+function esc(s) { return String(s).replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c])); }
+function toast(t, ms = 3500) { const e = $('#toast'); e.textContent = t; e.classList.add('on'); clearTimeout(toast.t); toast.t = setTimeout(() => e.classList.remove('on'), ms); }
+function lsGet(k) { try { return localStorage.getItem(k); } catch (_) { return null; } }
+function lsSet(k, v) { try { localStorage.setItem(k, v); } catch (_) {} }
+function readJ(k) { try { return JSON.parse(lsGet(k) || '{}') || {}; } catch (_) { return {}; } }
+
+// ===== 声のサーバーの設定：自分で入れたもの → トークアプリ（ノベル画面）の設定 → 試作の設定
+const MY = 'koe.settings';
+let me = readJ(MY);
+function srv() {
+  if (me.url) return { url: me.url, key: me.key || '', src: 'このページで入れた住所' };
+  for (const [k, name] of [['novel.settings', 'トークアプリの設定'], ['lab.settings', '試作（lab）の設定']]) {
+    const s = readJ(k);
+    if (s.ttsUrl) return { url: String(s.ttsUrl).trim().replace(/\/+$/, ''), key: String(s.ttsKey || ''), src: name };
+  }
+  return { url: '', key: '', src: '' };
+}
+function showSrv() {
+  const s = srv();
+  $('#srvSrc').textContent = s.url ? `使っている住所：${s.src}（${s.url.replace(/^https?:\/\//, '').slice(0, 40)}…）` : '声のサーバーの住所が見つかりません。トークアプリの設定から［🎙 声づくり］で開くか、下の「自分で入れる」に入れてください。（ホーム画面に別に置いたときは、アプリと設定が分かれるため、自分で入れる必要があります）';
+}
+const auth = (s) => (s.key ? { Authorization: 'Bearer ' + s.key } : {});
+
+// ===== 声の一覧
+async function loadVoices() {
+  const s = srv(); showSrv();
+  const sel = $('#voice');
+  if (!s.url) { sel.innerHTML = '<option value="">（声のサーバーが未設定）</option>'; return; }
+  $('#srvInfo').textContent = '声の一覧を読んでいます…（しばらく使っていなかったときは、GPU が起きるまで30秒〜1分）';
+  try {
+    const r = await fetch(s.url + '/v1/audio/voices', { headers: auth(s), signal: AbortSignal.timeout(140000) });
+    if (!r.ok) throw new Error(`声の一覧 ${r.status}${r.status === 401 ? '（合言葉が違います）' : ''}`);
+    const j = await r.json();
+    const list = (j.data || j.voices || j || []).map((v) => (typeof v === 'string' ? v : v.id || v.voice_id || v.name)).filter((v) => v && v !== 'none');
+    const last = lsGet('koe.voice') || '';
+    sel.innerHTML = list.map((v) => `<option value="${esc(v)}">${esc(v)}</option>`).join('') + '<option value="none">（お手本なし：話し方の欄だけで声を作る）</option>';
+    if (last && [...sel.options].some((o) => o.value === last)) sel.value = last;
+    $('#srvInfo').textContent = `${list.length}人の声があります。`;
+  } catch (e) {
+    sel.innerHTML = '<option value="">（読み込めませんでした）</option>';
+    $('#srvInfo').textContent = '声の一覧を読めませんでした：' + (e.name === 'TimeoutError' ? '140秒たっても返事が来ませんでした' : e.message === 'Load failed' || e.message === 'Failed to fetch' ? '声のサーバーにつながりません（住所・電波を確かめてください）' : e.message) + '　画面を下に引いて開き直すと、もう一度読みます。';
+  }
+}
+$('#voice').onchange = () => lsSet('koe.voice', $('#voice').value);
+
+// ===== 入力欄（前の入力を覚えておく）
+const CAP_EX = ['嬉しそうに、明るく弾んだ声で', '泣きそうな声で、小さく震えながら', 'ささやくように、とても小さな声で', '怒って、強い口調で', '眠そうに、ゆっくりと', '照れながら、恥ずかしそうに', '落ち着いて、優しく', '驚いて、早口で'];
+$('#capChips').innerHTML = CAP_EX.map((x) => `<button class="chip">${esc(x)}</button>`).join('');
+$('#capChips').onclick = (e) => { const b = e.target.closest('.chip'); if (!b) return; $('#caption').value = b.textContent; saveForm(); };
+const form = readJ('koe.form');
+$('#text').value = form.text || ''; $('#caption').value = form.caption || '';
+$('#speed').value = form.speed || 1; $('#fmt').value = form.fmt || 'mp3'; $('#capScale').value = form.capScale || 0;
+function capScaleText() { const v = +$('#capScale').value; return v ? v.toFixed(1) : 'おまかせ'; }
+function showVals() { $('#speedV').textContent = (+$('#speed').value).toFixed(2) + '倍'; $('#capScaleV').textContent = capScaleText(); $('#textLen').textContent = $('#text').value.length; }
+function saveForm() { lsSet('koe.form', JSON.stringify({ text: $('#text').value, caption: $('#caption').value, speed: +$('#speed').value, fmt: $('#fmt').value, capScale: +$('#capScale').value })); showVals(); }
+for (const id of ['text', 'caption', 'speed', 'fmt', 'capScale']) $('#' + id).addEventListener('input', saveForm);
+$('#seedClear').onclick = () => { $('#seed').value = ''; };
+showVals();
+
+// ===== 作る
+let busy = false, cur = null;
+function stat(t, err) { const e = $('#stat'); e.textContent = t; e.classList.toggle('err', !!err); }
+async function make(newSeed) {
+  if (busy) return;
+  const s = srv();
+  if (!s.url) { stat('声のサーバーの住所がありません（いちばん下の「声のサーバー」を見てください）', true); return; }
+  const voice = $('#voice').value, text = $('#text').value.trim(), caption = $('#caption').value.trim();
+  if (!voice) { stat('声を選んでください', true); return; }
+  if (!text) { stat('セリフを入れてください', true); return; }
+  if (voice === 'none' && !caption) { stat('お手本なしのときは、話し方の欄に声の説明を入れてください（例：落ち着いた低めの女性の声）', true); return; }
+  let seed = $('#seed').value.trim();
+  if (newSeed || !/^\d{1,10}$/.test(seed)) seed = String(Math.floor(Math.random() * 2147483647));
+  const fmt = $('#fmt').value, speed = +$('#speed').value, capScale = +$('#capScale').value;
+  const irodori = { seed: +seed };
+  if (caption) { irodori.caption = caption; if (capScale) irodori.cfg_scale_caption = capScale; }
+  busy = true; $('#make').disabled = $('#again').disabled = true;
+  const t0 = Date.now();
+  stat('作っています…');
+  const slow = setTimeout(() => stat('声のサーバー（GPU）を起こしています…（しばらく使っていなかったときは30秒〜1分）'), 8000);
+  try {
+    let r;
+    try {
+      r = await fetch(s.url + '/v1/audio/speech', { method: 'POST', signal: AbortSignal.timeout(140000),
+        headers: Object.assign({ 'Content-Type': 'application/json' }, auth(s)),
+        body: JSON.stringify({ model: 'irodori-tts', input: text, voice, response_format: fmt, speed, irodori }) });
+    } catch (e) { throw new Error(e.name === 'TimeoutError' ? '140秒たっても返事が来ませんでした' : '声のサーバーにつながりません（住所・電波を確かめてください）'); }
+    if (!r.ok) {
+      const t = await r.text().catch(() => '');
+      throw new Error(`声のサーバー ${r.status}：${t.slice(0, 200)}${r.status === 401 ? '（合言葉が違います）' : /caption/i.test(t) ? '（話し方の欄が受け付けられませんでした。短くするか、効きを「おまかせ」に）' : ''}`);
+    }
+    const blob = new Blob([await r.arrayBuffer()], { type: fmt === 'wav' ? 'audio/wav' : 'audio/mpeg' });
+    if (blob.size < 100) throw new Error('声のデータが空でした');
+    const item = { id: Date.now().toString(36) + Math.random().toString(36).slice(2, 6), at: Date.now(), voice, text, caption, seed, speed, fmt, capScale, ms: Date.now() - t0, blob };
+    await histAdd(item);
+    showOut(item, true);
+    stat(`できました（${((Date.now() - t0) / 1000).toFixed(1)}秒）`);
+  } catch (e) {
+    stat('作れませんでした：' + e.message, true);
+  } finally {
+    clearTimeout(slow); busy = false; $('#make').disabled = $('#again').disabled = false;
+  }
+}
+$('#make').onclick = () => make(false);
+$('#again').onclick = () => make(true);
+
+let outUrl = '';
+function meta(x) { return `${x.voice === 'none' ? 'お手本なし' : x.voice}・${(+x.speed).toFixed(2)}倍・シード ${x.seed}${x.caption ? '・話し方「' + x.caption + '」' + (x.capScale ? `（効き ${(+x.capScale).toFixed(1)}）` : '') : ''}・${x.fmt}`; }
+function showOut(x, play) {
+  cur = x;
+  if (outUrl) URL.revokeObjectURL(outUrl);
+  outUrl = URL.createObjectURL(x.blob);
+  const a = $('#out'); a.src = outUrl;
+  $('#outMeta').textContent = meta(x);
+  $('#outCard').style.display = '';
+  if (play) a.play().catch(() => {});
+}
+function fileName(x) {
+  const d = new Date(x.at), p = (n) => String(n).padStart(2, '0');
+  const head = x.text.replace(/[\\/:*?"<>|\s。、！？!?…「」『』（）()]/g, '').slice(0, 12) || 'koe';
+  return `${x.voice === 'none' ? 'koe' : x.voice}_${head}_${d.getFullYear()}${p(d.getMonth() + 1)}${p(d.getDate())}-${p(d.getHours())}${p(d.getMinutes())}${p(d.getSeconds())}.${x.fmt}`;
+}
+async function saveItem(x) {
+  const f = new File([x.blob], fileName(x), { type: x.blob.type });
+  if (navigator.canShare && navigator.canShare({ files: [f] })) {
+    try { await navigator.share({ files: [f] }); return; } catch (e) { if (e.name === 'AbortError') return; }
+  }
+  const a = document.createElement('a'); a.href = URL.createObjectURL(f); a.download = f.name; document.body.appendChild(a); a.click(); a.remove();
+  setTimeout(() => URL.revokeObjectURL(a.href), 60000);
+}
+$('#save').onclick = () => { if (cur) saveItem(cur); };
+$('#pin').onclick = () => { if (!cur) return; $('#seed').value = cur.seed; toast('シードを入れました。話し方や速さを少し変えて［▶ 作る］で、近い言い方のまま比べられます'); };
+
+// ===== 履歴（IndexedDB・50件まで）
+let dbP = null;
+function db() {
+  if (!dbP) dbP = new Promise((res, rej) => { const q = indexedDB.open('koe', 1); q.onupgradeneeded = () => q.result.createObjectStore('hist', { keyPath: 'id' }); q.onsuccess = () => res(q.result); q.onerror = () => rej(q.error); });
+  return dbP;
+}
+async function tx(mode, fn) { const d = await db(); return new Promise((res, rej) => { const t = d.transaction('hist', mode), st = t.objectStore('hist'); const out = fn(st); t.oncomplete = () => res(out && out.result); t.onerror = () => rej(t.error); }); }
+async function histAll() { try { const l = (await tx('readonly', (st) => st.getAll())) || []; return l.sort((a, b) => b.at - a.at); } catch (_) { return []; } }
+async function histAdd(x) {
+  try {
+    await tx('readwrite', (st) => st.put(x));
+    const l = await histAll();
+    for (const y of l.slice(50)) await tx('readwrite', (st) => st.delete(y.id));
+  } catch (e) { toast('履歴に残せませんでした：' + e.message); }
+  renderHist();
+}
+async function renderHist() {
+  const l = await histAll(), box = $('#hist');
+  if (!l.length) { box.innerHTML = '<div class="hint">まだありません</div>'; return; }
+  box.innerHTML = l.map((x) => `<div class="item" data-id="${x.id}"><div class="txt">${esc(x.text)}</div><div class="meta">${esc(meta(x))}・${new Date(x.at).toLocaleString('ja-JP', { month: 'numeric', day: 'numeric', hour: '2-digit', minute: '2-digit' })}</div>
+    <div class="ib"><button data-a="play">▶ 聞く</button><button data-a="load">✎ 欄に戻す</button><button data-a="save">💾 保存</button><button data-a="del" class="del">消す</button></div></div>`).join('');
+  box._list = l;
+}
+$('#hist').onclick = async (e) => {
+  const b = e.target.closest('button[data-a]'); if (!b) return;
+  const id = b.closest('.item').dataset.id, x = ($('#hist')._list || []).find((y) => y.id === id); if (!x) return;
+  const a = b.dataset.a;
+  if (a === 'play') { showOut(x, true); $('#outCard').scrollIntoView({ behavior: 'smooth', block: 'center' }); }
+  else if (a === 'save') saveItem(x);
+  else if (a === 'load') {
+    if ([...$('#voice').options].some((o) => o.value === x.voice)) $('#voice').value = x.voice;
+    $('#text').value = x.text; $('#caption').value = x.caption || ''; $('#speed').value = x.speed; $('#fmt').value = x.fmt; $('#capScale').value = x.capScale || 0; $('#seed').value = x.seed;
+    saveForm(); window.scrollTo({ top: 0, behavior: 'smooth' }); toast('欄に戻しました（シードも同じなので、［▶ 作る］で同じ言い方になります）');
+  } else if (a === 'del') {
+    if (!confirm('この声を履歴から消しますか？')) return;
+    await tx('readwrite', (st) => st.delete(x.id)); renderHist();
+  }
+};
+
+// ===== 住所を自分で入れる
+$('#mUrl').value = me.url || ''; $('#mKey').value = me.key || '';
+$('#mSave').onclick = () => { me = { url: $('#mUrl').value.trim().replace(/\/+$/, ''), key: $('#mKey').value }; lsSet(MY, JSON.stringify(me)); toast('この住所を使います'); loadVoices(); };
+$('#mClear').onclick = () => { me = {}; lsSet(MY, '{}'); $('#mUrl').value = $('#mKey').value = ''; toast('アプリの設定に戻しました'); loadVoices(); };
+
+// アプリから開いたときは「‹」でアプリに戻る。単独で開いたときも ./（トーク）へ
+loadVoices();
+renderHist();
+</script>
+</body>
+</html>
